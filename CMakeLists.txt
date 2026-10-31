@@ -1,0 +1,28 @@
+cmake_minimum_required(VERSION 3.20)
+project(LANLink LANGUAGES CXX)
+
+include(FetchContent)
+set(BUILD_GMOCK OFF CACHE BOOL "" FORCE)
+set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(
+  googletest
+  URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.tar.gz
+  DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+)
+FetchContent_MakeAvailable(googletest)
+
+add_library(lanlink_core
+  src/core/common/ids.cpp
+  src/core/common/clock.cpp
+  src/core/common/liveness.cpp
+)
+target_compile_features(lanlink_core PUBLIC cxx_std_20)
+target_include_directories(lanlink_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(lanlink_core PRIVATE -Wall -Wextra -Wpedantic)
+
+enable_testing()
+add_executable(common_types_test tests/unit/common_types_test.cpp)
+target_link_libraries(common_types_test PRIVATE lanlink_core GTest::gtest_main)
+include(GoogleTest)
+gtest_discover_tests(common_types_test)
+add_test(NAME common_types COMMAND common_types_test)
