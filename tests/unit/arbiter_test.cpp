@@ -152,3 +152,16 @@ TEST(InputArbiter, RemoteInjectedAndSyntheticEventsDoNotPreempt) {
                            IClock::time_point{});
     EXPECT_TRUE(arbiter.has_lease());
 }
+
+TEST(InputArbiter, PointerWarpDoesNotCountAsPhysicalPreemption) {
+    InputArbiter arbiter;
+    AuthenticatedPeer peer{id(1)};
+    auto grant = arbiter.acquire(peer, id(2), id(3), id(4), IClock::time_point{});
+    ASSERT_TRUE(grant.granted());
+    ASSERT_TRUE(
+        arbiter.activate(grant.lease.session, grant.lease.generation, IClock::time_point{}));
+    InputEvent warp{id(2), grant.lease.session,       grant.lease.generation,
+                    1,     PointerWarp{100.0, 100.0}, InputOrigin::Physical};
+    arbiter.on_local_input(warp, IClock::time_point{});
+    EXPECT_TRUE(arbiter.has_lease());
+}
