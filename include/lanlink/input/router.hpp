@@ -101,7 +101,10 @@ class InputRouter {
     std::vector<RouterAction> on_grant(AcquireResult result, TimePoint now);
     std::vector<RouterAction> on_activation_ack(const Result<void>& result, TimePoint now);
     std::vector<RouterAction> on_activation_ack(bool success, TimePoint now);
+    std::vector<RouterAction> on_activation_ack(const SessionId& session, std::uint64_t generation,
+                                                bool success, TimePoint now);
     std::vector<RouterAction> on_revoke(RevokeReason reason, TimePoint now);
+    std::vector<RouterAction> on_revoke(const ValidationResult& result, TimePoint now);
     std::vector<RouterAction> on_disconnect(TimePoint now);
     std::vector<RouterAction> on_tick(TimePoint now);
 

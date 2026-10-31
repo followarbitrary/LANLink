@@ -176,8 +176,20 @@ std::vector<RouterAction> InputRouter::on_activation_ack(bool success, TimePoint
     return {};
 }
 
+std::vector<RouterAction> InputRouter::on_activation_ack(const SessionId& session,
+                                                          std::uint64_t generation,
+                                                          bool success, TimePoint now) {
+    if (!lease_.has_value() || lease_->session != session || lease_->generation != generation)
+        return recover(now);
+    return on_activation_ack(success, now);
+}
+
 std::vector<RouterAction> InputRouter::on_revoke(RevokeReason, TimePoint now) {
     return recover(now);
+}
+
+std::vector<RouterAction> InputRouter::on_revoke(const ValidationResult& result, TimePoint now) {
+    return on_revoke(result.reason(), now);
 }
 
 std::vector<RouterAction> InputRouter::on_disconnect(TimePoint now) {
