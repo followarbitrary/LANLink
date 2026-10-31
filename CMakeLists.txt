@@ -19,6 +19,7 @@ add_library(lanlink_core
   src/core/input/arbiter.cpp
   src/core/input/router.cpp
   src/core/input/mocks.cpp
+  src/core/protocol/wire.cpp
   src/platform/fake_input_backend.cpp
   src/platform/windows/windows_input_backend.cpp
   src/platform/macos/macos_input_backend.cpp
@@ -43,6 +44,11 @@ target_link_libraries(common_types_test PRIVATE lanlink_core GTest::gtest_main)
 include(GoogleTest)
 gtest_discover_tests(common_types_test)
 add_test(NAME common_types COMMAND common_types_test)
+
+add_executable(protocol_wire_test tests/unit/protocol_wire_test.cpp)
+target_link_libraries(protocol_wire_test PRIVATE lanlink_core GTest::gtest_main)
+gtest_discover_tests(protocol_wire_test)
+add_test(NAME protocol_wire COMMAND protocol_wire_test)
 
 add_executable(topology_test tests/unit/topology_test.cpp)
 target_link_libraries(topology_test PRIVATE lanlink_core GTest::gtest_main)
