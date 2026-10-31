@@ -1,5 +1,6 @@
 #include "lanlink/protocol/wire.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -277,7 +278,8 @@ Result<std::vector<std::uint8_t>> encode(const Message& message) {
                 w.f64(value.entry.y);
                 return make_frame(MessageType::kAcquireRequest, std::move(w));
             } else if constexpr (std::is_same_v<T, AcquireResponse>) {
-                if (value.granted && (zero(value.session) || value.generation == 0))
+                if (zero(value.request) ||
+                    (value.granted && (zero(value.session) || value.generation == 0)))
                     return Result<std::vector<std::uint8_t>>::failure("invalid acquire response");
                 w.id(value.request);
                 w.u8(value.granted ? 1 : 0);
@@ -287,6 +289,8 @@ Result<std::vector<std::uint8_t>> encode(const Message& message) {
                     return Result<std::vector<std::uint8_t>>::failure("error text too long");
                 return make_frame(MessageType::kAcquireResponse, std::move(w));
             } else if constexpr (std::is_same_v<T, ActivateRequest>) {
+                if (zero(value.session) || value.generation == 0)
+                    return Result<std::vector<std::uint8_t>>::failure("invalid activate request");
                 w.id(value.session);
                 w.u64(value.generation);
                 return make_frame(MessageType::kActivateRequest, std::move(w));
@@ -300,6 +304,8 @@ Result<std::vector<std::uint8_t>> encode(const Message& message) {
                     return Result<std::vector<std::uint8_t>>::failure("error text too long");
                 return make_frame(MessageType::kActivateAck, std::move(w));
             } else if constexpr (std::is_same_v<T, RenewRequest>) {
+                if (zero(value.session) || value.generation == 0)
+                    return Result<std::vector<std::uint8_t>>::failure("invalid renew request");
                 w.id(value.session);
                 w.u64(value.generation);
                 return make_frame(MessageType::kRenewRequest, std::move(w));
@@ -333,6 +339,8 @@ Result<std::vector<std::uint8_t>> encode(const Message& message) {
                 write_input(w, value.event);
                 return make_frame(MessageType::kInput, std::move(w));
             } else if constexpr (std::is_same_v<T, Release>) {
+                if (zero(value.session) || value.generation == 0)
+                    return Result<std::vector<std::uint8_t>>::failure("invalid release");
                 w.id(value.session);
                 w.u64(value.generation);
                 return make_frame(MessageType::kRelease, std::move(w));
@@ -395,8 +403,9 @@ Result<Message> decode(std::span<const std::uint8_t> frame) {
     case MessageType::kAcquireResponse: {
         AcquireResponse value;
         std::uint8_t granted_byte{};
-        if (!r.id(value.request) || !r.u8(granted_byte) || granted_byte > 1 ||
-            !r.id(value.session) || !r.u64(value.generation) || !r.string(value.error))
+        if (!r.id(value.request) || zero(value.request) || !r.u8(granted_byte) ||
+            granted_byte > 1 || !r.id(value.session) || !r.u64(value.generation) ||
+            !r.string(value.error))
             return fail("invalid acquire response");
         value.granted = granted_byte != 0;
         if (value.granted && (zero(value.session) || value.generation == 0))
@@ -406,7 +415,8 @@ Result<Message> decode(std::span<const std::uint8_t> frame) {
     }
     case MessageType::kActivateRequest: {
         ActivateRequest value;
-        if (!r.id(value.session) || !r.u64(value.generation))
+        if (!r.id(value.session) || !r.u64(value.generation) || zero(value.session) ||
+            value.generation == 0)
             return fail("invalid activate request");
         message = value;
         break;
@@ -425,7 +435,8 @@ Result<Message> decode(std::span<const std::uint8_t> frame) {
     }
     case MessageType::kRenewRequest: {
         RenewRequest value;
-        if (!r.id(value.session) || !r.u64(value.generation))
+        if (!r.id(value.session) || !r.u64(value.generation) || zero(value.session) ||
+            value.generation == 0)
             return fail("invalid renew request");
         message = value;
         break;
@@ -451,7 +462,8 @@ Result<Message> decode(std::span<const std::uint8_t> frame) {
     }
     case MessageType::kRelease: {
         Release value;
-        if (!r.id(value.session) || !r.u64(value.generation))
+        if (!r.id(value.session) || !r.u64(value.generation) || zero(value.session) ||
+            value.generation == 0)
             return fail("invalid release");
         message = value;
         break;
@@ -482,44 +494,56 @@ Result<Message> decode(std::span<const std::uint8_t> frame) {
 }
 
 Result<std::vector<Message>> FrameDecoder::feed(std::span<const std::uint8_t> bytes) {
-    buffer_.insert(buffer_.end(), bytes.begin(), bytes.end());
     std::vector<Message> messages;
-    while (true) {
-        if (buffer_.size() < 4) {
-            if (buffer_.size() > kMaxFrameSize) {
-                buffer_.clear();
-                return Result<std::vector<Message>>::failure("frame buffer too large");
-            }
-            break;
+    const auto drain = [&]() -> Result<void> {
+        while (true) {
+            if (buffer_.size() < 4)
+                break;
+            if (std::memcmp(buffer_.data(), "LLNK", 4) != 0)
+                return Result<void>::failure("invalid magic");
+            if (buffer_.size() < kHeaderSize)
+                break;
+            if (buffer_[4] != kProtocolVersion || buffer_[6] != 0 || buffer_[7] != 0 ||
+                !valid_type(buffer_[5]))
+                return Result<void>::failure("invalid header");
+            const std::uint32_t length = (std::uint32_t(buffer_[8]) << 24) |
+                                         (std::uint32_t(buffer_[9]) << 16) |
+                                         (std::uint32_t(buffer_[10]) << 8) | buffer_[11];
+            if (length > kMaxFrameSize - kHeaderSize)
+                return Result<void>::failure("frame too large");
+            const std::size_t total = kHeaderSize + length;
+            if (buffer_.size() < total)
+                break;
+            auto result = decode(std::span<const std::uint8_t>(buffer_.data(), total));
+            if (!result.ok())
+                return Result<void>::failure(result.error());
+            messages.push_back(std::move(result.value()));
+            buffer_.erase(buffer_.begin(), buffer_.begin() + static_cast<std::ptrdiff_t>(total));
         }
-        if (std::memcmp(buffer_.data(), "LLNK", 4) != 0) {
+        return Result<void>::success();
+    };
+
+    std::size_t offset = 0;
+    while (offset < bytes.size()) {
+        auto drained = drain();
+        if (!drained.ok()) {
             buffer_.clear();
-            return Result<std::vector<Message>>::failure("invalid magic");
+            return Result<std::vector<Message>>::failure(drained.error());
         }
-        if (buffer_.size() < kHeaderSize)
-            break;
-        if (buffer_[4] != kProtocolVersion || buffer_[6] != 0 || buffer_[7] != 0 ||
-            !valid_type(buffer_[5])) {
+        if (buffer_.size() == kMaxFrameSize) {
             buffer_.clear();
-            return Result<std::vector<Message>>::failure("invalid header");
+            return Result<std::vector<Message>>::failure("frame buffer too large");
         }
-        const std::uint32_t length = (std::uint32_t(buffer_[8]) << 24) |
-                                     (std::uint32_t(buffer_[9]) << 16) |
-                                     (std::uint32_t(buffer_[10]) << 8) | buffer_[11];
-        if (length > kMaxFrameSize - kHeaderSize) {
-            buffer_.clear();
-            return Result<std::vector<Message>>::failure("frame too large");
-        }
-        const std::size_t total = kHeaderSize + length;
-        if (buffer_.size() < total)
-            break;
-        auto result = decode(std::span<const std::uint8_t>(buffer_.data(), total));
-        if (!result.ok()) {
-            buffer_.clear();
-            return Result<std::vector<Message>>::failure(result.error());
-        }
-        messages.push_back(std::move(result.value()));
-        buffer_.erase(buffer_.begin(), buffer_.begin() + static_cast<std::ptrdiff_t>(total));
+        const std::size_t room = kMaxFrameSize - buffer_.size();
+        const std::size_t count = std::min(room, bytes.size() - offset);
+        buffer_.insert(buffer_.end(), bytes.begin() + static_cast<std::ptrdiff_t>(offset),
+                       bytes.begin() + static_cast<std::ptrdiff_t>(offset + count));
+        offset += count;
+    }
+    auto drained = drain();
+    if (!drained.ok()) {
+        buffer_.clear();
+        return Result<std::vector<Message>>::failure(drained.error());
     }
     return Result<std::vector<Message>>::success(std::move(messages));
 }

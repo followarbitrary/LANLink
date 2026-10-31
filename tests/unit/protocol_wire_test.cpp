@@ -123,6 +123,13 @@ TEST(ProtocolWire, RejectsInvalidValuesAndSizeLimits) {
     EXPECT_FALSE(decode(bytes).ok());
 }
 
+TEST(ProtocolWire, RejectsZeroControlIdentifiers) {
+    EXPECT_FALSE(encode(AcquireResponse{{}, false, {}, 0, "denied"}).ok());
+    EXPECT_FALSE(encode(ActivateRequest{{}, 0}).ok());
+    EXPECT_FALSE(encode(RenewRequest{{}, 0}).ok());
+    EXPECT_FALSE(encode(Release{{}, 0}).ok());
+}
+
 TEST(ProtocolWire, RejectsInvalidInputTagsAndBooleans) {
     InputEvent event{id(1, 2), id(3, 4), 1, 1, MouseButton{7, true}, InputOrigin::kPhysical};
     auto encoded = encode(InputMessage{event});
@@ -164,6 +171,15 @@ TEST(ProtocolWire, FrameDecoderClearsAfterOversizedOrMalformedFrame) {
         'L', 'L', 'N',  'K',  1,    static_cast<std::uint8_t>(MessageType::kHeartbeat),
         0,   0,   0xff, 0xff, 0xff, 0xff};
     auto result = decoder.feed(header);
+    EXPECT_FALSE(result.ok());
+    EXPECT_EQ(decoder.buffered_bytes(), 0u);
+    EXPECT_TRUE(decoder.finish().ok());
+}
+
+TEST(ProtocolWire, FrameDecoderBoundsLargeInputBeforeBuffering) {
+    FrameDecoder decoder;
+    std::vector<std::uint8_t> input(kMaxFrameSize + 1, 0);
+    auto result = decoder.feed(input);
     EXPECT_FALSE(result.ok());
     EXPECT_EQ(decoder.buffered_bytes(), 0u);
     EXPECT_TRUE(decoder.finish().ok());
