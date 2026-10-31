@@ -15,6 +15,7 @@ add_library(lanlink_core
   src/core/common/ids.cpp
   src/core/common/clock.cpp
   src/core/common/liveness.cpp
+  src/core/topology/topology.cpp
 )
 target_compile_features(lanlink_core PUBLIC cxx_std_20)
 target_include_directories(lanlink_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -30,3 +31,8 @@ target_link_libraries(common_types_test PRIVATE lanlink_core GTest::gtest_main)
 include(GoogleTest)
 gtest_discover_tests(common_types_test)
 add_test(NAME common_types COMMAND common_types_test)
+
+add_executable(topology_test tests/unit/topology_test.cpp)
+target_link_libraries(topology_test PRIVATE lanlink_core GTest::gtest_main)
+gtest_discover_tests(topology_test)
+add_test(NAME topology COMMAND topology_test)
