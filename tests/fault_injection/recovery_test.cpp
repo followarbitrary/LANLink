@@ -41,12 +41,12 @@ TEST(M0Recovery, DroppedActivationRollsBackSuppressionAndLease) {
   h.send({actions.front()});
   h.transport.set_drop_next();
   h.send({actions.back()});
-  EXPECT_EQ(h.router.state(), RouterState::kAcquiring);
-  auto failed = h.router.on_activation_ack(false, h.clock.now());
-  h.send(failed);
+  h.transport.pump(h.router, h.clock.now());
   h.transport.pump(h.router, h.clock.now());
   EXPECT_FALSE(h.arbiter.has_lease());
   EXPECT_FALSE(h.backend.suppressed());
+  ASSERT_GE(h.backend.suppression_history.size(), 2u);
+  EXPECT_FALSE(h.backend.suppression_history.back().enabled);
   EXPECT_EQ(h.router.state(), RouterState::kRecovering);
 }
 
@@ -68,10 +68,20 @@ TEST(M0Recovery, StaleRenewAfterDisconnectCannotExtendLease) {
   h.acquire();
   ASSERT_TRUE(h.arbiter.lease().has_value());
   const auto lease = *h.arbiter.lease();
-  h.router.on_disconnect(h.clock.now());
-  h.arbiter.release(lease.session, h.clock.now());
-  EXPECT_FALSE(h.arbiter.renew(AuthenticatedPeer{id(2)}, lease.session, lease.generation,
-                                                  h.clock.now()));
+  h.send(h.router.on_disconnect(h.clock.now()));
+  h.transport.pump(h.router, h.clock.now());
+  h.backend.clear();
+
+  RouterAction stale;
+  stale.kind = RouterActionKind::kRenew;
+  stale.source = h.router.source();
+  stale.session = lease.session;
+  stale.generation = lease.generation;
+  ASSERT_TRUE(h.transport.send(stale));
+  h.transport.pump(h.router, h.clock.now());
+  h.transport.pump(h.router, h.clock.now());
+  EXPECT_FALSE(h.arbiter.has_lease());
+  EXPECT_FALSE(h.backend.released_sessions.empty());
 }
 
 TEST(M0Recovery, SequenceGapRevokesAndCleansEveryPressedInput) {
@@ -99,18 +109,23 @@ TEST(M0Recovery, SequenceGapRevokesAndCleansEveryPressedInput) {
 
 TEST(M0Recovery, QueueOverflowFailsClosedAndAbortsHeldButtonHandoff) {
   Harness h;
-  InputEvent down{{}, {}, 0, 0, MouseButton{1, true}, InputOrigin::kPhysical};
-  EXPECT_TRUE(h.router.on_local_event(down, {}, h.clock.now()).empty());
-  EXPECT_EQ(h.router.on_crossing(Crossing{id(6), Edge::kRight, .4, {2, 2}}, h.clock.now()).size(),
-            0u);
-  EXPECT_EQ(h.router.state(), RouterState::kHandoff);
+  h.acquire();
+  ASSERT_EQ(h.router.state(), RouterState::kRemote);
+  InputEvent down{{}, {}, 0, 0, MouseButton{1, true}, InputOrigin::kSynthetic};
+  h.send(h.router.on_local_event(down, {}, h.clock.now()));
+  h.transport.pump(h.router, h.clock.now());
+  ASSERT_TRUE(h.arbiter.pressed_buttons().contains(1));
 
-  h.transport.set_queue_capacity(0);
-  auto cleanup = h.router.on_disconnect(h.clock.now());
-  ASSERT_FALSE(cleanup.empty());
-  for (const auto& action : cleanup) EXPECT_FALSE(h.transport.send(action));
+  h.transport.set_queue_capacity(1);
+  auto handoff = h.router.on_crossing(Crossing{id(6), Edge::kRight, .4, {2, 2}}, h.clock.now());
+  ASSERT_EQ(handoff.size(), 2u);
+  ASSERT_TRUE(h.transport.send(handoff.front()));
+  EXPECT_FALSE(h.transport.send(handoff.back()));
   EXPECT_TRUE(h.transport.overflowed());
   EXPECT_EQ(h.router.state(), RouterState::kRecovering);
   EXPECT_FALSE(h.arbiter.has_lease());
   EXPECT_FALSE(h.backend.suppressed());
+  EXPECT_TRUE(h.arbiter.ledger_empty());
+  EXPECT_EQ(h.arbiter.released_buttons(), std::vector<std::uint32_t>({1}));
+  EXPECT_FALSE(h.backend.released_sessions.empty());
 }

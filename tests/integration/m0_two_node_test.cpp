@@ -59,6 +59,7 @@ TEST(M0TwoNode, AcquireActivateMoveReleaseAndCleanup) {
   node.acquire();
   ASSERT_EQ(node.router.state(), RouterState::kRemote);
   ASSERT_TRUE(node.arbiter.has_active_lease());
+  ASSERT_TRUE(node.backend.suppressed());
 
   node.send(node.router.on_local_event(key(65, true), {}, {}));
   node.pump();
@@ -70,12 +71,21 @@ TEST(M0TwoNode, AcquireActivateMoveReleaseAndCleanup) {
   node.pump();
   EXPECT_TRUE(node.arbiter.ledger_empty());
 
+  InputEvent move{{}, {}, 0, 0, MouseDelta{3.5, -2.0}, InputOrigin::kSynthetic};
+  node.send(node.router.on_local_event(move, {}, {}));
+  node.pump();
+  ASSERT_EQ(node.backend.injected_events.size(), 3u);
+  ASSERT_TRUE(std::holds_alternative<MouseDelta>(node.backend.injected_events.back().payload));
+  EXPECT_DOUBLE_EQ(std::get<MouseDelta>(node.backend.injected_events.back().payload).dx, 3.5);
+  EXPECT_DOUBLE_EQ(std::get<MouseDelta>(node.backend.injected_events.back().payload).dy, -2.0);
+
   auto cleanup = node.router.on_disconnect({});
   node.send(cleanup);
   node.pump();
   EXPECT_FALSE(node.arbiter.has_lease());
   EXPECT_EQ(node.router.state(), RouterState::kRecovering);
   ASSERT_FALSE(node.backend.released_sessions.empty());
+  EXPECT_FALSE(node.backend.suppressed());
 }
 
 TEST(M0TwoNode, ConcurrentRequestsToOneTargetGrantAtMostOne) {
@@ -124,36 +134,57 @@ TEST(M0TwoNode, DifferentTargetsHaveIndependentSessions) {
 }
 
 TEST(M0TwoNode, RejectsStaleGenerationAndSequenceAndHonorsLeaseBoundary) {
-  MockClock clock;
-  InputArbiter target;
-  AuthenticatedPeer peer{id(80)};
-  const auto source = id(81);
-  const auto display = id(82);
-  const auto request = id(83);
-  auto first = target.acquire(peer, source, display, request, clock.now());
-  ASSERT_TRUE(first.granted());
-  ASSERT_TRUE(target.activate(first.lease.session, first.lease.generation, clock.now()));
-  clock.advance(2999ms);
-  EXPECT_TRUE(target.validate(peer, InputEvent{source, first.lease.session, first.lease.generation,
-                                                1, Key{65, true}, InputOrigin::kRemoteInjected},
-                              clock.now()));
-  clock.advance(1ms);
-  EXPECT_FALSE(target.validate(peer, InputEvent{source, first.lease.session, first.lease.generation,
-                                                 2, Key{65, false}, InputOrigin::kRemoteInjected},
-                               clock.now()));
-  EXPECT_FALSE(target.has_lease());
+  TwoNode node;
+  node.acquire();
+  const auto first = *node.arbiter.lease();
 
-  auto second = target.acquire(peer, source, display, request, clock.now());
-  ASSERT_TRUE(second.granted());
-  ASSERT_TRUE(target.activate(second.lease.session, second.lease.generation, clock.now()));
-  InputEvent stale{source, second.lease.session, first.lease.generation, 1,
-                   Key{66, true}, InputOrigin::kRemoteInjected};
-  EXPECT_FALSE(target.validate(peer, stale, {}));
-  EXPECT_TRUE(target.has_active_lease());
-  InputEvent gap{source, second.lease.session, second.lease.generation, 3,
-                 Key{67, true}, InputOrigin::kRemoteInjected};
-  EXPECT_FALSE(target.validate(peer, gap, {}));
-  EXPECT_FALSE(target.has_lease());
+  node.clock.advance(2999ms);
+  node.send(node.router.on_local_event(
+      InputEvent{{}, {}, 0, 0, MouseDelta{1.0, 0.0}, InputOrigin::kSynthetic}, {},
+      node.clock.now()));
+  node.pump();
+  ASSERT_TRUE(node.arbiter.has_active_lease());
+  ASSERT_EQ(node.backend.injected_events.size(), 1u);
+
+  node.clock.advance(1ms);
+  node.send(node.router.on_local_event(
+      InputEvent{{}, {}, 0, 0, MouseDelta{0.0, 1.0}, InputOrigin::kSynthetic}, {},
+      node.clock.now()));
+  node.pump();
+  node.pump();
+  EXPECT_FALSE(node.arbiter.has_lease());
+  EXPECT_EQ(node.router.state(), RouterState::kRecovering);
+
+  node.router.on_tick(node.clock.now() + 1ms);
+  node.clock.advance(1ms);
+  node.acquire();
+  const auto second = *node.arbiter.lease();
+  ASSERT_NE(first.generation, second.generation);
+  const auto injected_before_stale = node.backend.injected_events.size();
+
+  RouterAction stale;
+  stale.kind = RouterActionKind::kSendInput;
+  stale.source = node.source;
+  stale.session = second.session;
+  stale.generation = first.generation;
+  stale.seq = 1;
+  stale.event = InputEvent{node.source, second.session, first.generation, 1,
+                           Key{66, true}, InputOrigin::kRemoteInjected};
+  ASSERT_TRUE(node.transport.send(stale));
+  node.pump();
+  EXPECT_TRUE(node.arbiter.has_active_lease());
+  EXPECT_EQ(node.backend.injected_events.size(), injected_before_stale);
+
+  RouterAction gap = stale;
+  gap.generation = second.generation;
+  gap.seq = 3;
+  gap.event.generation = second.generation;
+  gap.event.seq = 3;
+  ASSERT_TRUE(node.transport.send(gap));
+  node.pump();
+  node.pump();
+  EXPECT_FALSE(node.arbiter.has_lease());
+  EXPECT_EQ(node.router.state(), RouterState::kRecovering);
 }
 
 TEST(M0TwoNode, LocalPhysicalInputPreemptsRemoteLease) {

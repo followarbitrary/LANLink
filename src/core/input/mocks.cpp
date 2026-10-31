@@ -72,6 +72,13 @@ bool MockTransport::send(const RouterAction& action) {
     if (drop_next_) {
         drop_next_ = false;
         dropped_.push_back(action);
+        // A dropped activation is observable as a failed control-plane exchange. Drive the
+        // router rollback through the same path a timeout would use, then queue its cleanup.
+        if (action.kind == RouterActionKind::kActivate && router_) {
+            const auto rollback = router_->on_activation_ack(action.session, action.generation,
+                                                              false, IClock::time_point{});
+            for (const auto& generated : rollback) send(generated);
+        }
         return true;
     }
     if (action.kind == RouterActionKind::kSendInput && !queue_.empty() &&
@@ -157,6 +164,9 @@ std::vector<RouterAction> MockTransport::pump(InputRouter& router, IClock::time_
     for (const auto& action : deliver_ready()) {
         std::vector<RouterAction> next;
         switch (action.kind) {
+        case RouterActionKind::kArmLocalSuppression:
+            if (backend_) backend_->suppress_local();
+            break;
         case RouterActionKind::kAcquire:
             if (arbiter_) next = router.on_grant(
                 arbiter_->acquire(peer_, action.source, action.target_display, action.request, now), now);
@@ -168,10 +178,11 @@ std::vector<RouterAction> MockTransport::pump(InputRouter& router, IClock::time_
             }
             break;
         case RouterActionKind::kRenew:
-            if (arbiter_ && router.lease()) {
+            if (arbiter_) {
                 auto ok = arbiter_->renew(peer_, action.session, action.generation, now);
                 if (!ok) next = router.on_revoke(RevokeReason::kProtocolError, now);
-                else if (arbiter_->lease()) router.on_renew_ack(*arbiter_->lease(), now);
+                else if (arbiter_->lease() && router.lease())
+                    router.on_renew_ack(*arbiter_->lease(), now);
             }
             break;
         case RouterActionKind::kSendInput:
@@ -179,7 +190,7 @@ std::vector<RouterAction> MockTransport::pump(InputRouter& router, IClock::time_
                 auto validation = arbiter_->validate(peer_, action.event, now);
                 if (validation.revoked() || !arbiter_->has_lease())
                     next = router.on_revoke(validation.reason(), now);
-                else if (backend_)
+                else if (validation.accepted() && backend_)
                     backend_->inject(action.event);
             }
             break;
