@@ -17,6 +17,8 @@ add_library(lanlink_core
   src/core/common/liveness.cpp
   src/core/topology/topology.cpp
   src/core/input/arbiter.cpp
+  src/core/input/router.cpp
+  src/core/input/mocks.cpp
 )
 target_compile_features(lanlink_core PUBLIC cxx_std_20)
 target_include_directories(lanlink_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -42,3 +44,8 @@ add_executable(arbiter_test tests/unit/arbiter_test.cpp)
 target_link_libraries(arbiter_test PRIVATE lanlink_core GTest::gtest_main)
 gtest_discover_tests(arbiter_test)
 add_test(NAME arbiter COMMAND arbiter_test)
+
+add_executable(router_test tests/unit/router_test.cpp)
+target_link_libraries(router_test PRIVATE lanlink_core GTest::gtest_main)
+gtest_discover_tests(router_test)
+add_test(NAME router COMMAND router_test)
