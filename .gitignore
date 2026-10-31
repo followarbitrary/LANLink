@@ -1,0 +1,23 @@
+# Project-local documentation and superpowers artifacts
+docs/
+superpowers/
+
+# IDE metadata
+.idea/
+.vscode/
+*.iml
+
+# Operating system files
+.DS_Store
+Thumbs.db
+
+# Editor swap files
+*.swp
+*.swo
+
+# Dependencies and build output
+node_modules/
+dist/
+build/
+__pycache__/
+*.py[cod]
