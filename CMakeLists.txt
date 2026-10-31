@@ -16,6 +16,7 @@ add_library(lanlink_core
   src/core/common/clock.cpp
   src/core/common/liveness.cpp
   src/core/topology/topology.cpp
+  src/core/input/arbiter.cpp
 )
 target_compile_features(lanlink_core PUBLIC cxx_std_20)
 target_include_directories(lanlink_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -36,3 +37,8 @@ add_executable(topology_test tests/unit/topology_test.cpp)
 target_link_libraries(topology_test PRIVATE lanlink_core GTest::gtest_main)
 gtest_discover_tests(topology_test)
 add_test(NAME topology COMMAND topology_test)
+
+add_executable(arbiter_test tests/unit/arbiter_test.cpp)
+target_link_libraries(arbiter_test PRIVATE lanlink_core GTest::gtest_main)
+gtest_discover_tests(arbiter_test)
+add_test(NAME arbiter COMMAND arbiter_test)
