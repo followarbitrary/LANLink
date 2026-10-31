@@ -77,6 +77,7 @@ bool MockTransport::send(const RouterAction& action) {
         overflowed_ = true;
         dropped_.push_back(action);
         queue_.clear(); // fail closed: stale input cannot leak after an overflow.
+        if (router_) router_->on_disconnect(IClock::time_point{});
         return false;
     }
     Delivery d{action, step_ + delay_steps_};
