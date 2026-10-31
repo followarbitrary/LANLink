@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include <cmath>
+#include <limits>
 #include <vector>
 #include "lanlink/topology/topology.hpp"
 
@@ -45,6 +46,20 @@ TEST(ScreenTopology, RejectsInvalidRectanglesDuplicateIdsAndMalformedLinks) {
 
   auto zero_version = link(a, Edge::kRight, b, Edge::kLeft, 0, 1, 0);
   EXPECT_TRUE(topology.set_snapshot(0, {a, b}, {zero_version}).ok());
+}
+
+TEST(ScreenTopology, RejectsFiniteBoundsWhoseDerivedExtentOverflows) {
+  ScreenTopology topology;
+  const auto extreme = display(1, -std::numeric_limits<double>::max(),
+                               -std::numeric_limits<double>::max(),
+                               std::numeric_limits<double>::max(),
+                               std::numeric_limits<double>::max());
+  EXPECT_FALSE(topology.set_snapshot(1, {extreme}, {}).ok());
+
+  auto a = display(2, 0, 0, 100, 100);
+  auto b = display(3, 100, 0, 200, 100);
+  ASSERT_TRUE(topology.set_snapshot(2, {a, b}, {link(a, Edge::kRight, b, Edge::kLeft, 0, 1, 2)}));
+  EXPECT_TRUE(topology.crossing(a.id, Edge::kRight, Point{104, 50}, 4.0).has_value());
 }
 
 TEST(ScreenTopology, RequiresAtLeastFourLogicalPixelsOfOverflow) {

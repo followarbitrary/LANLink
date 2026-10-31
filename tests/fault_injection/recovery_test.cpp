@@ -81,7 +81,38 @@ TEST(M0Recovery, StaleRenewAfterDisconnectCannotExtendLease) {
   h.transport.pump(h.router, h.clock.now());
   h.transport.pump(h.router, h.clock.now());
   EXPECT_FALSE(h.arbiter.has_lease());
-  EXPECT_FALSE(h.backend.released_sessions.empty());
+  EXPECT_TRUE(h.backend.released_sessions.empty());
+  EXPECT_EQ(h.router.state(), RouterState::kRecovering);
+}
+
+TEST(M0Recovery, StaleRenewAfterReacquireCannotRevokeNewLease) {
+  Harness h;
+  h.acquire();
+  ASSERT_TRUE(h.arbiter.lease().has_value());
+  const auto first = *h.arbiter.lease();
+
+  // Disconnect/release the first generation, then reacquire a live second generation.
+  h.send(h.router.on_disconnect(h.clock.now()));
+  h.transport.pump(h.router, h.clock.now());
+  h.router.on_tick(h.clock.now());
+  h.acquire();
+  ASSERT_TRUE(h.arbiter.lease().has_value());
+  const auto second = *h.arbiter.lease();
+  ASSERT_NE(first.generation, second.generation);
+  ASSERT_EQ(h.router.state(), RouterState::kRemote);
+
+  RouterAction stale;
+  stale.kind = RouterActionKind::kRenew;
+  stale.source = h.router.source();
+  stale.session = first.session;
+  stale.generation = first.generation;
+  ASSERT_TRUE(h.transport.send(stale));
+  h.transport.pump(h.router, h.clock.now());
+
+  EXPECT_TRUE(h.arbiter.has_active_lease());
+  ASSERT_TRUE(h.router.lease().has_value());
+  EXPECT_EQ(h.router.lease()->generation, second.generation);
+  EXPECT_EQ(h.router.state(), RouterState::kRemote);
 }
 
 TEST(M0Recovery, SequenceGapRevokesAndCleansEveryPressedInput) {

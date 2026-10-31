@@ -46,6 +46,11 @@ Result<void> ScreenTopology::set_snapshot(std::uint64_t version, std::vector<Dis
         !finite(bounds.bottom) || !(bounds.left < bounds.right) || !(bounds.top < bounds.bottom)) {
       return Result<void>::failure("display rectangle must have finite positive dimensions");
     }
+    const double width = bounds.width();
+    const double height = bounds.height();
+    if (!finite(width) || !finite(height) || !(width > 0.0) || !(height > 0.0)) {
+      return Result<void>::failure("display rectangle dimensions must be finite");
+    }
     if (!finite(display.scale) || display.scale <= 0.0) {
       return Result<void>::failure("display scale must be finite and positive");
     }

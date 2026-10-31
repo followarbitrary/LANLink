@@ -68,6 +68,8 @@ Result<void> InputArbiter::activate(const SessionId& session, std::uint64_t gene
     }
     if (generation == 0)
         return Result<void>::failure("generation must be non-zero");
+    if (lease_->active)
+        return Result<void>::success();
     lease_->active = true;
     last_seq_ = 0;
     return Result<void>::success();

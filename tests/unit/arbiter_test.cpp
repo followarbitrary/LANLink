@@ -84,6 +84,27 @@ TEST(InputArbiter, RenewsOnlyMatchingActiveUnexpiredLease) {
                                IClock::time_point{} + 4000ms));
 }
 
+TEST(InputArbiter, DuplicateActivationDoesNotResetSequence) {
+    InputArbiter arbiter;
+    AuthenticatedPeer peer{id(1)};
+    const SourceId source = id(2);
+    auto grant = arbiter.acquire(peer, source, id(3), id(4), IClock::time_point{});
+    ASSERT_TRUE(grant.granted());
+    ASSERT_TRUE(
+        arbiter.activate(grant.lease.session, grant.lease.generation, IClock::time_point{}));
+    ASSERT_TRUE(arbiter.validate(
+        peer, key_event(source, grant.lease.session, grant.lease.generation, 1, 42, true),
+        IClock::time_point{}));
+
+    // A delayed duplicate Activate for the live session must be harmless.
+    ASSERT_TRUE(
+        arbiter.activate(grant.lease.session, grant.lease.generation, IClock::time_point{}));
+    EXPECT_TRUE(arbiter.validate(
+        peer, key_event(source, grant.lease.session, grant.lease.generation, 2, 42, false),
+        IClock::time_point{}));
+    EXPECT_TRUE(arbiter.ledger_empty());
+}
+
 TEST(InputArbiter, ValidatesIdentityAndStrictSequencesAndCleansLedgerOnGap) {
     InputArbiter arbiter;
     AuthenticatedPeer peer{id(1)};

@@ -180,7 +180,18 @@ std::vector<RouterAction> MockTransport::pump(InputRouter& router, IClock::time_
         case RouterActionKind::kRenew:
             if (arbiter_) {
                 auto ok = arbiter_->renew(peer_, action.session, action.generation, now);
-                if (!ok) next = router.on_revoke(RevokeReason::kProtocolError, now);
+                if (!ok) {
+                    // A delayed renewal from an older session/generation must not revoke a
+                    // newer lease that the source has already acquired. Only route a failed
+                    // renewal back into recovery when it still identifies the router's live
+                    // lease.
+                    const auto& live = router.lease();
+                    if (router.state() == RouterState::kRemote && live.has_value() &&
+                        router.source() == action.source && live->session == action.session &&
+                        live->generation == action.generation) {
+                        next = router.on_revoke(RevokeReason::kProtocolError, now);
+                    }
+                }
                 else if (arbiter_->lease() && router.lease())
                     router.on_renew_ack(*arbiter_->lease(), now);
             }
