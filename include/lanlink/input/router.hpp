@@ -54,6 +54,15 @@ enum class RouterActionKind {
     RestoreLocal = kRestoreLocal,
     ReleaseInjectedState = kReleaseInjectedState,
     Drop = kDrop,
+    ACQUIRE = kAcquire,
+    ARM_LOCAL_SUPPRESSION = kArmLocalSuppression,
+    ACTIVATE = kActivate,
+    RENEW = kRenew,
+    SEND_INPUT = kSendInput,
+    RELEASE = kRelease,
+    RESTORE_LOCAL = kRestoreLocal,
+    RELEASE_INJECTED_STATE = kReleaseInjectedState,
+    DROP = kDrop,
 };
 using ActionKind = RouterActionKind;
 
@@ -80,6 +89,8 @@ struct RouterAction {
 class InputRouter {
   public:
     using TimePoint = IClock::time_point;
+    using State = RouterState;
+    using Action = RouterAction;
 
     explicit InputRouter(SourceId source = {});
     InputRouter(SourceId source, AuthenticatedPeer peer, DisplayId local_display,
