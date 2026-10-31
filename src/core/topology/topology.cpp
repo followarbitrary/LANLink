@@ -9,8 +9,6 @@
 
 namespace lanlink {
 namespace {
-constexpr double kEpsilon = 1e-12;
-
 bool finite(double value) { return std::isfinite(value); }
 
 bool valid_edge(Edge edge) {
@@ -40,8 +38,6 @@ double point_tangent(const Point& point, Edge edge) {
 
 Result<void> ScreenTopology::set_snapshot(std::uint64_t version, std::vector<Display> displays,
                                           std::vector<ScreenLink> links) {
-  if (version == 0) return Result<void>::failure("topology version must be non-zero");
-
   std::unordered_map<DisplayId, std::size_t> indexes;
   for (std::size_t i = 0; i < displays.size(); ++i) {
     const auto& display = displays[i];
@@ -105,7 +101,10 @@ Point ScreenTopology::clamp_entry(const Display& target_display, Edge target_edg
 std::optional<Crossing> ScreenTopology::crossing(const DisplayId& source_display, Edge source_edge,
                                                  Point candidate_point,
                                                  double accumulated_overflow) const {
-  if (accumulated_overflow + kEpsilon < m0::kEdgeThreshold) return std::nullopt;
+  if (!finite(candidate_point.x) || !finite(candidate_point.y) ||
+      !finite(accumulated_overflow) || accumulated_overflow < m0::kEdgeThreshold) {
+    return std::nullopt;
+  }
   const auto source_it = display_index_.find(source_display);
   if (source_it == display_index_.end()) return std::nullopt;
   const auto& source = displays_[source_it->second];
@@ -113,11 +112,11 @@ std::optional<Crossing> ScreenTopology::crossing(const DisplayId& source_display
   if (!(extent > 0.0)) return std::nullopt;
   const double tangent = point_tangent(candidate_point, source_edge);
   const double ratio = (tangent - edge_start(source.logical_bounds, source_edge)) / extent;
-  if (ratio < -kEpsilon || ratio > 1.0 + kEpsilon) return std::nullopt;
+  if (ratio < 0.0 || ratio >= 1.0) return std::nullopt;
 
   for (const auto& link : links_) {
     if (link.source != source_display || link.source_edge != source_edge) continue;
-    if (ratio + kEpsilon < link.tangent_min || ratio - kEpsilon > link.tangent_max) continue;
+    if (ratio < link.tangent_min || ratio > link.tangent_max) continue;
     const auto target_it = display_index_.find(link.target);
     if (target_it == display_index_.end()) continue;
     const auto& target = displays_[target_it->second];

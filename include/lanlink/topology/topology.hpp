@@ -49,6 +49,7 @@ struct ScreenLink {
   Edge source_edge;
   DisplayId target;
   Edge target_edge;
+  // Normalized source-edge tangent ratios, each in the inclusive range [0,1].
   double tangent_min{};
   double tangent_max{1.0};
   std::uint64_t version{};

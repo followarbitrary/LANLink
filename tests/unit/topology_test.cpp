@@ -42,6 +42,9 @@ TEST(ScreenTopology, RejectsInvalidRectanglesDuplicateIdsAndMalformedLinks) {
 
   auto wrong_version = link(a, Edge::kRight, b, Edge::kLeft, 0, 1, 2);
   EXPECT_FALSE(topology.set_snapshot(1, {a, b}, {wrong_version}).ok());
+
+  auto zero_version = link(a, Edge::kRight, b, Edge::kLeft, 0, 1, 0);
+  EXPECT_TRUE(topology.set_snapshot(0, {a, b}, {zero_version}).ok());
 }
 
 TEST(ScreenTopology, RequiresAtLeastFourLogicalPixelsOfOverflow) {
@@ -118,4 +121,32 @@ TEST(ScreenTopology, ClipsEightPixelInsetForSmallTargets) {
   ASSERT_TRUE(crossing.has_value());
   EXPECT_NEAR(crossing->entry_point.x, 102.5, 1e-9);
   EXPECT_NEAR(crossing->entry_point.y, 2.5, 1e-9);
+}
+
+TEST(ScreenTopology, TreatsSourceTangentUpperBoundAsOutsideHalfOpenRectangle) {
+  ScreenTopology topology;
+  auto a = display(1, 0, 0, 100, 100);
+  auto b = display(2, 100, 0, 200, 100);
+  ASSERT_TRUE(topology.set_snapshot(1, {a, b}, {link(a, Edge::kRight, b, Edge::kLeft)}));
+  EXPECT_FALSE(topology.crossing(a.id, Edge::kRight, Point{104, 100}, 4.0).has_value());
+}
+
+TEST(ScreenTopology, RequiresExactThresholdWithoutEpsilonAllowance) {
+  ScreenTopology topology;
+  auto a = display(1, 0, 0, 100, 100);
+  auto b = display(2, 100, 0, 200, 100);
+  ASSERT_TRUE(topology.set_snapshot(1, {a, b}, {link(a, Edge::kRight, b, Edge::kLeft)}));
+  EXPECT_FALSE(topology.crossing(a.id, Edge::kRight, Point{104, 50},
+                                 std::nextafter(4.0, 0.0)).has_value());
+}
+
+TEST(ScreenTopology, RejectsNonFiniteCrossingInputs) {
+  ScreenTopology topology;
+  auto a = display(1, 0, 0, 100, 100);
+  auto b = display(2, 100, 0, 200, 100);
+  ASSERT_TRUE(topology.set_snapshot(1, {a, b}, {link(a, Edge::kRight, b, Edge::kLeft)}));
+  EXPECT_FALSE(topology.crossing(a.id, Edge::kRight, Point{104, NAN}, 4.0).has_value());
+  EXPECT_FALSE(topology.crossing(a.id, Edge::kRight, Point{INFINITY, 50}, 4.0).has_value());
+  EXPECT_FALSE(topology.crossing(a.id, Edge::kRight, Point{104, 50}, NAN).has_value());
+  EXPECT_FALSE(topology.crossing(a.id, Edge::kRight, Point{104, 50}, INFINITY).has_value());
 }
