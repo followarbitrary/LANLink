@@ -1,0 +1,484 @@
+#include "lanlink/platform/macos_input_backend.hpp"
+
+#include <algorithm>
+#include <chrono>
+#include <condition_variable>
+#include <cstdint>
+#include <cmath>
+#include <mutex>
+#include <optional>
+#include <thread>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
+#include <vector>
+
+#if defined(__APPLE__)
+
+#include <ApplicationServices/ApplicationServices.h>
+#include <CoreFoundation/CoreFoundation.h>
+
+namespace lanlink::platform {
+namespace {
+constexpr std::int64_t kOwnEventUserData = 0x4c4c4e4bLL;
+
+struct HeldState {
+  std::unordered_set<std::uint32_t> keys;
+  std::unordered_set<std::uint32_t> buttons;
+};
+
+CGEventType button_type(std::uint32_t button, bool pressed) {
+  if (button == 1) return pressed ? kCGEventLeftMouseDown : kCGEventLeftMouseUp;
+  if (button == 2) return pressed ? kCGEventRightMouseDown : kCGEventRightMouseUp;
+  return pressed ? kCGEventOtherMouseDown : kCGEventOtherMouseUp;
+}
+
+std::optional<InputEvent> convert_event(CGEventType type, CGEventRef event, CGPoint& last,
+                                         bool& have_last) {
+  InputEvent converted{};
+  converted.origin = InputOrigin::kPhysical;
+  switch (type) {
+    case kCGEventKeyDown:
+    case kCGEventKeyUp:
+      converted.payload = Key{static_cast<std::uint32_t>(CGEventGetIntegerValueField(
+                                 event, kCGKeyboardEventKeycode)), type == kCGEventKeyDown};
+      return converted;
+    case kCGEventMouseMoved:
+    case kCGEventLeftMouseDragged:
+    case kCGEventRightMouseDragged:
+    case kCGEventOtherMouseDragged: {
+      const CGPoint point = CGEventGetLocation(event);
+      if (!have_last) {
+        last = point;
+        have_last = true;
+        return std::nullopt;
+      }
+      converted.payload = MouseDelta{point.x - last.x, point.y - last.y};
+      last = point;
+      return converted;
+    }
+    case kCGEventLeftMouseDown:
+    case kCGEventLeftMouseUp:
+      converted.payload = MouseButton{1, type == kCGEventLeftMouseDown};
+      return converted;
+    case kCGEventRightMouseDown:
+    case kCGEventRightMouseUp:
+      converted.payload = MouseButton{2, type == kCGEventRightMouseDown};
+      return converted;
+    case kCGEventOtherMouseDown:
+    case kCGEventOtherMouseUp:
+      converted.payload = MouseButton{3, type == kCGEventOtherMouseDown};
+      return converted;
+    case kCGEventScrollWheel:
+      converted.payload = MouseWheel{static_cast<double>(CGEventGetIntegerValueField(
+          event, kCGScrollWheelEventDeltaAxis1))};
+      return converted;
+    default:
+      return std::nullopt;
+  }
+}
+
+}  // namespace
+
+struct MacOSInputBackend::Impl {
+  explicit Impl(MacOSInputBackend* owner_value) : owner(owner_value) {}
+  MacOSInputBackend* owner;
+  std::mutex mutex;
+  std::recursive_mutex operation_mutex;
+  std::condition_variable ready_cv;
+  IInputBackend::EventCallback callback;
+  std::thread thread;
+  CFRunLoopRef run_loop{nullptr};
+  CFMachPortRef tap{nullptr};
+  CFRunLoopSourceRef source{nullptr};
+  bool ready{false};
+  bool stop_requested{false};
+  bool tap_disabled{false};
+  bool suppression{false};
+  CGPoint last_point{};
+  bool have_last_point{false};
+  std::unordered_map<SessionId, HeldState> held;
+};
+
+namespace {
+CGEventRef tap_callback(CGEventTapProxy, CGEventType type, CGEventRef event, void* user_info) {
+  auto* impl = static_cast<MacOSInputBackend::Impl*>(user_info);
+  if (impl == nullptr || event == nullptr) return event;
+  if (type == kCGEventTapDisabledByTimeout || type == kCGEventTapDisabledByUserInput) {
+    std::lock_guard lock(impl->mutex);
+    impl->tap_disabled = true;
+    if (impl->tap != nullptr) CGEventTapEnable(impl->tap, true);
+    return event;
+  }
+  if (CGEventGetIntegerValueField(event, kCGEventSourceUserData) == kOwnEventUserData) return event;
+
+  std::optional<InputEvent> converted;
+  IInputBackend::EventCallback callback;
+  bool suppress = false;
+  {
+    std::lock_guard lock(impl->mutex);
+    converted = convert_event(type, event, impl->last_point, impl->have_last_point);
+    callback = impl->callback;
+    suppress = impl->suppression;
+  }
+  if (converted && callback) callback(*converted);
+  return suppress ? nullptr : event;
+}
+}  // namespace
+
+MacOSInputBackend::MacOSInputBackend() : impl_(std::make_unique<Impl>(this)) {
+  status_.permission = true;
+  status_.capture = false;
+  status_.injection = false;
+}
+
+MacOSInputBackend::~MacOSInputBackend() { stop(); }
+
+Result<void> MacOSInputBackend::start(EventCallback callback) {
+  std::lock_guard operation_lock(impl_->operation_mutex);
+  if (impl_->thread.joinable() && impl_->thread.get_id() != std::this_thread::get_id())
+    impl_->thread.join();
+  if (status_.running) {
+    std::lock_guard lock(impl_->mutex);
+    impl_->callback = std::move(callback);
+    return Result<void>::success();
+  }
+  if (!AXIsProcessTrusted()) {
+    status_.permission = false;
+    status_.capture = false;
+    status_.injection = false;
+    status_.degraded = true;
+    status_.last_error = "Accessibility permission denied";
+    return Result<void>::failure(status_.last_error);
+  }
+  {
+    std::lock_guard lock(impl_->mutex);
+    impl_->callback = std::move(callback);
+    impl_->ready = false;
+    impl_->stop_requested = false;
+    impl_->tap_disabled = false;
+    impl_->suppression = false;
+    impl_->have_last_point = false;
+    impl_->thread = std::thread([this] {
+      CFMachPortRef tap = CGEventTapCreate(
+          kCGHIDEventTap, kCGHeadInsertEventTap, kCGEventTapOptionDefault,
+          CGEventMaskBit(kCGEventKeyDown) | CGEventMaskBit(kCGEventKeyUp) |
+              CGEventMaskBit(kCGEventMouseMoved) | CGEventMaskBit(kCGEventLeftMouseDown) |
+              CGEventMaskBit(kCGEventLeftMouseUp) | CGEventMaskBit(kCGEventRightMouseDown) |
+              CGEventMaskBit(kCGEventRightMouseUp) | CGEventMaskBit(kCGEventOtherMouseDown) |
+              CGEventMaskBit(kCGEventOtherMouseUp) | CGEventMaskBit(kCGEventLeftMouseDragged) |
+              CGEventMaskBit(kCGEventRightMouseDragged) | CGEventMaskBit(kCGEventOtherMouseDragged) |
+              CGEventMaskBit(kCGEventScrollWheel),
+          &tap_callback, impl_.get());
+      {
+        std::lock_guard lock(impl_->mutex);
+        impl_->tap = tap;
+        if (tap != nullptr) {
+          impl_->source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0);
+          impl_->run_loop = CFRunLoopGetCurrent();
+          if (impl_->source != nullptr) {
+            CFRunLoopAddSource(impl_->run_loop, impl_->source, kCFRunLoopCommonModes);
+            CGEventTapEnable(tap, true);
+            impl_->ready = true;
+          }
+        }
+        if (!impl_->ready) {
+          if (impl_->source != nullptr) CFRelease(impl_->source);
+          if (impl_->tap != nullptr) CFRelease(impl_->tap);
+          impl_->source = nullptr;
+          impl_->tap = nullptr;
+          impl_->run_loop = nullptr;
+        }
+      }
+      impl_->ready_cv.notify_all();
+      {
+        std::lock_guard lock(impl_->mutex);
+        if (!impl_->ready || impl_->stop_requested) {
+          if (impl_->source != nullptr) CFRelease(impl_->source);
+          if (impl_->tap != nullptr) CFRelease(impl_->tap);
+          impl_->source = nullptr;
+          impl_->tap = nullptr;
+          impl_->run_loop = nullptr;
+          impl_->ready = false;
+          return;
+        }
+      }
+      CFRunLoopRun();
+      std::lock_guard lock(impl_->mutex);
+      const bool unexpected_exit = !impl_->stop_requested;
+      if (impl_->source != nullptr && impl_->run_loop != nullptr) {
+        CFRunLoopRemoveSource(impl_->run_loop, impl_->source, kCFRunLoopCommonModes);
+        CFRelease(impl_->source);
+      }
+      if (impl_->tap != nullptr) CFRelease(impl_->tap);
+      impl_->source = nullptr;
+      impl_->tap = nullptr;
+      impl_->run_loop = nullptr;
+      impl_->ready = false;
+      if (unexpected_exit) {
+        impl_->owner->status_.running = false;
+        impl_->owner->status_.capture = false;
+        impl_->owner->status_.injection = false;
+        impl_->owner->status_.suppression = false;
+        impl_->owner->status_.degraded = true;
+        impl_->owner->status_.last_error = "CGEventTap stopped unexpectedly";
+      }
+    });
+  }
+
+  std::unique_lock lock(impl_->mutex);
+  if (!impl_->ready_cv.wait_for(lock, std::chrono::seconds(2), [this] {
+        return impl_->ready || !impl_->thread.joinable();
+      })) {
+    lock.unlock();
+    stop();
+    status_.capture = false;
+    status_.injection = false;
+    status_.degraded = true;
+    status_.last_error = "CGEventTap startup timed out";
+    return Result<void>::failure(status_.last_error);
+  }
+  if (!impl_->ready) {
+    lock.unlock();
+    if (impl_->thread.joinable()) impl_->thread.join();
+    status_.capture = false;
+    status_.injection = false;
+    status_.degraded = true;
+    status_.last_error = "CGEventTapCreate failed";
+    return Result<void>::failure(status_.last_error);
+  }
+  status_.permission = true;
+  status_.capture = true;
+  status_.injection = true;
+  status_.running = true;
+  status_.degraded = false;
+  status_.last_error.clear();
+  return Result<void>::success();
+}
+
+void MacOSInputBackend::stop() {
+  std::lock_guard operation_lock(impl_->operation_mutex);
+  CFRunLoopRef loop = nullptr;
+  std::vector<SessionId> sessions;
+  {
+    std::lock_guard lock(impl_->mutex);
+    status_.running = false;
+    status_.suppression = false;
+    impl_->suppression = false;
+    impl_->stop_requested = true;
+    loop = impl_->run_loop;
+    sessions.reserve(impl_->held.size());
+    for (const auto& entry : impl_->held) sessions.push_back(entry.first);
+  }
+  for (const auto& session : sessions) release_injected_state(session);
+  if (loop != nullptr) {
+    CFRunLoopStop(loop);
+    CFRunLoopWakeUp(loop);
+  }
+  if (impl_->thread.joinable() && impl_->thread.get_id() != std::this_thread::get_id())
+    impl_->thread.join();
+  std::lock_guard lock(impl_->mutex);
+  impl_->callback = {};
+  impl_->held.clear();
+  impl_->have_last_point = false;
+  status_.capture = false;
+  status_.injection = status_.permission;
+}
+
+Result<void> MacOSInputBackend::set_suppression(bool enabled) {
+  std::lock_guard operation_lock(impl_->operation_mutex);
+  std::lock_guard lock(impl_->mutex);
+  if (enabled && (!status_.running || !status_.capture)) {
+    status_.last_error = "capture unavailable";
+    status_.degraded = true;
+    return Result<void>::failure(status_.last_error);
+  }
+  status_.suppression = enabled;
+  impl_->suppression = enabled;
+  return Result<void>::success();
+}
+
+Result<void> MacOSInputBackend::inject(const InputEvent& event) {
+  std::lock_guard operation_lock(impl_->operation_mutex);
+  {
+    std::lock_guard lock(impl_->mutex);
+    if (!status_.running || !status_.injection || !AXIsProcessTrusted()) {
+      if (!AXIsProcessTrusted()) status_.permission = false;
+      status_.injection = false;
+      status_.degraded = true;
+      status_.last_error = status_.permission ? "injection unavailable"
+                                               : "Accessibility permission denied";
+      return Result<void>::failure(status_.last_error);
+    }
+  }
+  CGEventRef created = nullptr;
+  if (const auto* key = std::get_if<Key>(&event.payload)) {
+    created = CGEventCreateKeyboardEvent(nullptr, static_cast<CGKeyCode>(key->code), key->pressed);
+  } else if (const auto* button = std::get_if<MouseButton>(&event.payload)) {
+    CGEventRef current = CGEventCreate(nullptr);
+    const CGPoint point = current == nullptr ? CGPointZero : CGEventGetLocation(current);
+    if (current != nullptr) CFRelease(current);
+    if (button->button >= 1 && button->button <= 3)
+      created = CGEventCreateMouseEvent(nullptr, button_type(button->button, button->pressed), point,
+                                        static_cast<CGMouseButton>(button->button - 1));
+  } else if (const auto* delta = std::get_if<MouseDelta>(&event.payload)) {
+    CGEventRef current = CGEventCreate(nullptr);
+    CGPoint point = current == nullptr ? CGPointZero : CGEventGetLocation(current);
+    if (current != nullptr) CFRelease(current);
+    point.x += delta->dx;
+    point.y += delta->dy;
+    created = CGEventCreateMouseEvent(nullptr, kCGEventMouseMoved, point, kCGMouseButtonLeft);
+  } else if (const auto* wheel = std::get_if<MouseWheel>(&event.payload)) {
+    created = CGEventCreateScrollWheelEvent(nullptr, kCGScrollEventUnitLine, 1,
+                                            static_cast<int32_t>(std::llround(wheel->delta)));
+  } else if (const auto* warp = std::get_if<PointerWarp>(&event.payload)) {
+    CGWarpMouseCursorPosition(CGPointMake(warp->x, warp->y));
+    return Result<void>::success();
+  }
+
+  {
+    std::lock_guard lock(impl_->mutex);
+    if (!status_.running || !status_.injection) {
+      status_.injection = false;
+      status_.degraded = true;
+      status_.last_error = "injection unavailable";
+      if (created != nullptr) CFRelease(created);
+      return Result<void>::failure(status_.last_error);
+    }
+  }
+  if (created == nullptr) {
+    status_.degraded = true;
+    status_.last_error = "unsupported or invalid event";
+    return Result<void>::failure(status_.last_error);
+  }
+  CGEventSetIntegerValueField(created, kCGEventSourceUserData, kOwnEventUserData);
+  CGEventPost(kCGHIDEventTap, created);
+  CFRelease(created);
+
+  std::lock_guard lock(impl_->mutex);
+  if (const auto* key = std::get_if<Key>(&event.payload)) {
+    auto& ledger = impl_->held[event.session].keys;
+    if (key->pressed) ledger.insert(key->code); else ledger.erase(key->code);
+  } else if (const auto* button = std::get_if<MouseButton>(&event.payload)) {
+    auto& ledger = impl_->held[event.session].buttons;
+    if (button->pressed) ledger.insert(button->button); else ledger.erase(button->button);
+  }
+  if (impl_->held[event.session].keys.empty() && impl_->held[event.session].buttons.empty())
+    impl_->held.erase(event.session);
+  return Result<void>::success();
+}
+
+void MacOSInputBackend::release_injected_state(const SessionId& session) {
+  std::lock_guard operation_lock(impl_->operation_mutex);
+  if (!AXIsProcessTrusted()) {
+    status_.permission = false;
+    status_.injection = false;
+    status_.degraded = true;
+    status_.last_error = "Accessibility permission denied";
+    return;
+  }
+  std::unordered_set<std::uint32_t> keys;
+  std::unordered_set<std::uint32_t> buttons;
+  {
+    std::lock_guard lock(impl_->mutex);
+    const auto it = impl_->held.find(session);
+    if (it == impl_->held.end()) return;
+    keys = it->second.keys;
+    buttons = it->second.buttons;
+    impl_->held.erase(it);
+  }
+  for (const auto key : keys) {
+    CGEventRef event = CGEventCreateKeyboardEvent(nullptr, static_cast<CGKeyCode>(key), false);
+    if (event != nullptr) {
+      CGEventSetIntegerValueField(event, kCGEventSourceUserData, kOwnEventUserData);
+      CGEventPost(kCGHIDEventTap, event);
+      CFRelease(event);
+    }
+  }
+  for (const auto button : buttons) {
+    if (button < 1 || button > 3) continue;
+    CGEventRef event = CGEventCreateMouseEvent(nullptr, button_type(button, false), CGPointZero,
+                                               static_cast<CGMouseButton>(button - 1));
+    if (event != nullptr) {
+      CGEventSetIntegerValueField(event, kCGEventSourceUserData, kOwnEventUserData);
+      CGEventPost(kCGHIDEventTap, event);
+      CFRelease(event);
+    }
+  }
+}
+
+Result<void> MacOSInputBackend::recover() {
+  std::lock_guard operation_lock(impl_->operation_mutex);
+  ++status_.recovery_count;
+  status_.suppression = false;
+  std::vector<SessionId> sessions;
+  {
+    std::lock_guard lock(impl_->mutex);
+    sessions.reserve(impl_->held.size());
+    for (const auto& entry : impl_->held) sessions.push_back(entry.first);
+    impl_->suppression = false;
+    if (impl_->tap != nullptr) CGEventTapEnable(impl_->tap, true);
+    impl_->tap_disabled = false;
+  }
+  for (const auto& session : sessions) release_injected_state(session);
+  if (!status_.permission) {
+    status_.degraded = true;
+    status_.last_error = "Accessibility permission denied";
+    return Result<void>::failure(status_.last_error);
+  }
+  if (!status_.running && status_.last_error == "CGEventTap stopped unexpectedly") {
+    IInputBackend::EventCallback callback;
+    {
+      std::lock_guard lock(impl_->mutex);
+      callback = impl_->callback;
+    }
+    status_.last_error.clear();
+    return start(std::move(callback));
+  }
+  status_.degraded = !status_.running;
+  if (status_.running) status_.last_error.clear();
+  return Result<void>::success();
+}
+
+}  // namespace lanlink::platform
+
+#else
+
+namespace lanlink::platform {
+namespace {
+constexpr const char* kUnsupported = "macOS input backend unsupported on this platform";
+}
+struct MacOSInputBackend::Impl {};
+MacOSInputBackend::MacOSInputBackend() : impl_(std::make_unique<Impl>()) {
+  status_.permission = false;
+  status_.capture = false;
+  status_.injection = false;
+  status_.degraded = true;
+  status_.last_error = kUnsupported;
+}
+MacOSInputBackend::~MacOSInputBackend() = default;
+Result<void> MacOSInputBackend::start(EventCallback) {
+  status_.last_error = kUnsupported;
+  status_.degraded = true;
+  return Result<void>::failure(status_.last_error);
+}
+void MacOSInputBackend::stop() { status_.running = false; status_.suppression = false; }
+Result<void> MacOSInputBackend::set_suppression(bool) {
+  status_.last_error = kUnsupported;
+  status_.degraded = true;
+  return Result<void>::failure(status_.last_error);
+}
+Result<void> MacOSInputBackend::inject(const InputEvent&) {
+  status_.last_error = kUnsupported;
+  status_.degraded = true;
+  return Result<void>::failure(status_.last_error);
+}
+void MacOSInputBackend::release_injected_state(const SessionId&) {}
+Result<void> MacOSInputBackend::recover() {
+  ++status_.recovery_count;
+  status_.last_error = kUnsupported;
+  status_.degraded = true;
+  return Result<void>::failure(status_.last_error);
+}
+}  // namespace lanlink::platform
+#endif

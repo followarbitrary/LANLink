@@ -19,9 +19,18 @@ add_library(lanlink_core
   src/core/input/arbiter.cpp
   src/core/input/router.cpp
   src/core/input/mocks.cpp
+  src/platform/fake_input_backend.cpp
+  src/platform/windows/windows_input_backend.cpp
+  src/platform/macos/macos_input_backend.cpp
 )
 target_compile_features(lanlink_core PUBLIC cxx_std_20)
 target_include_directories(lanlink_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+if(APPLE)
+  target_link_libraries(lanlink_core PRIVATE "-framework ApplicationServices")
+endif()
+if(WIN32)
+  target_link_libraries(lanlink_core PRIVATE user32)
+endif()
 if(MSVC)
   target_compile_options(lanlink_core PRIVATE /W4)
 else()
@@ -59,3 +68,23 @@ add_executable(recovery_test tests/fault_injection/recovery_test.cpp)
 target_link_libraries(recovery_test PRIVATE lanlink_core GTest::gtest_main)
 gtest_discover_tests(recovery_test)
 add_test(NAME recovery COMMAND recovery_test)
+
+add_executable(backend_contract_test tests/unit/backend_contract_test.cpp)
+target_link_libraries(backend_contract_test PRIVATE lanlink_core GTest::gtest_main)
+gtest_discover_tests(backend_contract_test)
+add_test(NAME backend_contract COMMAND backend_contract_test)
+
+add_executable(windows_backend_test tests/unit/windows_backend_test.cpp)
+target_link_libraries(windows_backend_test PRIVATE lanlink_core GTest::gtest_main)
+gtest_discover_tests(windows_backend_test)
+add_test(NAME windows_backend COMMAND windows_backend_test)
+
+add_executable(macos_backend_test tests/unit/macos_backend_test.cpp)
+target_link_libraries(macos_backend_test PRIVATE lanlink_core GTest::gtest_main)
+gtest_discover_tests(macos_backend_test)
+add_test(NAME macos_backend COMMAND macos_backend_test)
+
+add_executable(platform_recovery_test tests/integration/platform_recovery_test.cpp)
+target_link_libraries(platform_recovery_test PRIVATE lanlink_core GTest::gtest_main)
+gtest_discover_tests(platform_recovery_test)
+add_test(NAME platform_recovery COMMAND platform_recovery_test)
