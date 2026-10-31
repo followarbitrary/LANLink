@@ -1,28 +1,28 @@
 {
-  "version": 6,
+  "version": 4,
   "configurePresets": [
     {
-      "name": "debug",
-      "displayName": "Debug",
+      "name": "debug-unix",
+      "hidden": true,
       "generator": "Unix Makefiles",
+      "condition": {"type":"notEquals","lhs":"${hostSystemName}","rhs":"Windows"},
       "binaryDir": "${sourceDir}/build/debug",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug",
-        "CMAKE_CXX_EXTENSIONS": "OFF"
-      }
-    }
-  ],
-  "buildPresets": [
+      "cacheVariables": {"CMAKE_BUILD_TYPE": "Debug", "CMAKE_CXX_EXTENSIONS": "OFF"}
+    },
+    {
+      "name": "debug-windows",
+      "hidden": true,
+      "generator": "Visual Studio 17 2022",
+      "condition": {"type":"equals","lhs":"${hostSystemName}","rhs":"Windows"},
+      "binaryDir": "${sourceDir}/build/debug",
+      "cacheVariables": {"CMAKE_CXX_EXTENSIONS": "OFF"}
+    },
     {
       "name": "debug",
-      "configurePreset": "debug"
+      "inherits": ["debug-unix", "debug-windows"],
+      "displayName": "Debug"
     }
   ],
-  "testPresets": [
-    {
-      "name": "debug",
-      "configurePreset": "debug",
-      "output": {"outputOnFailure": true}
-    }
-  ]
+  "buildPresets": [{"name": "debug", "configurePreset": "debug"}],
+  "testPresets": [{"name": "debug", "configurePreset": "debug", "output": {"outputOnFailure": true}}]
 }

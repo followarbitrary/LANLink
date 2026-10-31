@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.23)
 project(LANLink LANGUAGES CXX)
 
 include(FetchContent)
@@ -18,7 +18,11 @@ add_library(lanlink_core
 )
 target_compile_features(lanlink_core PUBLIC cxx_std_20)
 target_include_directories(lanlink_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_compile_options(lanlink_core PRIVATE -Wall -Wextra -Wpedantic)
+if(MSVC)
+  target_compile_options(lanlink_core PRIVATE /W4)
+else()
+  target_compile_options(lanlink_core PRIVATE -Wall -Wextra -Wpedantic)
+endif()
 
 enable_testing()
 add_executable(common_types_test tests/unit/common_types_test.cpp)
