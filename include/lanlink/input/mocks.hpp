@@ -63,12 +63,15 @@ class MockTransport {
     const std::vector<RouterAction>& dropped() const noexcept { return dropped_; }
     const std::vector<Delivery>& queued() const noexcept { return queue_; }
     void connect(InputRouter* router) { router_ = router; }
+    void connect(MockBackend* backend) { backend_ = backend; }
     void connect(InputArbiter* arbiter, const AuthenticatedPeer& peer) {
         arbiter_ = arbiter; peer_ = peer;
     }
     std::vector<RouterAction> pump(InputRouter& router, IClock::time_point now);
 
   private:
+    void execute_actions(InputRouter& router, const std::vector<RouterAction>& actions,
+                         IClock::time_point now);
     static bool can_coalesce(const RouterAction& lhs, const RouterAction& rhs);
     static RouterAction coalesce(const RouterAction& lhs, const RouterAction& rhs);
     std::size_t queue_capacity_;
@@ -82,6 +85,7 @@ class MockTransport {
     std::vector<RouterAction> dropped_;
     InputRouter* router_{nullptr};
     InputArbiter* arbiter_{nullptr};
+    MockBackend* backend_{nullptr};
     AuthenticatedPeer peer_{};
 };
 

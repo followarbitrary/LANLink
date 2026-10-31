@@ -13,8 +13,10 @@ void MockBackend::suppress_local(bool enabled) {
 void MockBackend::restore_local() { suppress_local(false); }
 
 void MockBackend::inject(const InputEvent& event) {
-    injected_events.push_back(event);
-    if (emit_remote_injected) emit_remote_injected(event);
+    auto tagged = event;
+    tagged.origin = InputOrigin::kRemoteInjected;
+    injected_events.push_back(tagged);
+    if (emit_remote_injected) emit_remote_injected(tagged);
 }
 
 void MockBackend::release_injected_state(const SessionId& session) {
@@ -22,13 +24,17 @@ void MockBackend::release_injected_state(const SessionId& session) {
 }
 
 void MockBackend::emit_physical_event(const InputEvent& event) {
-    physical_events.push_back(event);
-    if (emit_physical) emit_physical(event);
+    auto tagged = event;
+    tagged.origin = InputOrigin::kPhysical;
+    physical_events.push_back(tagged);
+    if (emit_physical) emit_physical(tagged);
 }
 
 void MockBackend::emit_remote_event(const InputEvent& event) {
-    injected_events.push_back(event);
-    if (emit_remote_injected) emit_remote_injected(event);
+    auto tagged = event;
+    tagged.origin = InputOrigin::kRemoteInjected;
+    injected_events.push_back(tagged);
+    if (emit_remote_injected) emit_remote_injected(tagged);
 }
 
 void MockBackend::clear() {
@@ -77,7 +83,10 @@ bool MockTransport::send(const RouterAction& action) {
         overflowed_ = true;
         dropped_.push_back(action);
         queue_.clear(); // fail closed: stale input cannot leak after an overflow.
-        if (router_) router_->on_disconnect(IClock::time_point{});
+        if (router_) {
+            const auto cleanup = router_->on_disconnect(IClock::time_point{});
+            execute_actions(*router_, cleanup, IClock::time_point{});
+        }
         return false;
     }
     Delivery d{action, step_ + delay_steps_};
@@ -117,6 +126,25 @@ void MockTransport::clear() {
     overflowed_ = false;
 }
 
+void MockTransport::execute_actions(InputRouter&, const std::vector<RouterAction>& actions,
+                                     IClock::time_point now) {
+    for (const auto& action : actions) {
+        switch (action.kind) {
+        case RouterActionKind::kRelease:
+            if (arbiter_) arbiter_->release(action.session, now);
+            break;
+        case RouterActionKind::kReleaseInjectedState:
+            if (backend_) backend_->release_injected_state(action.session);
+            break;
+        case RouterActionKind::kRestoreLocal:
+            if (backend_) backend_->restore_local();
+            break;
+        default:
+            break;
+        }
+    }
+}
+
 std::vector<RouterAction> MockTransport::pump(InputRouter& router, IClock::time_point now) {
     std::vector<RouterAction> produced;
     for (const auto& action : deliver_ready()) {
@@ -129,13 +157,14 @@ std::vector<RouterAction> MockTransport::pump(InputRouter& router, IClock::time_
         case RouterActionKind::kActivate:
             if (arbiter_) {
                 const auto ok = arbiter_->activate(action.session, action.generation, now);
-                next = router.on_activation_ack(ok, now);
+                next = router.on_activation_ack(action.session, action.generation, ok.ok(), now);
             }
             break;
         case RouterActionKind::kRenew:
             if (arbiter_ && router.lease()) {
                 auto ok = arbiter_->renew(peer_, action.session, action.generation, now);
                 if (!ok) next = router.on_revoke(RevokeReason::kProtocolError, now);
+                else if (arbiter_->lease()) router.on_renew_ack(*arbiter_->lease(), now);
             }
             break;
         case RouterActionKind::kSendInput:

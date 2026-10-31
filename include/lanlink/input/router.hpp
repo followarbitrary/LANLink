@@ -104,6 +104,7 @@ class InputRouter {
     std::vector<RouterAction> on_activation_ack(const SessionId& session, std::uint64_t generation,
                                                 bool success, TimePoint now);
     std::vector<RouterAction> on_revoke(RevokeReason reason, TimePoint now);
+    std::vector<RouterAction> on_renew_ack(const ControlLease& lease, TimePoint now);
     std::vector<RouterAction> on_revoke(const ValidationResult& result, TimePoint now);
     std::vector<RouterAction> on_disconnect(TimePoint now);
     std::vector<RouterAction> on_tick(TimePoint now);
@@ -139,6 +140,8 @@ class InputRouter {
     bool suppression_armed_{false};
     std::optional<ControlLease> lease_;
     std::optional<Crossing> pending_crossing_;
+    DisplayId pending_target_{};
+    bool acquire_started_{false};
     std::set<std::uint32_t> held_buttons_;
     std::uint64_t next_seq_{1};
     TimePoint next_renew_{};

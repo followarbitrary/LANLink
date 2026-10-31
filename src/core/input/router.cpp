@@ -33,6 +33,12 @@ std::vector<RouterAction> InputRouter::begin_acquire(TimePoint) {
     std::vector<RouterAction> actions;
     if (!pending_crossing_.has_value()) return actions;
     state_ = RouterState::kAcquiring;
+    if (acquire_started_) {
+        ++request_.low;
+        if (request_.low == 0) ++request_.high;
+    }
+    acquire_started_ = true;
+    pending_target_ = pending_crossing_->target;
     auto action = RouterAction::acquire(source_, pending_crossing_->target, request_);
     action.entry = pending_crossing_->entry_point;
     actions.push_back(action);
@@ -145,6 +151,11 @@ std::vector<RouterAction> InputRouter::on_crossing(Crossing crossing, TimePoint 
 std::vector<RouterAction> InputRouter::on_grant(AcquireResult result, TimePoint now) {
     if (state_ != RouterState::kAcquiring) return {};
     if (!result.granted()) return recover(now);
+    if (result.lease.source != source_ || result.lease.peer != peer_ ||
+        result.lease.request != request_ || result.lease.target_display != pending_target_ ||
+        result.lease.session != result.lease.request) {
+        return {};
+    }
     lease_ = result.lease;
     next_seq_ = 1;
     std::vector<RouterAction> actions;
@@ -180,7 +191,7 @@ std::vector<RouterAction> InputRouter::on_activation_ack(const SessionId& sessio
                                                           std::uint64_t generation,
                                                           bool success, TimePoint now) {
     if (!lease_.has_value() || lease_->session != session || lease_->generation != generation)
-        return recover(now);
+        return {};
     return on_activation_ack(success, now);
 }
 
@@ -190,6 +201,15 @@ std::vector<RouterAction> InputRouter::on_revoke(RevokeReason, TimePoint now) {
 
 std::vector<RouterAction> InputRouter::on_revoke(const ValidationResult& result, TimePoint now) {
     return on_revoke(result.reason(), now);
+}
+
+std::vector<RouterAction> InputRouter::on_renew_ack(const ControlLease& lease, TimePoint now) {
+    if (state_ != RouterState::kRemote || !lease_.has_value() ||
+        lease.session != lease_->session || lease.generation != lease_->generation)
+        return {};
+    lease_ = lease;
+    next_renew_ = now + m0::kLeaseRenewInterval;
+    return {};
 }
 
 std::vector<RouterAction> InputRouter::on_disconnect(TimePoint now) {
