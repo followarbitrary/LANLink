@@ -134,6 +134,9 @@ void MockTransport::execute_actions(const std::vector<RouterAction>& actions,
                                      IClock::time_point now) {
     for (const auto& action : actions) {
         switch (action.kind) {
+        case RouterActionKind::kArmLocalSuppression:
+            if (backend_) backend_->suppress_local();
+            break;
         case RouterActionKind::kRelease:
             if (arbiter_) arbiter_->release(action.session, now);
             break;
@@ -176,7 +179,15 @@ std::vector<RouterAction> MockTransport::pump(InputRouter& router, IClock::time_
                 auto validation = arbiter_->validate(peer_, action.event, now);
                 if (validation.revoked() || !arbiter_->has_lease())
                     next = router.on_revoke(validation.reason(), now);
+                else if (backend_)
+                    backend_->inject(action.event);
             }
+            break;
+        case RouterActionKind::kReleaseInjectedState:
+            if (backend_) backend_->release_injected_state(action.session);
+            break;
+        case RouterActionKind::kRestoreLocal:
+            if (backend_) backend_->restore_local();
             break;
         case RouterActionKind::kRelease:
             if (arbiter_) arbiter_->release(action.session, now);

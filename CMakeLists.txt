@@ -49,3 +49,13 @@ add_executable(router_test tests/unit/router_test.cpp)
 target_link_libraries(router_test PRIVATE lanlink_core GTest::gtest_main)
 gtest_discover_tests(router_test)
 add_test(NAME router COMMAND router_test)
+
+add_executable(m0_two_node_test tests/integration/m0_two_node_test.cpp)
+target_link_libraries(m0_two_node_test PRIVATE lanlink_core GTest::gtest_main)
+gtest_discover_tests(m0_two_node_test)
+add_test(NAME m0_two_node COMMAND m0_two_node_test)
+
+add_executable(recovery_test tests/fault_injection/recovery_test.cpp)
+target_link_libraries(recovery_test PRIVATE lanlink_core GTest::gtest_main)
+gtest_discover_tests(recovery_test)
+add_test(NAME recovery COMMAND recovery_test)
