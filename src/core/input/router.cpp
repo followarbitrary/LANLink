@@ -47,24 +47,26 @@ std::vector<RouterAction> InputRouter::begin_acquire(TimePoint) {
 
 std::vector<RouterAction> InputRouter::recover(TimePoint now) {
     std::vector<RouterAction> actions;
-    if (lease_.has_value()) {
+    const auto cleanup_lease = lease_.has_value() ? lease_ : released_lease_;
+    if (cleanup_lease.has_value()) {
         RouterAction release;
         release.kind = RouterActionKind::kRelease;
         release.source = source_;
-        release.session = lease_->session;
-        release.generation = lease_->generation;
+        release.session = cleanup_lease->session;
+        release.generation = cleanup_lease->generation;
         actions.push_back(release);
     }
     RouterAction clear;
     clear.kind = RouterActionKind::kReleaseInjectedState;
     clear.source = source_;
-    if (lease_) { clear.session = lease_->session; clear.generation = lease_->generation; }
+    if (cleanup_lease) { clear.session = cleanup_lease->session; clear.generation = cleanup_lease->generation; }
     actions.push_back(clear);
     RouterAction restore;
     restore.kind = RouterActionKind::kRestoreLocal;
     restore.source = source_;
     actions.push_back(restore);
     lease_.reset();
+    released_lease_.reset();
     suppression_armed_ = false;
     next_seq_ = 1;
     state_ = RouterState::kRecovering;
@@ -131,6 +133,7 @@ std::vector<RouterAction> InputRouter::on_crossing(Crossing crossing, TimePoint 
             release.generation = lease_->generation;
             actions.push_back(release);
         }
+        released_lease_ = lease_;
         lease_.reset();
         suppression_armed_ = false;
         state_ = RouterState::kHandoff;
@@ -157,6 +160,7 @@ std::vector<RouterAction> InputRouter::on_grant(AcquireResult result, TimePoint 
         return {};
     }
     lease_ = result.lease;
+    released_lease_.reset();
     next_seq_ = 1;
     std::vector<RouterAction> actions;
     RouterAction arm;

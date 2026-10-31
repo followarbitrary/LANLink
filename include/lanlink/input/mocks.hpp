@@ -70,8 +70,7 @@ class MockTransport {
     std::vector<RouterAction> pump(InputRouter& router, IClock::time_point now);
 
   private:
-    void execute_actions(InputRouter& router, const std::vector<RouterAction>& actions,
-                         IClock::time_point now);
+    void execute_actions(const std::vector<RouterAction>& actions, IClock::time_point now);
     static bool can_coalesce(const RouterAction& lhs, const RouterAction& rhs);
     static RouterAction coalesce(const RouterAction& lhs, const RouterAction& rhs);
     std::size_t queue_capacity_;

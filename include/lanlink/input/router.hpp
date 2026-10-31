@@ -139,6 +139,7 @@ class InputRouter {
     bool connected_{true};
     bool suppression_armed_{false};
     std::optional<ControlLease> lease_;
+    std::optional<ControlLease> released_lease_;
     std::optional<Crossing> pending_crossing_;
     DisplayId pending_target_{};
     bool acquire_started_{false};

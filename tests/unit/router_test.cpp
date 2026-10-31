@@ -93,3 +93,13 @@ TEST(MockTransport, FaultControlsAreDeterministic) {
   t.set_duplicate_next(); EXPECT_TRUE(t.send(a)); EXPECT_EQ(t.queue_size(),2u);
   t.set_reorder_next(); EXPECT_TRUE(t.send(a)); EXPECT_GE(t.queue_size(),2u);
 }
+
+TEST(MockTransport, HandoffOverflowReleasesQueuedOldLease) {
+  InputRouter r(id(90), AuthenticatedPeer{id(91)}, id(92), id(93));
+  InputArbiter arb; MockBackend backend; MockTransport t; t.connect(&arb, AuthenticatedPeer{id(91)}); t.connect(&r); t.connect(&backend);
+  auto acquire = r.on_crossing(Crossing{id(94), Edge::kLeft, .5, {}}, {}); for (auto& a : acquire) t.send(a); auto granted = t.pump(r, {}); for (auto& a : granted) t.send(a); t.pump(r, {}); ASSERT_EQ(r.state(), RouterState::kRemote); ASSERT_TRUE(arb.has_active_lease());
+  t.set_queue_capacity(1);
+  auto handoff = r.on_crossing(Crossing{id(95), Edge::kRight, .5, {}}, {}); ASSERT_EQ(handoff.size(), 2u);
+  ASSERT_TRUE(t.send(handoff[0])); EXPECT_FALSE(t.send(handoff[1]));
+  EXPECT_FALSE(arb.has_lease()); EXPECT_FALSE(backend.released_sessions.empty()); EXPECT_EQ(r.state(), RouterState::kRecovering);
+}

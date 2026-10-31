@@ -82,10 +82,14 @@ bool MockTransport::send(const RouterAction& action) {
     if (queue_capacity_ == 0 || queue_.size() >= queue_capacity_) {
         overflowed_ = true;
         dropped_.push_back(action);
+        std::vector<RouterAction> queued_actions;
+        queued_actions.reserve(queue_.size());
+        for (const auto& delivery : queue_) queued_actions.push_back(delivery.action);
         queue_.clear(); // fail closed: stale input cannot leak after an overflow.
+        if (arbiter_ || backend_) execute_actions(queued_actions, IClock::time_point{});
         if (router_) {
             const auto cleanup = router_->on_disconnect(IClock::time_point{});
-            execute_actions(*router_, cleanup, IClock::time_point{});
+            execute_actions(cleanup, IClock::time_point{});
         }
         return false;
     }
@@ -126,7 +130,7 @@ void MockTransport::clear() {
     overflowed_ = false;
 }
 
-void MockTransport::execute_actions(InputRouter&, const std::vector<RouterAction>& actions,
+void MockTransport::execute_actions(const std::vector<RouterAction>& actions,
                                      IClock::time_point now) {
     for (const auto& action : actions) {
         switch (action.kind) {
