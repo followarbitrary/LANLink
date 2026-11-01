@@ -24,6 +24,7 @@ add_library(lanlink_core
   src/core/protocol/wire.cpp
   src/core/transport/connection.cpp
   src/core/transport/session.cpp
+  src/core/transport/manager.cpp
   src/platform/fake_input_backend.cpp
   src/platform/windows/windows_input_backend.cpp
   src/platform/macos/macos_input_backend.cpp
@@ -119,3 +120,8 @@ add_executable(transport_session_test tests/integration/transport_session_test.c
 target_link_libraries(transport_session_test PRIVATE lanlink_core GTest::gtest_main)
 gtest_discover_tests(transport_session_test)
 add_test(NAME transport_session COMMAND transport_session_test)
+
+add_executable(transport_manager_test tests/integration/transport_manager_test.cpp)
+target_link_libraries(transport_manager_test PRIVATE lanlink_core GTest::gtest_main)
+gtest_discover_tests(transport_manager_test)
+add_test(NAME transport_manager COMMAND transport_manager_test)
