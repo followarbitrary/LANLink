@@ -23,6 +23,7 @@ add_library(lanlink_core
   src/core/input/mocks.cpp
   src/core/protocol/wire.cpp
   src/core/transport/connection.cpp
+  src/core/transport/session.cpp
   src/platform/fake_input_backend.cpp
   src/platform/windows/windows_input_backend.cpp
   src/platform/macos/macos_input_backend.cpp
@@ -113,3 +114,8 @@ add_executable(platform_recovery_test tests/integration/platform_recovery_test.c
 target_link_libraries(platform_recovery_test PRIVATE lanlink_core GTest::gtest_main)
 gtest_discover_tests(platform_recovery_test)
 add_test(NAME platform_recovery COMMAND platform_recovery_test)
+
+add_executable(transport_session_test tests/integration/transport_session_test.cpp)
+target_link_libraries(transport_session_test PRIVATE lanlink_core GTest::gtest_main)
+gtest_discover_tests(transport_session_test)
+add_test(NAME transport_session COMMAND transport_session_test)
