@@ -279,10 +279,10 @@ void MacOSInputBackend::stop() {
     impl_->thread.join();
   std::lock_guard lock(impl_->mutex);
   impl_->callback = {};
-  impl_->held.clear();
   impl_->have_last_point = false;
   status_.capture = false;
-  status_.injection = status_.permission;
+  status_.injection = status_.permission && impl_->held.empty();
+  status_.degraded = !status_.permission || !status_.injection;
 }
 
 Result<void> MacOSInputBackend::set_suppression(bool enabled) {
@@ -332,7 +332,14 @@ Result<void> MacOSInputBackend::inject(const InputEvent& event) {
     created = CGEventCreateScrollWheelEvent(nullptr, kCGScrollEventUnitLine, 1,
                                             static_cast<int32_t>(std::llround(wheel->delta)));
   } else if (const auto* warp = std::get_if<PointerWarp>(&event.payload)) {
-    CGWarpMouseCursorPosition(CGPointMake(warp->x, warp->y));
+    const CGError error = CGWarpMouseCursorPosition(CGPointMake(warp->x, warp->y));
+    if (error != kCGErrorSuccess) {
+      std::lock_guard lock(impl_->mutex);
+      status_.injection = false;
+      status_.degraded = true;
+      status_.last_error = "CGWarpMouseCursorPosition failed";
+      return Result<void>::failure(status_.last_error);
+    }
     return Result<void>::success();
   }
 
@@ -385,25 +392,50 @@ void MacOSInputBackend::release_injected_state(const SessionId& session) {
     if (it == impl_->held.end()) return;
     keys = it->second.keys;
     buttons = it->second.buttons;
-    impl_->held.erase(it);
   }
+
+  std::unordered_set<std::uint32_t> released_keys;
+  std::unordered_set<std::uint32_t> released_buttons;
+  bool failed = false;
   for (const auto key : keys) {
     CGEventRef event = CGEventCreateKeyboardEvent(nullptr, static_cast<CGKeyCode>(key), false);
-    if (event != nullptr) {
-      CGEventSetIntegerValueField(event, kCGEventSourceUserData, kOwnEventUserData);
-      CGEventPost(kCGHIDEventTap, event);
-      CFRelease(event);
+    if (event == nullptr) {
+      failed = true;
+      continue;
     }
+    CGEventSetIntegerValueField(event, kCGEventSourceUserData, kOwnEventUserData);
+    CGEventPost(kCGHIDEventTap, event);
+    CFRelease(event);
+    released_keys.insert(key);
   }
   for (const auto button : buttons) {
-    if (button < 1 || button > 3) continue;
+    if (button < 1 || button > 3) {
+      failed = true;
+      continue;
+    }
     CGEventRef event = CGEventCreateMouseEvent(nullptr, button_type(button, false), CGPointZero,
                                                static_cast<CGMouseButton>(button - 1));
-    if (event != nullptr) {
-      CGEventSetIntegerValueField(event, kCGEventSourceUserData, kOwnEventUserData);
-      CGEventPost(kCGHIDEventTap, event);
-      CFRelease(event);
+    if (event == nullptr) {
+      failed = true;
+      continue;
     }
+    CGEventSetIntegerValueField(event, kCGEventSourceUserData, kOwnEventUserData);
+    CGEventPost(kCGHIDEventTap, event);
+    CFRelease(event);
+    released_buttons.insert(button);
+  }
+
+  std::lock_guard lock(impl_->mutex);
+  const auto it = impl_->held.find(session);
+  if (it != impl_->held.end()) {
+    for (const auto key : released_keys) it->second.keys.erase(key);
+    for (const auto button : released_buttons) it->second.buttons.erase(button);
+    if (it->second.keys.empty() && it->second.buttons.empty()) impl_->held.erase(it);
+  }
+  if (failed) {
+    status_.injection = false;
+    status_.degraded = true;
+    status_.last_error = "CGEventCreate release failed";
   }
 }
 
@@ -421,6 +453,15 @@ Result<void> MacOSInputBackend::recover() {
     impl_->tap_disabled = false;
   }
   for (const auto& session : sessions) release_injected_state(session);
+  {
+    std::lock_guard lock(impl_->mutex);
+    if (!impl_->held.empty()) {
+      status_.injection = false;
+      status_.degraded = true;
+      if (status_.last_error.empty()) status_.last_error = "injected state release failed";
+      return Result<void>::failure(status_.last_error);
+    }
+  }
   if (!status_.permission) {
     status_.degraded = true;
     status_.last_error = "Accessibility permission denied";
@@ -435,7 +476,8 @@ Result<void> MacOSInputBackend::recover() {
     status_.last_error.clear();
     return start(std::move(callback));
   }
-  status_.degraded = !status_.running;
+  status_.injection = status_.permission && status_.running;
+  status_.degraded = !status_.permission || !status_.running || !status_.injection;
   if (status_.running) status_.last_error.clear();
   return Result<void>::success();
 }

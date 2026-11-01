@@ -51,22 +51,20 @@ Result<void> FakeInputBackend::inject(const InputEvent& event) {
   auto tagged = event;
   tagged.origin = InputOrigin::kRemoteInjected;
   injected_events_.push_back(tagged);
-  if (std::holds_alternative<Key>(tagged.payload)) {
-    auto& count = held_[tagged.session];
-    if (std::get<Key>(tagged.payload).pressed) {
-      ++count;
-    } else if (count > 0) {
-      --count;
+  if (const auto* key = std::get_if<Key>(&tagged.payload)) {
+    if (key->pressed) {
+      held_[tagged.session].keys.insert(key->code);
+    } else if (const auto it = held_.find(tagged.session); it != held_.end()) {
+      it->second.keys.erase(key->code);
+      if (it->second.keys.empty() && it->second.buttons.empty()) held_.erase(it);
     }
-    if (count == 0) held_.erase(tagged.session);
-  } else if (std::holds_alternative<MouseButton>(tagged.payload)) {
-    auto& count = held_[tagged.session];
-    if (std::get<MouseButton>(tagged.payload).pressed) {
-      ++count;
-    } else if (count > 0) {
-      --count;
+  } else if (const auto* button = std::get_if<MouseButton>(&tagged.payload)) {
+    if (button->pressed) {
+      held_[tagged.session].buttons.insert(button->button);
+    } else if (const auto it = held_.find(tagged.session); it != held_.end()) {
+      it->second.buttons.erase(button->button);
+      if (it->second.keys.empty() && it->second.buttons.empty()) held_.erase(it);
     }
-    if (count == 0) held_.erase(tagged.session);
   }
   return Result<void>::success();
 }
@@ -132,7 +130,7 @@ void FakeInputBackend::emit_physical(const InputEvent& event) {
 
 std::size_t FakeInputBackend::held_count() const noexcept {
   std::size_t count = 0;
-  for (const auto& [_, held] : held_) count += held;
+  for (const auto& [_, held] : held_) count += held.keys.size() + held.buttons.size();
   return count;
 }
 

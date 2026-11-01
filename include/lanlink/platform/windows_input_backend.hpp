@@ -55,6 +55,7 @@ class WindowsInputBackend final : public IInputBackend {
   void handle_mouse(const MSLLHOOKSTRUCT& info, WPARAM message);
   void dispatch(InputEvent event);
   bool send_inputs(INPUT* inputs, UINT count);
+  bool release_session_locked(const SessionId& session);
   void release_all_locked();
   void set_hook_error(const char* operation);
   void join_thread();

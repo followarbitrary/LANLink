@@ -37,6 +37,28 @@ TEST(BackendContract, InjectedEventsDoNotLoopBackAndLedgerCanBeReleased) {
   EXPECT_EQ(backend.held_count(), 0u);
 }
 
+TEST(BackendContract, FakeLedgerTracksDistinctPressedInputs) {
+  FakeInputBackend backend;
+  ASSERT_TRUE(backend.start({}).ok());
+  const SessionId session{9, 10};
+
+  ASSERT_TRUE(backend.inject(key_event(65, true, session)).ok());
+  ASSERT_TRUE(backend.inject(key_event(65, true, session)).ok());
+  ASSERT_TRUE(backend.inject(key_event(66, true, session)).ok());
+  ASSERT_EQ(backend.held_count(), 2u);
+
+  ASSERT_TRUE(backend.inject(key_event(65, false, session)).ok());
+  EXPECT_EQ(backend.held_count(), 1u);
+
+  InputEvent button{{}, session, 1, 1, MouseButton{1, true}, InputOrigin::kSynthetic};
+  ASSERT_TRUE(backend.inject(button).ok());
+  ASSERT_TRUE(backend.inject(button).ok());
+  EXPECT_EQ(backend.held_count(), 2u);
+  button.payload = MouseButton{1, false};
+  ASSERT_TRUE(backend.inject(button).ok());
+  EXPECT_EQ(backend.held_count(), 1u);
+}
+
 TEST(BackendContract, InjectedReleaseEventsClearFakeLedger) {
   FakeInputBackend backend;
   ASSERT_TRUE(backend.start({}).ok());
@@ -44,6 +66,31 @@ TEST(BackendContract, InjectedReleaseEventsClearFakeLedger) {
   ASSERT_TRUE(backend.inject(key_event(65, true, session)).ok());
   ASSERT_EQ(backend.held_count(), 1u);
   ASSERT_TRUE(backend.inject(key_event(65, false, session)).ok());
+  EXPECT_EQ(backend.held_count(), 0u);
+}
+
+TEST(BackendContract, DuplicateKeyDownNeedsOnlyOneRelease) {
+  FakeInputBackend backend;
+  ASSERT_TRUE(backend.start({}).ok());
+  const SessionId session{5, 6};
+  ASSERT_TRUE(backend.inject(key_event(65, true, session)).ok());
+  ASSERT_TRUE(backend.inject(key_event(65, true, session)).ok());
+  EXPECT_EQ(backend.held_count(), 1u);
+  ASSERT_TRUE(backend.inject(key_event(65, false, session)).ok());
+  EXPECT_EQ(backend.held_count(), 0u);
+}
+
+TEST(BackendContract, DuplicateButtonDownNeedsOnlyOneRelease) {
+  FakeInputBackend backend;
+  ASSERT_TRUE(backend.start({}).ok());
+  const SessionId session{9, 10};
+  auto button_event = [session](bool pressed) {
+    return InputEvent{{}, session, 1, 1, MouseButton{1, pressed}, InputOrigin::kSynthetic};
+  };
+  ASSERT_TRUE(backend.inject(button_event(true)).ok());
+  ASSERT_TRUE(backend.inject(button_event(true)).ok());
+  EXPECT_EQ(backend.held_count(), 1u);
+  ASSERT_TRUE(backend.inject(button_event(false)).ok());
   EXPECT_EQ(backend.held_count(), 0u);
 }
 

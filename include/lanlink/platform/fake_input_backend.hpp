@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace lanlink::platform {
@@ -34,6 +35,11 @@ class FakeInputBackend final : public IInputBackend {
   std::size_t held_count() const noexcept;
 
  private:
+  struct HeldState {
+    std::unordered_set<std::uint32_t> keys;
+    std::unordered_set<std::uint32_t> buttons;
+  };
+
   void set_error(const char* message);
   void refresh_degraded();
 
@@ -44,7 +50,7 @@ class FakeInputBackend final : public IInputBackend {
   std::vector<InputEvent> physical_events_;
   std::vector<InputEvent> injected_events_;
   std::vector<SessionId> released_sessions_;
-  std::unordered_map<SessionId, std::size_t> held_;
+  std::unordered_map<SessionId, HeldState> held_;
 };
 
 }  // namespace lanlink::platform

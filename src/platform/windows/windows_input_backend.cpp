@@ -111,8 +111,8 @@ void WindowsInputBackend::stop() {
   std::lock_guard lock(mutex_);
   release_all_locked();
   status_.capture = false;
-  status_.injection = true;
-  status_.degraded = !status_.permission;
+  status_.injection = status_.permission && held_.empty();
+  status_.degraded = !status_.permission || !status_.injection;
   if (active_instance_.load(std::memory_order_acquire) == this)
     active_instance_.store(nullptr, std::memory_order_release);
   hook_thread_id_ = 0;
@@ -212,30 +212,57 @@ Result<void> WindowsInputBackend::inject(const InputEvent& event) {
   return Result<void>::success();
 }
 
-void WindowsInputBackend::release_injected_state(const SessionId& session) {
-  std::lock_guard operation_lock(operation_mutex_);
-  std::lock_guard lock(mutex_);
+bool WindowsInputBackend::release_session_locked(const SessionId& session) {
   auto found = held_.find(session);
-  if (found == held_.end()) return;
+  if (found == held_.end()) return true;
+
   std::vector<INPUT> inputs;
-  for (auto code : found->second.keys) {
-    INPUT input{}; input.type = INPUT_KEYBOARD; input.ki.wVk = static_cast<WORD>(code & 0xFFFFU);
-    input.ki.dwFlags = KEYEVENTF_KEYUP; input.ki.dwExtraInfo = own_extra_info(); inputs.push_back(input);
+  std::vector<std::pair<bool, std::uint32_t>> released;
+  for (const auto code : found->second.keys) {
+    INPUT input{};
+    input.type = INPUT_KEYBOARD;
+    input.ki.wVk = static_cast<WORD>(code & 0xFFFFU);
+    input.ki.dwFlags = KEYEVENTF_KEYUP;
+    input.ki.dwExtraInfo = own_extra_info();
+    inputs.push_back(input);
+    released.emplace_back(true, code);
   }
-  for (auto button : found->second.buttons) {
-    INPUT input{}; input.type = INPUT_MOUSE; input.mi.dwExtraInfo = own_extra_info();
+  for (const auto button : found->second.buttons) {
+    INPUT input{};
+    input.type = INPUT_MOUSE;
+    input.mi.dwExtraInfo = own_extra_info();
     if (button == 1) input.mi.dwFlags = MOUSEEVENTF_LEFTUP;
     else if (button == 2) input.mi.dwFlags = MOUSEEVENTF_RIGHTUP;
     else if (button == 3) input.mi.dwFlags = MOUSEEVENTF_MIDDLEUP;
     else { input.mi.dwFlags = MOUSEEVENTF_XUP; input.mi.mouseData = button == 4 ? XBUTTON1 : XBUTTON2; }
     inputs.push_back(input);
+    released.emplace_back(false, button);
   }
-  if (!inputs.empty() && SendInput(static_cast<UINT>(inputs.size()), inputs.data(), sizeof(INPUT)) != static_cast<UINT>(inputs.size())) {
+
+  const UINT sent = inputs.empty()
+                        ? 0
+                        : SendInput(static_cast<UINT>(inputs.size()), inputs.data(), sizeof(INPUT));
+  const auto released_count = std::min<std::size_t>(sent, released.size());
+  for (std::size_t index = 0; index < released_count; ++index) {
+    const auto [key, code] = released[index];
+    if (key) found->second.keys.erase(code);
+    else found->second.buttons.erase(code);
+  }
+  if (found->second.keys.empty() && found->second.buttons.empty()) held_.erase(found);
+
+  if (sent != inputs.size()) {
     status_.injection = false;
     status_.degraded = true;
     status_.last_error = "SendInput release failed";
+    return false;
   }
-  held_.erase(found);
+  return true;
+}
+
+void WindowsInputBackend::release_injected_state(const SessionId& session) {
+  std::lock_guard operation_lock(operation_mutex_);
+  std::lock_guard lock(mutex_);
+  release_session_locked(session);
 }
 
 Result<void> WindowsInputBackend::recover() {
@@ -247,7 +274,17 @@ Result<void> WindowsInputBackend::recover() {
     ++status_.recovery_count;
   }
   stop();
-  return start(std::move(callback));
+  auto restarted = start(std::move(callback));
+  if (!restarted.ok()) return restarted;
+  std::lock_guard lock(mutex_);
+  release_all_locked();
+  if (!held_.empty()) {
+    status_.injection = false;
+    status_.degraded = true;
+    if (status_.last_error.empty()) status_.last_error = "SendInput release failed";
+    return Result<void>::failure(status_.last_error);
+  }
+  return Result<void>::success();
 }
 
 LRESULT CALLBACK WindowsInputBackend::keyboard_proc(int code, WPARAM wparam, LPARAM lparam) {
@@ -308,14 +345,10 @@ bool WindowsInputBackend::send_inputs(INPUT* inputs, UINT count) {
 }
 
 void WindowsInputBackend::release_all_locked() {
-  for (auto& [session, held] : held_) {
-    (void)session;
-    std::vector<INPUT> inputs;
-    for (auto code : held.keys) { INPUT input{}; input.type = INPUT_KEYBOARD; input.ki.wVk = static_cast<WORD>(code & 0xFFFFU); input.ki.dwFlags = KEYEVENTF_KEYUP; input.ki.dwExtraInfo = own_extra_info(); inputs.push_back(input); }
-    for (auto button : held.buttons) { INPUT input{}; input.type = INPUT_MOUSE; input.mi.dwExtraInfo = own_extra_info(); if (button == 1) input.mi.dwFlags = MOUSEEVENTF_LEFTUP; else if (button == 2) input.mi.dwFlags = MOUSEEVENTF_RIGHTUP; else if (button == 3) input.mi.dwFlags = MOUSEEVENTF_MIDDLEUP; else { input.mi.dwFlags = MOUSEEVENTF_XUP; input.mi.mouseData = button == 4 ? XBUTTON1 : XBUTTON2; } inputs.push_back(input); }
-    if (!inputs.empty()) SendInput(static_cast<UINT>(inputs.size()), inputs.data(), sizeof(INPUT));
-  }
-  held_.clear();
+  std::vector<SessionId> sessions;
+  sessions.reserve(held_.size());
+  for (const auto& entry : held_) sessions.push_back(entry.first);
+  for (const auto& session : sessions) release_session_locked(session);
 }
 
 void WindowsInputBackend::message_thread() {
