@@ -18,8 +18,18 @@ struct Endpoint {
     friend bool operator==(const Endpoint&, const Endpoint&) = default;
 };
 
+struct TlsOptions {
+    bool enabled{false};
+    bool verify_peer{true};
+    std::string ca_file;
+    std::string certificate_file;
+    std::string private_key_file;
+    std::string server_name;
+};
+
 struct ConnectionOptions {
     std::chrono::milliseconds io_timeout{1000};
+    TlsOptions tls;
 };
 
 enum class ConnectionState {

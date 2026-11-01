@@ -6,6 +6,11 @@
 #include <mutex>
 #include <utility>
 
+#if LANLINK_HAS_OPENSSL
+#include <openssl/err.h>
+#include <openssl/ssl.h>
+#endif
+
 #if defined(_WIN32)
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -152,6 +157,107 @@ Result<void> write_all(NativeSocket socket, const std::vector<std::uint8_t>& byt
     return Result<void>::success();
 }
 
+#if LANLINK_HAS_OPENSSL
+void release_tls(SSL*& ssl, SSL_CTX*& context) {
+    if (ssl != nullptr) {
+        SSL_shutdown(ssl);
+        SSL_free(ssl);
+        ssl = nullptr;
+    }
+    if (context != nullptr) {
+        SSL_CTX_free(context);
+        context = nullptr;
+    }
+}
+
+Result<void> configure_tls_client(SSL*& ssl, SSL_CTX*& context, NativeSocket socket,
+                                  const TlsOptions& options) {
+    context = SSL_CTX_new(TLS_client_method());
+    if (context == nullptr)
+        return Result<void>::failure("TLS context setup failed");
+    SSL_CTX_set_min_proto_version(context, TLS1_2_VERSION);
+    if (options.verify_peer) {
+        SSL_CTX_set_verify(context, SSL_VERIFY_PEER, nullptr);
+        if (options.ca_file.empty() ||
+            SSL_CTX_load_verify_locations(context, options.ca_file.c_str(), nullptr) != 1) {
+            release_tls(ssl, context);
+            return Result<void>::failure("TLS trust configuration failed");
+        }
+    } else {
+        SSL_CTX_set_verify(context, SSL_VERIFY_NONE, nullptr);
+    }
+    ssl = SSL_new(context);
+    if (ssl == nullptr) {
+        release_tls(ssl, context);
+        return Result<void>::failure("TLS session setup failed");
+    }
+    if (!options.server_name.empty()) {
+        SSL_set_tlsext_host_name(ssl, options.server_name.c_str());
+        if (options.verify_peer &&
+            X509_VERIFY_PARAM_set1_host(SSL_get0_param(ssl), options.server_name.c_str(), 0) != 1) {
+            release_tls(ssl, context);
+            return Result<void>::failure("TLS hostname setup failed");
+        }
+    }
+    SSL_set_fd(ssl, static_cast<int>(socket));
+    if (SSL_connect(ssl) != 1) {
+        release_tls(ssl, context);
+        return Result<void>::failure("TLS handshake failed");
+    }
+    return Result<void>::success();
+}
+
+Result<void> configure_tls_server(SSL*& ssl, SSL_CTX*& context, NativeSocket socket,
+                                  const TlsOptions& options) {
+    context = SSL_CTX_new(TLS_server_method());
+    if (context == nullptr)
+        return Result<void>::failure("TLS context setup failed");
+    SSL_CTX_set_min_proto_version(context, TLS1_2_VERSION);
+    if (options.certificate_file.empty() || options.private_key_file.empty() ||
+        SSL_CTX_use_certificate_file(context, options.certificate_file.c_str(), SSL_FILETYPE_PEM) !=
+            1 ||
+        SSL_CTX_use_PrivateKey_file(context, options.private_key_file.c_str(), SSL_FILETYPE_PEM) !=
+            1 ||
+        SSL_CTX_check_private_key(context) != 1) {
+        release_tls(ssl, context);
+        return Result<void>::failure("TLS server credentials failed");
+    }
+    if (options.verify_peer) {
+        SSL_CTX_set_verify(context, SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT, nullptr);
+        if (options.ca_file.empty() ||
+            SSL_CTX_load_verify_locations(context, options.ca_file.c_str(), nullptr) != 1) {
+            release_tls(ssl, context);
+            return Result<void>::failure("TLS trust configuration failed");
+        }
+    }
+    ssl = SSL_new(context);
+    if (ssl == nullptr) {
+        release_tls(ssl, context);
+        return Result<void>::failure("TLS session setup failed");
+    }
+    SSL_set_fd(ssl, static_cast<int>(socket));
+    if (SSL_accept(ssl) != 1) {
+        release_tls(ssl, context);
+        return Result<void>::failure("TLS handshake failed");
+    }
+    return Result<void>::success();
+}
+
+Result<void> write_all_tls(SSL* ssl, const std::vector<std::uint8_t>& bytes) {
+    std::size_t offset = 0;
+    while (offset < bytes.size()) {
+        const auto remaining = bytes.size() - offset;
+        const int written = SSL_write(ssl, bytes.data() + offset, static_cast<int>(remaining));
+        if (written > 0) {
+            offset += static_cast<std::size_t>(written);
+            continue;
+        }
+        return Result<void>::failure("TLS write failed");
+    }
+    return Result<void>::success();
+}
+#endif
+
 } // namespace
 
 struct Connection::Impl {
@@ -159,8 +265,17 @@ struct Connection::Impl {
     ConnectionOptions options;
     protocol::FrameDecoder decoder;
     ConnectionState state{ConnectionState::kClosed};
+#if LANLINK_HAS_OPENSSL
+    SSL_CTX* tls_context{nullptr};
+    SSL* tls{nullptr};
+#endif
 
-    ~Impl() { close_socket(socket); }
+    ~Impl() {
+#if LANLINK_HAS_OPENSSL
+        release_tls(tls, tls_context);
+#endif
+        close_socket(socket);
+    }
 };
 
 struct Listener::Impl {
@@ -205,6 +320,16 @@ Result<Connection> Connection::connect(const Endpoint& endpoint, ConnectionOptio
             impl->socket = socket;
             impl->options = options;
             impl->state = ConnectionState::kConnected;
+#if LANLINK_HAS_OPENSSL
+            if (options.tls.enabled) {
+                auto tls = configure_tls_client(impl->tls, impl->tls_context, socket, options.tls);
+                if (!tls.ok())
+                    return Result<Connection>::failure(tls.error());
+            }
+#else
+            if (options.tls.enabled)
+                return Result<Connection>::failure("TLS unavailable");
+#endif
             return Result<Connection>::success(Connection(std::move(impl)));
         }
         close_socket(socket);
@@ -218,7 +343,12 @@ Result<void> Connection::send(const protocol::Message& message) {
     auto encoded = protocol::encode(message);
     if (!encoded.ok())
         return Result<void>::failure(encoded.error());
+#if LANLINK_HAS_OPENSSL
+    auto result = impl_->tls != nullptr ? write_all_tls(impl_->tls, encoded.value())
+                                        : write_all(impl_->socket, encoded.value());
+#else
     auto result = write_all(impl_->socket, encoded.value());
+#endif
     if (!result.ok())
         close();
     return result;
@@ -233,7 +363,16 @@ Result<std::vector<protocol::Message>> Connection::receive(std::chrono::millisec
         return Result<std::vector<protocol::Message>>::failure(waited.error());
 
     std::array<std::uint8_t, 16 * 1024> bytes{};
+#if LANLINK_HAS_OPENSSL
+    const int received = impl_->tls != nullptr
+                              ? SSL_read(impl_->tls, bytes.data(), static_cast<int>(bytes.size()))
 #if defined(_WIN32)
+                              : recv(impl_->socket, reinterpret_cast<char*>(bytes.data()),
+                                     static_cast<int>(bytes.size()), 0);
+#else
+                              : static_cast<int>(recv(impl_->socket, bytes.data(), bytes.size(), 0));
+#endif
+#elif defined(_WIN32)
     const int received = recv(impl_->socket, reinterpret_cast<char*>(bytes.data()),
                               static_cast<int>(bytes.size()), 0);
 #else
@@ -251,6 +390,15 @@ Result<std::vector<protocol::Message>> Connection::receive(std::chrono::millisec
     impl_->state = ConnectionState::kClosed;
     close_socket(impl_->socket);
     impl_->socket = kInvalidSocket;
+#if LANLINK_HAS_OPENSSL
+    if (impl_->tls != nullptr && received <= 0) {
+        const int error = SSL_get_error(impl_->tls, received);
+        if (error != SSL_ERROR_ZERO_RETURN && error != SSL_ERROR_SYSCALL) {
+            close();
+            return Result<std::vector<protocol::Message>>::failure("TLS read failed");
+        }
+    }
+#endif
     if (received == 0) {
         auto finished = impl_->decoder.finish();
         if (!finished.ok())
@@ -264,6 +412,9 @@ Result<std::vector<protocol::Message>> Connection::receive(std::chrono::millisec
 Result<void> Connection::close() {
     if (!impl_)
         return Result<void>::success();
+#if LANLINK_HAS_OPENSSL
+    release_tls(impl_->tls, impl_->tls_context);
+#endif
     if (impl_->socket != kInvalidSocket) {
 #if defined(_WIN32)
         shutdown(impl_->socket, SD_BOTH);
@@ -358,6 +509,19 @@ Result<Connection> Listener::accept(std::chrono::milliseconds timeout) {
     connection->socket = socket;
     connection->options = impl_->options;
     connection->state = ConnectionState::kConnected;
+#if LANLINK_HAS_OPENSSL
+    if (impl_->options.tls.enabled) {
+        auto tls = configure_tls_server(connection->tls, connection->tls_context, socket,
+                                        impl_->options.tls);
+        if (!tls.ok())
+            return Result<Connection>::failure(tls.error());
+    }
+#else
+    if (impl_->options.tls.enabled) {
+        close_socket(socket);
+        return Result<Connection>::failure("TLS unavailable");
+    }
+#endif
     return Result<Connection>::success(Connection(std::move(connection)));
 }
 
