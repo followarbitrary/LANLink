@@ -301,6 +301,10 @@ Connection& Connection::operator=(Connection&& other) noexcept {
 Connection::~Connection() { close(); }
 
 Result<Connection> Connection::connect(const Endpoint& endpoint, ConnectionOptions options) {
+#if !LANLINK_HAS_OPENSSL
+    if (options.tls.enabled)
+        return Result<Connection>::failure("TLS unavailable");
+#endif
     auto initialized = initialize_sockets();
     if (!initialized.ok())
         return Result<Connection>::failure(initialized.error());
@@ -326,9 +330,6 @@ Result<Connection> Connection::connect(const Endpoint& endpoint, ConnectionOptio
                 if (!tls.ok())
                     return Result<Connection>::failure(tls.error());
             }
-#else
-            if (options.tls.enabled)
-                return Result<Connection>::failure("TLS unavailable");
 #endif
             return Result<Connection>::success(Connection(std::move(impl)));
         }
@@ -451,6 +452,10 @@ Listener& Listener::operator=(Listener&& other) noexcept {
 Listener::~Listener() { close(); }
 
 Result<Listener> Listener::bind(const Endpoint& endpoint, ConnectionOptions options) {
+#if !LANLINK_HAS_OPENSSL
+    if (options.tls.enabled)
+        return Result<Listener>::failure("TLS unavailable");
+#endif
     auto initialized = initialize_sockets();
     if (!initialized.ok())
         return Result<Listener>::failure(initialized.error());
@@ -515,11 +520,6 @@ Result<Connection> Listener::accept(std::chrono::milliseconds timeout) {
                                         impl_->options.tls);
         if (!tls.ok())
             return Result<Connection>::failure(tls.error());
-    }
-#else
-    if (impl_->options.tls.enabled) {
-        close_socket(socket);
-        return Result<Connection>::failure("TLS unavailable");
     }
 #endif
     return Result<Connection>::success(Connection(std::move(connection)));
