@@ -40,7 +40,8 @@ struct Key {
         std::uint32_t key;
     };
     bool pressed{};
-    constexpr Key(std::uint32_t value = 0, bool down = false) : code(value), pressed(down) {}
+  // `code` is a USB HID usage, never an OS-specific virtual-key or keycode.
+  constexpr Key(std::uint32_t value = 0, bool down = false) : code(value), pressed(down) {}
 };
 
 struct PointerWarp {

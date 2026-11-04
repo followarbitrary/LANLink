@@ -26,6 +26,7 @@ add_library(lanlink_core
   src/core/transport/session.cpp
   src/core/transport/manager.cpp
   src/platform/fake_input_backend.cpp
+  src/platform/key_mapping.cpp
   src/platform/windows/windows_input_backend.cpp
   src/platform/macos/macos_input_backend.cpp
 )
@@ -105,6 +106,11 @@ add_executable(windows_backend_test tests/unit/windows_backend_test.cpp)
 target_link_libraries(windows_backend_test PRIVATE lanlink_core GTest::gtest_main)
 gtest_discover_tests(windows_backend_test)
 add_test(NAME windows_backend COMMAND windows_backend_test)
+
+add_executable(key_mapping_test tests/unit/key_mapping_test.cpp)
+target_link_libraries(key_mapping_test PRIVATE lanlink_core GTest::gtest_main)
+gtest_discover_tests(key_mapping_test)
+add_test(NAME key_mapping COMMAND key_mapping_test)
 
 add_executable(macos_backend_test tests/unit/macos_backend_test.cpp)
 target_link_libraries(macos_backend_test PRIVATE lanlink_core GTest::gtest_main)

@@ -1,5 +1,7 @@
 #include "lanlink/platform/macos_input_backend.hpp"
 
+#include "lanlink/platform/key_mapping.hpp"
+
 #include <algorithm>
 #include <chrono>
 #include <condition_variable>
@@ -39,10 +41,14 @@ std::optional<InputEvent> convert_event(CGEventType type, CGEventRef event, CGPo
   converted.origin = InputOrigin::kPhysical;
   switch (type) {
     case kCGEventKeyDown:
-    case kCGEventKeyUp:
-      converted.payload = Key{static_cast<std::uint32_t>(CGEventGetIntegerValueField(
-                                 event, kCGKeyboardEventKeycode)), type == kCGEventKeyDown};
+    case kCGEventKeyUp: {
+      const auto keycode = static_cast<std::uint32_t>(
+          CGEventGetIntegerValueField(event, kCGKeyboardEventKeycode));
+      const auto hid = mac_keycode_to_hid(keycode);
+      if (!hid.has_value()) return std::nullopt;
+      converted.payload = Key{*hid, type == kCGEventKeyDown};
       return converted;
+    }
     case kCGEventMouseMoved:
     case kCGEventLeftMouseDragged:
     case kCGEventRightMouseDragged:
@@ -313,7 +319,14 @@ Result<void> MacOSInputBackend::inject(const InputEvent& event) {
   }
   CGEventRef created = nullptr;
   if (const auto* key = std::get_if<Key>(&event.payload)) {
-    created = CGEventCreateKeyboardEvent(nullptr, static_cast<CGKeyCode>(key->code), key->pressed);
+    const auto keycode = hid_to_mac_keycode(key->code);
+    if (!keycode.has_value()) {
+      std::lock_guard lock(impl_->mutex);
+      status_.degraded = true;
+      status_.last_error = "unsupported HID key usage";
+      return Result<void>::failure(status_.last_error);
+    }
+    created = CGEventCreateKeyboardEvent(nullptr, static_cast<CGKeyCode>(*keycode), key->pressed);
   } else if (const auto* button = std::get_if<MouseButton>(&event.payload)) {
     CGEventRef current = CGEventCreate(nullptr);
     const CGPoint point = current == nullptr ? CGPointZero : CGEventGetLocation(current);

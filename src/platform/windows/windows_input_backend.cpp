@@ -1,5 +1,7 @@
 #include "lanlink/platform/windows_input_backend.hpp"
 
+#include "lanlink/platform/key_mapping.hpp"
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -139,8 +141,15 @@ Result<void> WindowsInputBackend::inject(const InputEvent& event) {
   std::uint32_t code = 0;
   bool pressed = false;
   if (const auto* key = std::get_if<Key>(&event.payload)) {
+    const auto vk = hid_to_windows_vk(key->code);
+    if (!vk.has_value()) {
+      std::lock_guard lock(mutex_);
+      status_.degraded = true;
+      status_.last_error = "unsupported HID key usage";
+      return Result<void>::failure(status_.last_error);
+    }
     input.type = INPUT_KEYBOARD;
-    input.ki.wVk = static_cast<WORD>(key->code & 0xFFFFU);
+    input.ki.wVk = static_cast<WORD>(*vk & 0xFFFFU);
     input.ki.dwFlags = key->pressed ? 0 : KEYEVENTF_KEYUP;
     input.ki.dwExtraInfo = own_extra_info();
     track_key = true;
@@ -308,8 +317,15 @@ LRESULT CALLBACK WindowsInputBackend::mouse_proc(int code, WPARAM wparam, LPARAM
 }
 
 void WindowsInputBackend::handle_keyboard(const KBDLLHOOKSTRUCT& info, WPARAM message) {
+  const auto hid = windows_vk_to_hid(info.vkCode);
+  if (!hid.has_value()) {
+    std::lock_guard lock(mutex_);
+    status_.degraded = true;
+    status_.last_error = "unsupported Windows virtual key";
+    return;
+  }
   InputEvent event{};
-  event.payload = Key{info.vkCode, message == WM_KEYDOWN || message == WM_SYSKEYDOWN};
+  event.payload = Key{*hid, message == WM_KEYDOWN || message == WM_SYSKEYDOWN};
   event.origin = InputOrigin::kPhysical;
   dispatch(std::move(event));
 }
