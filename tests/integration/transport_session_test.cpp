@@ -52,13 +52,18 @@ TEST(PeerSession, CompletesAcquireActivateInputAndReleaseOverTcp) {
     ASSERT_EQ(router.state(), RouterState::kRemote);
     ASSERT_TRUE(arbiter.has_active_lease());
     ASSERT_TRUE(source_backend.status().suppression);
+    ASSERT_EQ(target_backend.injected_events().size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<PointerWarp>(target_backend.injected_events().front().payload));
+    EXPECT_DOUBLE_EQ(std::get<PointerWarp>(target_backend.injected_events().front().payload).x, 20.0);
+    EXPECT_DOUBLE_EQ(std::get<PointerWarp>(target_backend.injected_events().front().payload).y, 10.0);
 
     auto input = router.on_local_event(
         InputEvent{{}, {}, 0, 0, Key{65, true}, InputOrigin::kSynthetic}, {}, {});
     ASSERT_EQ(input.size(), 1u);
     ASSERT_TRUE(source.send_actions(input).ok());
     ASSERT_TRUE(target.pump({}).ok());
-    ASSERT_EQ(target_backend.injected_events().size(), 1u);
+    ASSERT_EQ(target_backend.injected_events().size(), 2u);
+    ASSERT_TRUE(std::holds_alternative<Key>(target_backend.injected_events().back().payload));
     EXPECT_TRUE(arbiter.pressed_keys().contains(65));
 
     RouterAction release;
@@ -69,6 +74,49 @@ TEST(PeerSession, CompletesAcquireActivateInputAndReleaseOverTcp) {
     ASSERT_TRUE(target.pump({}).ok());
     EXPECT_FALSE(arbiter.has_lease());
     EXPECT_TRUE(arbiter.ledger_empty());
+}
+
+TEST(PeerSession, ActivationFailsWhenPointerWarpCannotBeInjected) {
+    auto listener_result = Listener::bind(Endpoint{"127.0.0.1", 0});
+    ASSERT_TRUE(listener_result.ok());
+    auto listener = std::move(listener_result.value());
+    auto client_result = Connection::connect(Endpoint{"127.0.0.1", listener.local_endpoint().port});
+    ASSERT_TRUE(client_result.ok());
+    auto accepted = listener.accept(2s);
+    ASSERT_TRUE(accepted.ok());
+
+    InputRouter router{id(5), AuthenticatedPeer{id(7)}, id(8), id(9)};
+    InputArbiter arbiter;
+    FakeInputBackend source_backend;
+    FakeInputBackend target_backend;
+    ASSERT_TRUE(source_backend.start({}).ok());
+    ASSERT_TRUE(target_backend.start({}).ok());
+    target_backend.set_injection_failure(true);
+
+    PeerSession source(
+        std::move(client_result.value()),
+        PeerSessionConfig{id(6), AuthenticatedPeer{id(7)}, &router, nullptr, &source_backend});
+    PeerSession target(
+        std::move(accepted.value()),
+        PeerSessionConfig{id(7), AuthenticatedPeer{id(6)}, nullptr, &arbiter, &target_backend});
+
+    ASSERT_TRUE(source.start({}).ok());
+    ASSERT_TRUE(target.start({}).ok());
+    ASSERT_TRUE(source.pump({}).ok());
+    ASSERT_TRUE(target.pump({}).ok());
+
+    ASSERT_TRUE(source.send_actions(
+                    router.on_crossing(Crossing{id(10), Edge::kLeft, 0.5, {20, 10}}, {}))
+                    .ok());
+    ASSERT_TRUE(target.pump({}).ok());
+    ASSERT_TRUE(source.pump({}).ok());
+    ASSERT_TRUE(target.pump({}).ok());
+    ASSERT_TRUE(source.pump({}).ok());
+
+    EXPECT_EQ(router.state(), RouterState::kRecovering);
+    EXPECT_FALSE(arbiter.has_lease());
+    EXPECT_FALSE(source_backend.status().suppression);
+    EXPECT_TRUE(target_backend.injected_events().empty());
 }
 
 TEST(PeerSession, DisconnectCleansSourceAndTargetState) {
@@ -217,6 +265,7 @@ TEST(PeerSession, ReconnectUsesNewGenerationAndRejectsOldInput) {
     ASSERT_TRUE(source2.pump({}).ok());
     ASSERT_EQ(router.state(), RouterState::kRemote);
     ASSERT_GT(router.lease()->generation, old_generation);
+    const auto injected_before_stale = target_backend.injected_events().size();
 
     RouterAction stale;
     stale.kind = RouterActionKind::kSendInput;
@@ -226,7 +275,7 @@ TEST(PeerSession, ReconnectUsesNewGenerationAndRejectsOldInput) {
     ASSERT_TRUE(source2.send_actions({stale}).ok());
     ASSERT_TRUE(target2.pump({}).ok());
     EXPECT_TRUE(arbiter.has_active_lease());
-    EXPECT_TRUE(target_backend.injected_events().empty());
+    EXPECT_EQ(target_backend.injected_events().size(), injected_before_stale);
 }
 
 } // namespace

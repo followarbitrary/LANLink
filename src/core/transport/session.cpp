@@ -117,6 +117,7 @@ Result<void> PeerSession::dispatch_message(const protocol::Message& message,
     if (const auto* request = std::get_if<protocol::AcquireRequest>(&message)) {
         if (!config_.arbiter)
             return fail_and_disconnect("unexpected acquire request", now);
+        pending_target_acquire_ = *request;
         const auto result = config_.arbiter->acquire(
             config_.peer, request->source, request->target_display, request->request, now);
         protocol::AcquireResponse response{
@@ -124,6 +125,8 @@ Result<void> PeerSession::dispatch_message(const protocol::Message& message,
         if (result.granted()) {
             response.session = result.lease.session;
             response.generation = result.lease.generation;
+        } else {
+            pending_target_acquire_.reset();
         }
         auto sent = connection_.send(response);
         if (!sent.ok())
@@ -152,8 +155,28 @@ Result<void> PeerSession::dispatch_message(const protocol::Message& message,
         if (!config_.arbiter)
             return fail_and_disconnect("unexpected activate request", now);
         const auto result = config_.arbiter->activate(request->session, request->generation, now);
+        bool success = result.ok();
+        std::string error = result.ok() ? std::string{} : result.error();
+        if (success && config_.backend && pending_target_acquire_.has_value() &&
+            pending_target_acquire_->request == request->session) {
+            const auto& entry = pending_target_acquire_->entry;
+            InputEvent warp{pending_target_acquire_->source,
+                            request->session,
+                            request->generation,
+                            0,
+                            PointerWarp{entry.x, entry.y},
+                            InputOrigin::kRemoteInjected};
+            const auto injected = config_.backend->inject(warp);
+            if (!injected.ok()) {
+                config_.arbiter->revoke_current(RevokeReason::kProtocolError, now);
+                config_.backend->release_injected_state(request->session);
+                success = false;
+                error = injected.error();
+            }
+        }
+        pending_target_acquire_.reset();
         auto sent = connection_.send(protocol::ActivateAck{
-            request->session, request->generation, result.ok(), result.ok() ? "" : result.error()});
+            request->session, request->generation, success, error});
         if (!sent.ok())
             return fail_and_disconnect("activate response failed", now);
         return Result<void>::success();

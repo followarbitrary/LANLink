@@ -48,6 +48,7 @@ class PeerSession {
     PeerSessionConfig config_;
     ConnectionLiveness liveness_;
     std::optional<RouterAction> pending_acquire_;
+    std::optional<protocol::AcquireRequest> pending_target_acquire_;
     std::uint64_t heartbeat_counter_{0};
     IClock::time_point next_heartbeat_{};
     bool started_{false};
