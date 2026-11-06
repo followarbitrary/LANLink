@@ -323,7 +323,16 @@ LRESULT CALLBACK WindowsInputBackend::mouse_proc(int code, WPARAM wparam, LPARAM
 }
 
 void WindowsInputBackend::handle_keyboard(const KBDLLHOOKSTRUCT& info, WPARAM message) {
-  const auto hid = windows_vk_to_hid(info.vkCode);
+  std::optional<std::uint32_t> hid;
+  if (info.vkCode == VK_SHIFT) {
+    hid = info.scanCode == 0x36 ? 0xE5u : 0xE1u;
+  } else if (info.vkCode == VK_CONTROL) {
+    hid = (info.flags & LLKHF_EXTENDED) != 0 ? 0xE4u : 0xE0u;
+  } else if (info.vkCode == VK_MENU) {
+    hid = (info.flags & LLKHF_EXTENDED) != 0 ? 0xE6u : 0xE2u;
+  } else {
+    hid = windows_vk_to_hid(info.vkCode);
+  }
   if (!hid.has_value()) {
     std::lock_guard lock(mutex_);
     status_.degraded = true;
