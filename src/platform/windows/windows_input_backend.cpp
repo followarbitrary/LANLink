@@ -133,6 +133,12 @@ Result<void> WindowsInputBackend::set_suppression(bool enabled) {
   return Result<void>::success();
 }
 
+std::optional<Point> WindowsInputBackend::pointer_position() const noexcept {
+  std::lock_guard lock(mutex_);
+  if (!have_last_point_) return std::nullopt;
+  return Point{static_cast<double>(last_point_.x), static_cast<double>(last_point_.y)};
+}
+
 Result<void> WindowsInputBackend::inject(const InputEvent& event) {
   std::lock_guard operation_lock(operation_mutex_);
   INPUT input{};
@@ -476,6 +482,10 @@ Result<void> WindowsInputBackend::inject(const InputEvent&) {
   status_.last_error = kUnsupported;
   status_.degraded = true;
   return Result<void>::failure(status_.last_error);
+}
+
+std::optional<Point> WindowsInputBackend::pointer_position() const noexcept {
+  return std::nullopt;
 }
 
 void WindowsInputBackend::release_injected_state(const SessionId&) {}

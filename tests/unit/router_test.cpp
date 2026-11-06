@@ -42,6 +42,25 @@ TEST(InputRouter, LocalPreemptionAndRenew) {
   InputEvent injected{{}, {}, 0, 0, Key{65, true}, InputOrigin::kRemoteInjected}; EXPECT_TRUE(r.on_local_event(injected, {}, {}).empty());
   InputEvent physical{{}, {}, 0, 0, Key{65, true}, InputOrigin::kPhysical}; EXPECT_EQ(r.on_local_event(physical, {}, {}).size(), 3u); EXPECT_EQ(r.state(), RouterState::kRecovering);
 }
+
+TEST(InputRouter, SuppressedPhysicalInputIsForwarded) {
+  InputRouter r(id(35), AuthenticatedPeer{id(36)}, id(37), id(38));
+  InputArbiter arb;
+  MockTransport t;
+  t.connect(&arb, AuthenticatedPeer{id(36)});
+  for (const auto& action : r.on_crossing(Crossing{id(39), Edge::kRight, .5, {}}, {}))
+    ASSERT_TRUE(t.send(action));
+  auto granted = t.pump(r, {});
+  for (const auto& action : granted) ASSERT_TRUE(t.send(action));
+  t.pump(r, {});
+  ASSERT_EQ(r.state(), RouterState::kRemote);
+
+  auto forwarded = r.on_suppressed_event(
+      InputEvent{{}, {}, 0, 0, Key{0x04, true}, InputOrigin::kPhysical}, {}, {});
+  ASSERT_EQ(forwarded.size(), 1u);
+  EXPECT_EQ(forwarded.front().kind, RouterActionKind::kSendInput);
+  EXPECT_EQ(r.state(), RouterState::kRemote);
+}
 TEST(MockTransport, OverflowFailsClosedAndRecoversConnectedRouter) {
   InputRouter r(id(40)); r.on_crossing(Crossing{id(41), Edge::kLeft, .5, {}}, {}); MockTransport t(0); t.connect(&r); RouterAction a; a.kind=RouterActionKind::kSendInput; EXPECT_FALSE(t.send(a)); EXPECT_EQ(r.state(), RouterState::kRecovering); EXPECT_TRUE(t.overflowed());
 }

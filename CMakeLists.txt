@@ -25,6 +25,7 @@ add_library(lanlink_core
   src/core/transport/connection.cpp
   src/core/transport/session.cpp
   src/core/transport/manager.cpp
+  src/core/runtime/node.cpp
   src/platform/fake_input_backend.cpp
   src/platform/key_mapping.cpp
   src/platform/windows/windows_input_backend.cpp
@@ -131,3 +132,8 @@ add_executable(transport_manager_test tests/integration/transport_manager_test.c
 target_link_libraries(transport_manager_test PRIVATE lanlink_core GTest::gtest_main)
 gtest_discover_tests(transport_manager_test)
 add_test(NAME transport_manager COMMAND transport_manager_test)
+
+add_executable(input_node_runtime_test tests/integration/input_node_runtime_test.cpp)
+target_link_libraries(input_node_runtime_test PRIVATE lanlink_core GTest::gtest_main)
+gtest_discover_tests(input_node_runtime_test)
+add_test(NAME input_node_runtime COMMAND input_node_runtime_test)

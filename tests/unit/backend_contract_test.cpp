@@ -126,5 +126,23 @@ TEST(BackendContract, PermissionAndCaptureFailuresAreExplicit) {
   EXPECT_FALSE(backend.status().capture);
 }
 
+TEST(BackendContract, PointerPositionTracksPhysicalAndInjectedMovement) {
+  FakeInputBackend backend;
+  ASSERT_TRUE(backend.start({}).ok());
+  backend.set_pointer_position(Point{10.0, 20.0});
+  ASSERT_TRUE(backend.pointer_position().has_value());
+  EXPECT_EQ(*backend.pointer_position(), (Point{10.0, 20.0}));
+
+  backend.emit_physical(InputEvent{{}, {}, 0, 0, MouseDelta{3.0, -4.0}, InputOrigin::kPhysical});
+  ASSERT_TRUE(backend.pointer_position().has_value());
+  EXPECT_EQ(*backend.pointer_position(), (Point{13.0, 16.0}));
+
+  ASSERT_TRUE(backend.inject(
+      InputEvent{{}, {}, 1, 0, PointerWarp{50.0, 60.0}, InputOrigin::kRemoteInjected})
+                  .ok());
+  ASSERT_TRUE(backend.pointer_position().has_value());
+  EXPECT_EQ(*backend.pointer_position(), (Point{50.0, 60.0}));
+}
+
 }  // namespace
 }  // namespace lanlink::platform

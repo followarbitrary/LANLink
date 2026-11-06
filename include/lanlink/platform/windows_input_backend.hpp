@@ -37,6 +37,7 @@ class WindowsInputBackend final : public IInputBackend {
   void stop() override;
   Result<void> set_suppression(bool enabled) override;
   Result<void> inject(const InputEvent& event) override;
+  std::optional<Point> pointer_position() const noexcept override;
   void release_injected_state(const SessionId& session) override;
   Result<void> recover() override;
   const BackendStatus& status() const noexcept override { return status_; }
@@ -66,7 +67,7 @@ class WindowsInputBackend final : public IInputBackend {
   HHOOK mouse_hook_{nullptr};
   std::thread hook_thread_;
   DWORD hook_thread_id_{0};
-  std::mutex mutex_;
+  mutable std::mutex mutex_;
   std::recursive_mutex operation_mutex_;
   std::condition_variable hook_ready_cv_;
   bool hook_ready_{false};

@@ -3,6 +3,7 @@
 #include "lanlink/common/config.hpp"
 
 #include <type_traits>
+#include <utility>
 
 namespace lanlink {
 
@@ -119,6 +120,22 @@ std::vector<RouterAction> InputRouter::on_local_event(InputEvent event, Point, T
         return make_input(event);
     }
     return actions;
+}
+
+std::vector<RouterAction> InputRouter::on_suppressed_event(InputEvent event, Point point,
+                                                           TimePoint now) {
+    if (state_ != RouterState::kRemote || event.origin != InputOrigin::kPhysical)
+        return on_local_event(std::move(event), point, now);
+    if (is_button(event.payload)) {
+        const auto& button = std::get<MouseButton>(event.payload);
+        if (button.button != 0) {
+            if (button.pressed)
+                held_buttons_.insert(button.button);
+            else
+                held_buttons_.erase(button.button);
+        }
+    }
+    return make_input(std::move(event));
 }
 
 std::vector<RouterAction> InputRouter::on_crossing(Crossing crossing, TimePoint now) {

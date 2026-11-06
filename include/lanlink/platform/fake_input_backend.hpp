@@ -15,11 +15,13 @@ class FakeInputBackend final : public IInputBackend {
   void stop() override;
   Result<void> set_suppression(bool enabled) override;
   Result<void> inject(const InputEvent& event) override;
+  std::optional<Point> pointer_position() const noexcept override;
   void release_injected_state(const SessionId& session) override;
   Result<void> recover() override;
   const BackendStatus& status() const noexcept override { return status_; }
 
   void set_permission(bool available);
+  void set_pointer_position(Point position);
   void set_permission_available(bool available) { set_permission(available); }
   void set_capture_available(bool available);
   void set_capture_failure(bool failed) { set_capture_available(!failed); }
@@ -51,6 +53,8 @@ class FakeInputBackend final : public IInputBackend {
   std::vector<InputEvent> injected_events_;
   std::vector<SessionId> released_sessions_;
   std::unordered_map<SessionId, HeldState> held_;
+  Point pointer_position_{};
+  bool have_pointer_position_{false};
 };
 
 }  // namespace lanlink::platform

@@ -304,6 +304,12 @@ Result<void> MacOSInputBackend::set_suppression(bool enabled) {
   return Result<void>::success();
 }
 
+std::optional<Point> MacOSInputBackend::pointer_position() const noexcept {
+  std::lock_guard lock(impl_->mutex);
+  if (!impl_->have_last_point) return std::nullopt;
+  return Point{impl_->last_point.x, impl_->last_point.y};
+}
+
 Result<void> MacOSInputBackend::inject(const InputEvent& event) {
   std::lock_guard operation_lock(impl_->operation_mutex);
   {
@@ -527,6 +533,10 @@ Result<void> MacOSInputBackend::inject(const InputEvent&) {
   status_.last_error = kUnsupported;
   status_.degraded = true;
   return Result<void>::failure(status_.last_error);
+}
+
+std::optional<Point> MacOSInputBackend::pointer_position() const noexcept {
+  return std::nullopt;
 }
 void MacOSInputBackend::release_injected_state(const SessionId&) {}
 Result<void> MacOSInputBackend::recover() {

@@ -97,6 +97,7 @@ class InputRouter {
                 RequestId request = {}, std::size_t queue_capacity = 256);
 
     std::vector<RouterAction> on_local_event(InputEvent event, Point point, TimePoint now);
+    std::vector<RouterAction> on_suppressed_event(InputEvent event, Point point, TimePoint now);
     std::vector<RouterAction> on_crossing(Crossing crossing, TimePoint now);
     std::vector<RouterAction> on_grant(AcquireResult result, TimePoint now);
     std::vector<RouterAction> on_activation_ack(const Result<void>& result, TimePoint now);

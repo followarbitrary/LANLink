@@ -51,6 +51,15 @@ Result<void> FakeInputBackend::inject(const InputEvent& event) {
   auto tagged = event;
   tagged.origin = InputOrigin::kRemoteInjected;
   injected_events_.push_back(tagged);
+  if (const auto* warp = std::get_if<PointerWarp>(&tagged.payload)) {
+    pointer_position_ = Point{warp->x, warp->y};
+    have_pointer_position_ = true;
+  } else if (const auto* delta = std::get_if<MouseDelta>(&tagged.payload)) {
+    if (have_pointer_position_) {
+      pointer_position_.x += delta->dx;
+      pointer_position_.y += delta->dy;
+    }
+  }
   if (const auto* key = std::get_if<Key>(&tagged.payload)) {
     if (key->pressed) {
       held_[tagged.session].keys.insert(key->code);
@@ -124,8 +133,24 @@ void FakeInputBackend::emit_physical(const InputEvent& event) {
   if (!status_.running || !status_.capture) return;
   auto tagged = event;
   tagged.origin = InputOrigin::kPhysical;
+  if (const auto* delta = std::get_if<MouseDelta>(&tagged.payload)) {
+    if (have_pointer_position_) {
+      pointer_position_.x += delta->dx;
+      pointer_position_.y += delta->dy;
+    }
+  }
   physical_events_.push_back(tagged);
   if (callback_) callback_(tagged);
+}
+
+std::optional<Point> FakeInputBackend::pointer_position() const noexcept {
+  if (!have_pointer_position_) return std::nullopt;
+  return pointer_position_;
+}
+
+void FakeInputBackend::set_pointer_position(Point position) {
+  pointer_position_ = position;
+  have_pointer_position_ = true;
 }
 
 std::size_t FakeInputBackend::held_count() const noexcept {
