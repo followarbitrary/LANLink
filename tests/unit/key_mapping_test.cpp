@@ -87,5 +87,26 @@ TEST(KeyMapping, WindowsAbsoluteCoordinatesUseVirtualDesktopOrigin) {
   EXPECT_EQ(windows_absolute_mouse_coordinate(1919.0, -1920, 3840), 65535);
 }
 
+TEST(KeyMapping, ExtendedFunctionAndKeypadKeysRoundTrip) {
+  EXPECT_EQ(windows_vk_to_hid(0x7C).value(), 0x68u);  // F13
+  EXPECT_EQ(windows_vk_to_hid(0x87).value(), 0x73u);  // F24
+  EXPECT_EQ(mac_keycode_to_hid(105).value(), 0x68u);  // F13
+  EXPECT_EQ(mac_keycode_to_hid(64).value(), 0x6Cu);   // F17
+
+  EXPECT_EQ(windows_vk_to_hid(0x60).value(), 0x62u);  // keypad 0
+  EXPECT_EQ(windows_vk_to_hid(0x61).value(), 0x59u);  // keypad 1
+  EXPECT_EQ(windows_vk_to_hid(0x6F).value(), 0x54u);  // keypad /
+  EXPECT_EQ(windows_vk_to_hid(0x6E).value(), 0x63u);  // keypad .
+  EXPECT_EQ(mac_keycode_to_hid(82).value(), 0x62u);    // keypad 0
+  EXPECT_EQ(mac_keycode_to_hid(83).value(), 0x59u);    // keypad 1
+  EXPECT_EQ(mac_keycode_to_hid(75).value(), 0x54u);    // keypad /
+  EXPECT_EQ(mac_keycode_to_hid(65).value(), 0x63u);    // keypad .
+
+  EXPECT_EQ(hid_to_windows_vk(0x68u).value(), 0x7Cu);
+  EXPECT_EQ(hid_to_mac_keycode(0x68u).value(), 105u);
+  EXPECT_EQ(hid_to_windows_vk(0x62u).value(), 0x60u);
+  EXPECT_EQ(hid_to_mac_keycode(0x62u).value(), 82u);
+}
+
 }  // namespace
 }  // namespace lanlink::platform
