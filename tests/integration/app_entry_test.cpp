@@ -5,6 +5,12 @@
 #include <iostream>
 #include <string>
 
+#if defined(_WIN32)
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
+
 namespace {
 
 std::string quote_shell(const std::string& value) {
@@ -30,6 +36,14 @@ std::string quote_shell(const std::string& value) {
 #endif
 }
 
+unsigned long long process_id() {
+#if defined(_WIN32)
+  return static_cast<unsigned long long>(_getpid());
+#else
+  return static_cast<unsigned long long>(getpid());
+#endif
+}
+
 int run_case(const std::string& executable, const std::string& arguments,
              bool expect_success, const std::string& expected_output) {
   static std::atomic<unsigned long long> sequence{0};
@@ -38,6 +52,7 @@ int run_case(const std::string& executable, const std::string& arguments,
   const auto output_path = std::filesystem::temp_directory_path() /
                            ("lanlink_app_entry_test_" +
                             std::to_string(static_cast<unsigned long long>(timestamp)) + "_" +
+                            std::to_string(process_id()) + "_" +
                             std::to_string(unique_sequence) +
                             ".txt");
   const std::string command = quote_shell(executable) + " " + arguments + " > " +
