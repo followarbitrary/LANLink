@@ -72,5 +72,20 @@ TEST(KeyMapping, UnknownValuesAreRejected) {
   EXPECT_FALSE(hid_to_mac_keycode(0xFFFFu).has_value());
 }
 
+TEST(KeyMapping, ReleaseHelpersConvertCanonicalHidUsages) {
+  EXPECT_EQ(windows_release_vk_for_hid(0xE1u).value(), 0xA0u);
+  EXPECT_EQ(windows_release_vk_for_hid(0x04u).value(), 0x41u);
+  EXPECT_EQ(mac_release_keycode_for_hid(0xE1u).value(), 56u);
+  EXPECT_EQ(mac_release_keycode_for_hid(0x04u).value(), 0u);
+  EXPECT_FALSE(windows_release_vk_for_hid(0xFFFFu).has_value());
+  EXPECT_FALSE(mac_release_keycode_for_hid(0xFFFFu).has_value());
+}
+
+TEST(KeyMapping, WindowsAbsoluteCoordinatesUseVirtualDesktopOrigin) {
+  EXPECT_EQ(windows_absolute_mouse_coordinate(-1920.0, -1920, 3840), 0);
+  EXPECT_EQ(windows_absolute_mouse_coordinate(0.0, -1920, 3840), 32776);
+  EXPECT_EQ(windows_absolute_mouse_coordinate(1919.0, -1920, 3840), 65535);
+}
+
 }  // namespace
 }  // namespace lanlink::platform

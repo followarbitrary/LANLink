@@ -13,6 +13,8 @@ InputNodeRuntime::InputNodeRuntime(InputRuntimeConfig config)
     : config_(std::move(config)),
       router_(config_.source, config_.peer, config_.local_display, {}, config_.queue_capacity) {}
 
+InputNodeRuntime::~InputNodeRuntime() { (void)stop(TimePoint{}); }
+
 Result<std::unique_ptr<InputNodeRuntime>> InputNodeRuntime::create(InputRuntimeConfig config) {
   if (config.local_device == DeviceId{} || config.source == SourceId{} ||
       config.peer.id == DeviceId{} || config.local_display == DisplayId{}) {
@@ -41,6 +43,11 @@ transport::PeerSessionConfig InputNodeRuntime::session_config() noexcept {
 
 Result<void> InputNodeRuntime::start() {
   if (running_) return Result<void>::success();
+  {
+    std::lock_guard lock(queue_mutex_);
+    queued_events_.clear();
+    queue_overflowed_ = false;
+  }
   auto listener = transport::Listener::bind(config_.listen_endpoint, config_.connection);
   if (!listener.ok()) return Result<void>::failure(listener.error());
   listener_ = std::make_unique<transport::Listener>(std::move(listener.value()));
@@ -109,7 +116,6 @@ Result<void> InputNodeRuntime::dispatch_actions(const std::vector<RouterAction>&
                action.kind == RouterActionKind::kActivate ||
                action.kind == RouterActionKind::kRenew ||
                action.kind == RouterActionKind::kSendInput ||
-               action.kind == RouterActionKind::kRelease ||
                action.kind == RouterActionKind::kAcquire) {
       return Result<void>::failure("peer is not connected");
     }
@@ -160,7 +166,8 @@ Result<void> InputNodeRuntime::drain_events(TimePoint now) {
     const auto& event = queued.event;
     const Point pointer = queued.pointer.value_or(Point{});
     std::vector<RouterAction> actions;
-    if (router_.state() == RouterState::kLocal || router_.state() == RouterState::kHandoff) {
+    if (queued.pointer.has_value() && std::holds_alternative<MouseDelta>(event.payload) &&
+        (router_.state() == RouterState::kLocal || router_.state() == RouterState::kHandoff)) {
       if (const auto crossing = detect_crossing(pointer)) {
         actions = router_.on_crossing(*crossing, now);
       }
@@ -212,7 +219,12 @@ Result<void> InputNodeRuntime::tick(TimePoint now) {
 }
 
 Result<void> InputNodeRuntime::stop(TimePoint now) {
-  if (!running_) return Result<void>::success();
+  if (!running_) {
+    std::lock_guard lock(queue_mutex_);
+    queued_events_.clear();
+    queue_overflowed_ = false;
+    return Result<void>::success();
+  }
   Result<void> result = Result<void>::success();
   for (const auto handle : peer_handles_) {
     auto removed = manager_.remove(handle, now);
@@ -226,6 +238,11 @@ Result<void> InputNodeRuntime::stop(TimePoint now) {
   }
   config_.backend->stop();
   running_ = false;
+  {
+    std::lock_guard lock(queue_mutex_);
+    queued_events_.clear();
+    queue_overflowed_ = false;
+  }
   return result;
 }
 

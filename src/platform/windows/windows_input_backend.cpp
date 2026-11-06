@@ -188,14 +188,12 @@ Result<void> WindowsInputBackend::inject(const InputEvent& event) {
     input.mi.dwExtraInfo = own_extra_info();
   } else if (const auto* warp = std::get_if<PointerWarp>(&event.payload)) {
     input.type = INPUT_MOUSE;
-    const auto width = std::max(1, GetSystemMetrics(SM_CXSCREEN) - 1);
-    const auto height = std::max(1, GetSystemMetrics(SM_CYSCREEN) - 1);
-    input.mi.dx = static_cast<LONG>(std::clamp(warp->x, 0.0, 1.0) * 65535.0);
-    input.mi.dy = static_cast<LONG>(std::clamp(warp->y, 0.0, 1.0) * 65535.0);
-    if (warp->x > 1.0 || warp->y > 1.0) {
-      input.mi.dx = static_cast<LONG>(std::clamp(warp->x / width, 0.0, 1.0) * 65535.0);
-      input.mi.dy = static_cast<LONG>(std::clamp(warp->y / height, 0.0, 1.0) * 65535.0);
-    }
+    const auto origin_x = GetSystemMetrics(SM_XVIRTUALSCREEN);
+    const auto origin_y = GetSystemMetrics(SM_YVIRTUALSCREEN);
+    const auto width = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+    const auto height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+    input.mi.dx = static_cast<LONG>(windows_absolute_mouse_coordinate(warp->x, origin_x, width));
+    input.mi.dy = static_cast<LONG>(windows_absolute_mouse_coordinate(warp->y, origin_y, height));
     input.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE;
     input.mi.dwExtraInfo = own_extra_info();
   }
@@ -224,6 +222,18 @@ Result<void> WindowsInputBackend::inject(const InputEvent& event) {
     else ledger.erase(code);
     if (held.keys.empty() && held.buttons.empty()) held_.erase(event.session);
   }
+  if (const auto* delta = std::get_if<MouseDelta>(&event.payload)) {
+    std::lock_guard lock(mutex_);
+    if (have_last_point_) {
+      last_point_.x += static_cast<LONG>(std::llround(delta->dx));
+      last_point_.y += static_cast<LONG>(std::llround(delta->dy));
+    }
+  } else if (const auto* warp = std::get_if<PointerWarp>(&event.payload)) {
+    std::lock_guard lock(mutex_);
+    last_point_.x = static_cast<LONG>(std::llround(warp->x));
+    last_point_.y = static_cast<LONG>(std::llround(warp->y));
+    have_last_point_ = true;
+  }
   return Result<void>::success();
 }
 
@@ -236,7 +246,9 @@ bool WindowsInputBackend::release_session_locked(const SessionId& session) {
   for (const auto code : found->second.keys) {
     INPUT input{};
     input.type = INPUT_KEYBOARD;
-    input.ki.wVk = static_cast<WORD>(code & 0xFFFFU);
+    const auto vk = windows_release_vk_for_hid(code);
+    if (!vk.has_value()) continue;
+    input.ki.wVk = static_cast<WORD>(*vk & 0xFFFFU);
     input.ki.dwFlags = KEYEVENTF_KEYUP;
     input.ki.dwExtraInfo = own_extra_info();
     inputs.push_back(input);
@@ -349,8 +361,10 @@ void WindowsInputBackend::handle_mouse(const MSLLHOOKSTRUCT& info, WPARAM messag
   InputEvent event{};
   event.origin = InputOrigin::kPhysical;
   if (message == WM_MOUSEMOVE) {
+    std::lock_guard lock(mutex_);
     if (!have_last_point_) { last_point_ = info.pt; have_last_point_ = true; return; }
-    event.payload = MouseDelta{static_cast<double>(info.pt.x - last_point_.x), static_cast<double>(info.pt.y - last_point_.y)};
+    event.payload = MouseDelta{static_cast<double>(info.pt.x - last_point_.x),
+                               static_cast<double>(info.pt.y - last_point_.y)};
     last_point_ = info.pt;
   } else if (message == WM_MOUSEWHEEL) {
     event.payload = MouseWheel{static_cast<double>(static_cast<short>(HIWORD(info.mouseData))) / WHEEL_DELTA};

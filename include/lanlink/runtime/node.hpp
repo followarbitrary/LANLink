@@ -35,6 +35,8 @@ class InputNodeRuntime {
 
   static Result<std::unique_ptr<InputNodeRuntime>> create(InputRuntimeConfig config);
 
+  ~InputNodeRuntime();
+
   Result<void> set_topology(ScreenTopology topology);
   Result<void> start();
   Result<transport::PeerHandle> connect_peer(const transport::Endpoint& endpoint);

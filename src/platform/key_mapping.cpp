@@ -1,6 +1,8 @@
 #include "lanlink/platform/key_mapping.hpp"
 
 #include <array>
+#include <algorithm>
+#include <cmath>
 
 namespace lanlink::platform {
 namespace {
@@ -96,6 +98,23 @@ std::optional<std::uint32_t> mac_keycode_to_hid(std::uint32_t keycode) {
 
 std::optional<std::uint32_t> hid_to_mac_keycode(std::uint32_t usage) {
   return inverse(kMacMappings, usage);
+}
+
+std::optional<std::uint32_t> windows_release_vk_for_hid(std::uint32_t usage) {
+  return hid_to_windows_vk(usage);
+}
+
+std::optional<std::uint32_t> mac_release_keycode_for_hid(std::uint32_t usage) {
+  return hid_to_mac_keycode(usage);
+}
+
+std::int32_t windows_absolute_mouse_coordinate(double coordinate, std::int32_t origin,
+                                               std::int32_t extent) {
+  if (extent <= 1) return 0;
+  const auto normalized = std::clamp((coordinate - static_cast<double>(origin)) /
+                                         static_cast<double>(extent - 1),
+                                     0.0, 1.0);
+  return static_cast<std::int32_t>(std::llround(normalized * 65535.0));
 }
 
 }  // namespace lanlink::platform

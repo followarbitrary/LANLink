@@ -28,7 +28,7 @@ ScreenTopology topology_for(DisplayId local, DisplayId remote, bool local_left) 
 
 InputRuntimeConfig config(DeviceId local_device, SourceId source, AuthenticatedPeer peer,
                           DisplayId local_display, Endpoint listen,
-                          IInputBackend* backend) {
+                          IInputBackend* backend, std::size_t queue_capacity = 256) {
   InputRuntimeConfig value;
   value.local_device = local_device;
   value.source = source;
@@ -36,6 +36,7 @@ InputRuntimeConfig config(DeviceId local_device, SourceId source, AuthenticatedP
   value.local_display = local_display;
   value.listen_endpoint = std::move(listen);
   value.backend = backend;
+  value.queue_capacity = queue_capacity;
   return value;
 }
 
@@ -115,6 +116,92 @@ TEST(InputNodeRuntime, CrossesAtExactThresholdAndForwardsSuppressedInput) {
   EXPECT_FALSE(left_backend.status().suppression);
   ASSERT_TRUE(left->tick(now).ok());
   EXPECT_EQ(left->router().state(), RouterState::kLocal);
+}
+
+TEST(InputNodeRuntime, NoPeerOverflowStillReleasesInjectedStateAndRestoresLocal) {
+  FakeInputBackend backend;
+  auto result = InputNodeRuntime::create(config(
+      id(101), id(102), AuthenticatedPeer{id(103)}, id(104), Endpoint{"127.0.0.1", 0},
+      &backend, 1));
+  ASSERT_TRUE(result.ok()) << result.error();
+  auto runtime = std::move(result.value());
+  ASSERT_TRUE(runtime->start().ok());
+
+  backend.emit_physical(InputEvent{{}, {}, 0, 0, Key{0x04, true}, InputOrigin::kPhysical});
+  backend.emit_physical(InputEvent{{}, {}, 0, 0, Key{0x04, false}, InputOrigin::kPhysical});
+  auto drained = runtime->poll(IClock::time_point{}, 0ms);
+  EXPECT_FALSE(drained.ok());
+  EXPECT_EQ(backend.released_sessions().size(), 1u);
+  EXPECT_EQ(backend.status().recovery_count, 1u);
+  EXPECT_EQ(runtime->router().state(), RouterState::kRecovering);
+}
+
+TEST(InputNodeRuntime, StopClearsQueuedOverflowBeforeRestart) {
+  FakeInputBackend backend;
+  auto result = InputNodeRuntime::create(config(
+      id(111), id(112), AuthenticatedPeer{id(113)}, id(114), Endpoint{"127.0.0.1", 0},
+      &backend, 1));
+  ASSERT_TRUE(result.ok()) << result.error();
+  auto runtime = std::move(result.value());
+  ASSERT_TRUE(runtime->start().ok());
+  backend.emit_physical(InputEvent{{}, {}, 0, 0, Key{0x04, true}, InputOrigin::kPhysical});
+  backend.emit_physical(InputEvent{{}, {}, 0, 0, Key{0x04, false}, InputOrigin::kPhysical});
+  ASSERT_TRUE(runtime->stop(IClock::time_point{}).ok());
+  ASSERT_TRUE(runtime->start().ok());
+  EXPECT_TRUE(runtime->poll(IClock::time_point{}, 0ms).ok());
+}
+
+TEST(InputNodeRuntime, DestructorStopsRunningBackend) {
+  FakeInputBackend backend;
+  {
+    auto result = InputNodeRuntime::create(config(
+        id(121), id(122), AuthenticatedPeer{id(123)}, id(124), Endpoint{"127.0.0.1", 0},
+        &backend));
+    ASSERT_TRUE(result.ok()) << result.error();
+    auto runtime = std::move(result.value());
+    ASSERT_TRUE(runtime->start().ok());
+    EXPECT_TRUE(backend.status().running);
+  }
+  EXPECT_FALSE(backend.status().running);
+}
+
+TEST(InputNodeRuntime, MissingPointerDoesNotTriggerCrossing) {
+  FakeInputBackend backend;
+  auto result = InputNodeRuntime::create(config(
+      id(131), id(132), AuthenticatedPeer{id(133)}, id(134), Endpoint{"127.0.0.1", 0},
+      &backend));
+  ASSERT_TRUE(result.ok()) << result.error();
+  auto runtime = std::move(result.value());
+  ScreenTopology topology;
+  EXPECT_TRUE(topology.set_snapshot(1,
+      {Display{id(1), id(134), {-200, 0, -100, 100}, 1.0, Rotation::k0},
+       Display{id(2), id(135), {-100, 0, 0, 100}, 1.0, Rotation::k0}},
+      {ScreenLink{id(134), Edge::kRight, id(135), Edge::kLeft, 0.0, 1.0, 1}}).ok());
+  ASSERT_TRUE(runtime->set_topology(std::move(topology)).ok());
+  ASSERT_TRUE(runtime->start().ok());
+  backend.emit_physical(InputEvent{{}, {}, 0, 0, Key{0x04, true}, InputOrigin::kPhysical});
+  ASSERT_TRUE(runtime->poll(IClock::time_point{}, 0ms).ok());
+  EXPECT_EQ(runtime->router().state(), RouterState::kLocal);
+}
+
+TEST(InputNodeRuntime, KeyEventAtStaleOutsidePointerDoesNotTriggerCrossing) {
+  FakeInputBackend backend;
+  auto result = InputNodeRuntime::create(config(
+      id(141), id(142), AuthenticatedPeer{id(143)}, id(144), Endpoint{"127.0.0.1", 0},
+      &backend));
+  ASSERT_TRUE(result.ok()) << result.error();
+  auto runtime = std::move(result.value());
+  ScreenTopology topology;
+  EXPECT_TRUE(topology.set_snapshot(1,
+      {Display{id(1), id(144), {0, 0, 100, 100}, 1.0, Rotation::k0},
+       Display{id(2), id(145), {100, 0, 200, 100}, 1.0, Rotation::k0}},
+      {ScreenLink{id(144), Edge::kRight, id(145), Edge::kLeft, 0.0, 1.0, 1}}).ok());
+  ASSERT_TRUE(runtime->set_topology(std::move(topology)).ok());
+  ASSERT_TRUE(runtime->start().ok());
+  backend.set_pointer_position(Point{101.0, 50.0});
+  backend.emit_physical(InputEvent{{}, {}, 0, 0, Key{0x04, true}, InputOrigin::kPhysical});
+  ASSERT_TRUE(runtime->poll(IClock::time_point{}, 0ms).ok());
+  EXPECT_EQ(runtime->router().state(), RouterState::kLocal);
 }
 
 }  // namespace

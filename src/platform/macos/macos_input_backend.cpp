@@ -324,6 +324,7 @@ Result<void> MacOSInputBackend::inject(const InputEvent& event) {
     }
   }
   CGEventRef created = nullptr;
+  std::optional<CGPoint> pointer_update;
   if (const auto* key = std::get_if<Key>(&event.payload)) {
     const auto keycode = hid_to_mac_keycode(key->code);
     if (!keycode.has_value()) {
@@ -346,6 +347,7 @@ Result<void> MacOSInputBackend::inject(const InputEvent& event) {
     if (current != nullptr) CFRelease(current);
     point.x += delta->dx;
     point.y += delta->dy;
+    pointer_update = point;
     created = CGEventCreateMouseEvent(nullptr, kCGEventMouseMoved, point, kCGMouseButtonLeft);
   } else if (const auto* wheel = std::get_if<MouseWheel>(&event.payload)) {
     created = CGEventCreateScrollWheelEvent(nullptr, kCGScrollEventUnitLine, 1,
@@ -358,6 +360,11 @@ Result<void> MacOSInputBackend::inject(const InputEvent& event) {
       status_.degraded = true;
       status_.last_error = "CGWarpMouseCursorPosition failed";
       return Result<void>::failure(status_.last_error);
+    }
+    {
+      std::lock_guard lock(impl_->mutex);
+      impl_->last_point = CGPointMake(warp->x, warp->y);
+      impl_->have_last_point = true;
     }
     return Result<void>::success();
   }
@@ -391,6 +398,10 @@ Result<void> MacOSInputBackend::inject(const InputEvent& event) {
   }
   if (impl_->held[event.session].keys.empty() && impl_->held[event.session].buttons.empty())
     impl_->held.erase(event.session);
+  if (pointer_update.has_value()) {
+    impl_->last_point = *pointer_update;
+    impl_->have_last_point = true;
+  }
   return Result<void>::success();
 }
 
@@ -417,7 +428,12 @@ void MacOSInputBackend::release_injected_state(const SessionId& session) {
   std::unordered_set<std::uint32_t> released_buttons;
   bool failed = false;
   for (const auto key : keys) {
-    CGEventRef event = CGEventCreateKeyboardEvent(nullptr, static_cast<CGKeyCode>(key), false);
+    const auto keycode = mac_release_keycode_for_hid(key);
+    if (!keycode.has_value()) {
+      failed = true;
+      continue;
+    }
+    CGEventRef event = CGEventCreateKeyboardEvent(nullptr, static_cast<CGKeyCode>(*keycode), false);
     if (event == nullptr) {
       failed = true;
       continue;
