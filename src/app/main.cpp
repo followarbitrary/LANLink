@@ -48,10 +48,11 @@ int main(int argc, char** argv) {
     return 2;
   }
 
+  std::unique_ptr<lanlink::platform::IInputBackend> backend;
 #if defined(_WIN32)
-  auto backend = std::make_unique<lanlink::platform::WindowsInputBackend>();
+  backend = std::make_unique<lanlink::platform::WindowsInputBackend>();
 #elif defined(__APPLE__)
-  auto backend = std::make_unique<lanlink::platform::MacOSInputBackend>();
+  backend = std::make_unique<lanlink::platform::MacOSInputBackend>();
 #else
   std::cerr << "error: unsupported platform; LANLink requires Windows or macOS\n";
   return 3;

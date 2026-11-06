@@ -1,4 +1,5 @@
-#include <cstdlib>
+#include <atomic>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -31,9 +32,13 @@ std::string quote_shell(const std::string& value) {
 
 int run_case(const std::string& executable, const std::string& arguments,
              bool expect_success, const std::string& expected_output) {
+  static std::atomic<unsigned long long> sequence{0};
+  const auto timestamp = std::chrono::steady_clock::now().time_since_epoch().count();
+  const auto unique_sequence = sequence.fetch_add(1, std::memory_order_relaxed);
   const auto output_path = std::filesystem::temp_directory_path() /
                            ("lanlink_app_entry_test_" +
-                            std::to_string(static_cast<unsigned long long>(std::rand())) +
+                            std::to_string(static_cast<unsigned long long>(timestamp)) + "_" +
+                            std::to_string(unique_sequence) +
                             ".txt");
   const std::string command = quote_shell(executable) + " " + arguments + " > " +
                               quote_shell(output_path.string()) + " 2>&1";
