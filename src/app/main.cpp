@@ -103,6 +103,10 @@ int main(int argc, char** argv) {
   std::cout << "LANLink listening on " << endpoint.host << ':' << endpoint.port << '\n';
 
   int exit_code = 0;
+  bool was_connected = runtime->connected();
+  if (was_connected) {
+    std::cout << "LANLink connected" << '\n';
+  }
   while (!stop_requested.load(std::memory_order_relaxed)) {
     const auto now = lanlink::IClock::Clock::now();
     auto polled = runtime->poll(now, std::chrono::milliseconds{10});
@@ -116,6 +120,11 @@ int main(int argc, char** argv) {
       std::cerr << "runtime error: " << ticked.error() << '\n';
       exit_code = 1;
       break;
+    }
+    const bool connected = runtime->connected();
+    if (connected != was_connected) {
+      std::cout << (connected ? "LANLink connected" : "LANLink disconnected") << '\n';
+      was_connected = connected;
     }
   }
 
