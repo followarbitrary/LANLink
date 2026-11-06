@@ -137,3 +137,8 @@ add_executable(input_node_runtime_test tests/integration/input_node_runtime_test
 target_link_libraries(input_node_runtime_test PRIVATE lanlink_core GTest::gtest_main)
 gtest_discover_tests(input_node_runtime_test)
 add_test(NAME input_node_runtime COMMAND input_node_runtime_test)
+
+add_executable(app_options_test tests/unit/app_options_test.cpp src/app/options.cpp)
+target_link_libraries(app_options_test PRIVATE lanlink_core GTest::gtest_main)
+gtest_discover_tests(app_options_test)
+add_test(NAME app_options COMMAND app_options_test)
