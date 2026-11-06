@@ -142,6 +142,17 @@ add_library(lanlink_app_support src/app/options.cpp)
 target_link_libraries(lanlink_app_support PUBLIC lanlink_core)
 target_compile_features(lanlink_app_support PUBLIC cxx_std_20)
 
+add_executable(app_entry_test tests/integration/app_entry_test.cpp)
+target_compile_features(app_entry_test PRIVATE cxx_std_20)
+
+add_executable(lanlink_app src/app/main.cpp)
+target_link_libraries(lanlink_app PRIVATE lanlink_app_support)
+target_compile_features(lanlink_app PRIVATE cxx_std_20)
+add_dependencies(app_entry_test lanlink_app)
+
+add_test(NAME app_entry_help COMMAND app_entry_test $<TARGET_FILE:lanlink_app> help)
+add_test(NAME app_entry_invalid_port COMMAND app_entry_test $<TARGET_FILE:lanlink_app> invalid-port)
+
 add_executable(app_options_test tests/unit/app_options_test.cpp)
 target_link_libraries(app_options_test PRIVATE lanlink_app_support GTest::gtest_main)
 gtest_discover_tests(app_options_test)
