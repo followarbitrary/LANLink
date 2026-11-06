@@ -66,6 +66,10 @@ Result<void> PeerSession::dispatch_actions(const std::vector<RouterAction>& acti
         case RouterActionKind::kRelease:
             result = connection_.send(protocol::Release{action.session, action.generation});
             break;
+        case RouterActionKind::kRevoke:
+            result = connection_.send(
+                protocol::Revoke{action.session, action.generation, action.reason});
+            break;
         case RouterActionKind::kDrop:
             break;
         }

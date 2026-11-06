@@ -166,6 +166,22 @@ Result<void> InputNodeRuntime::drain_events(TimePoint now) {
     const auto& event = queued.event;
     const Point pointer = queued.pointer.value_or(Point{});
     std::vector<RouterAction> actions;
+
+    if (event.origin == InputOrigin::kPhysical && arbiter_.has_active_lease()) {
+      const auto inbound = *arbiter_.lease();
+      arbiter_.on_local_input(event, now);
+      if (!arbiter_.has_lease()) {
+        config_.backend->release_injected_state(inbound.session);
+        RouterAction revoke;
+        revoke.kind = RouterActionKind::kRevoke;
+        revoke.session = inbound.session;
+        revoke.generation = inbound.generation;
+        revoke.reason = RevokeReason::kLocalPreempt;
+        auto notified = dispatch_actions({revoke}, now);
+        if (!notified.ok()) return notified;
+      }
+    }
+
     if (queued.pointer.has_value() && std::holds_alternative<MouseDelta>(event.payload) &&
         (router_.state() == RouterState::kLocal || router_.state() == RouterState::kHandoff)) {
       if (const auto crossing = detect_crossing(pointer)) {

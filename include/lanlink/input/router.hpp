@@ -42,6 +42,7 @@ enum class RouterActionKind {
     kRenew,
     kSendInput,
     kRelease,
+    kRevoke,
     kRestoreLocal,
     kReleaseInjectedState,
     kDrop,
@@ -51,6 +52,7 @@ enum class RouterActionKind {
     Renew = kRenew,
     SendInput = kSendInput,
     Release = kRelease,
+    Revoke = kRevoke,
     RestoreLocal = kRestoreLocal,
     ReleaseInjectedState = kReleaseInjectedState,
     Drop = kDrop,
@@ -60,6 +62,7 @@ enum class RouterActionKind {
     RENEW = kRenew,
     SEND_INPUT = kSendInput,
     RELEASE = kRelease,
+    REVOKE = kRevoke,
     RESTORE_LOCAL = kRestoreLocal,
     RELEASE_INJECTED_STATE = kReleaseInjectedState,
     DROP = kDrop,
@@ -74,6 +77,7 @@ struct RouterAction {
     SessionId session{};
     std::uint64_t generation{};
     std::uint64_t seq{};
+    RevokeReason reason{RevokeReason::kProtocolError};
     Point entry{};
     InputEvent event{};
     bool success{true};

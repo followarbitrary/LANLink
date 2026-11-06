@@ -20,8 +20,7 @@ ScreenTopology topology_for(DisplayId local, DisplayId remote, bool local_left) 
                        Rotation::k0};
   const Display second{local_left ? id(3) : id(1), remote, {100, 0, 200, 100}, 1.0,
                         Rotation::k0};
-  const ScreenLink link{local, local_left ? Edge::kRight : Edge::kLeft, remote,
-                        local_left ? Edge::kLeft : Edge::kRight, 0.0, 1.0, 1};
+  const ScreenLink link{local, Edge::kRight, remote, Edge::kLeft, 0.0, 1.0, 1};
   EXPECT_TRUE(topology.set_snapshot(1, {first, second}, {link}).ok());
   return topology;
 }
@@ -109,6 +108,29 @@ TEST(InputNodeRuntime, CrossesAtExactThresholdAndForwardsSuppressedInput) {
   ASSERT_TRUE(left->poll(now, 0ms).ok());
   for (int i = 0; i < 4; ++i) ASSERT_TRUE(right->poll(now, 10ms).ok());
   EXPECT_EQ(right_backend.held_count(), 0u);
+
+  // Local input wins over the remote lease on the target.
+  ASSERT_TRUE(right->arbiter().has_active_lease());
+  right_backend.emit_physical(
+      InputEvent{{}, {}, 0, 0, Key{0x04, true}, InputOrigin::kPhysical});
+  ASSERT_TRUE(right->poll(now, 0ms).ok());
+  ASSERT_TRUE(left->poll(now, 10ms).ok());
+  EXPECT_FALSE(right->arbiter().has_lease());
+  EXPECT_EQ(left->router().state(), RouterState::kRecovering);
+  EXPECT_FALSE(left_backend.status().suppression);
+
+  ASSERT_TRUE(left->tick(now).ok());
+  ASSERT_TRUE(right->tick(now).ok());
+  EXPECT_EQ(left->router().state(), RouterState::kLocal);
+
+  // The former target can immediately acquire control in the reverse direction.
+  right_backend.set_pointer_position(Point{100.0, 50.0});
+  right_backend.emit_physical(
+      InputEvent{{}, {}, 0, 0, MouseDelta{4.0, 0.0}, InputOrigin::kPhysical});
+  ASSERT_TRUE(right->poll(now, 0ms).ok());
+  pump_pair(*left, *right, now, 12);
+  EXPECT_EQ(right->router().state(), RouterState::kRemote);
+  EXPECT_TRUE(left->arbiter().has_active_lease());
 
   ASSERT_TRUE(right->stop(now).ok());
   (void)left->poll(now, 0ms);
