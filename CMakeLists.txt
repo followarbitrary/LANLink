@@ -138,9 +138,15 @@ target_link_libraries(input_node_runtime_test PRIVATE lanlink_core GTest::gtest_
 gtest_discover_tests(input_node_runtime_test)
 add_test(NAME input_node_runtime COMMAND input_node_runtime_test)
 
-add_library(lanlink_app_support src/app/options.cpp)
+add_library(lanlink_app_support src/app/options.cpp src/app/runtime_loop.cpp)
 target_link_libraries(lanlink_app_support PUBLIC lanlink_core)
 target_compile_features(lanlink_app_support PUBLIC cxx_std_20)
+
+add_executable(app_runtime_loop_test tests/unit/app_runtime_loop_test.cpp)
+target_link_libraries(app_runtime_loop_test PRIVATE lanlink_app_support GTest::gtest_main)
+target_compile_features(app_runtime_loop_test PRIVATE cxx_std_20)
+gtest_discover_tests(app_runtime_loop_test)
+add_test(NAME app_runtime_loop COMMAND app_runtime_loop_test)
 
 add_executable(app_entry_test tests/integration/app_entry_test.cpp)
 target_compile_features(app_entry_test PRIVATE cxx_std_20)

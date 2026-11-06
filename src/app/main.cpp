@@ -1,4 +1,5 @@
 #include "lanlink/app/options.hpp"
+#include "lanlink/app/runtime_loop.hpp"
 #include "lanlink/runtime/node.hpp"
 
 #include <atomic>
@@ -7,6 +8,7 @@
 #include <iostream>
 #include <memory>
 #include <string_view>
+#include <thread>
 
 #if defined(_WIN32)
 #include "lanlink/platform/windows_input_backend.hpp"
@@ -111,12 +113,20 @@ int main(int argc, char** argv) {
     const auto now = lanlink::IClock::Clock::now();
     auto polled = runtime->poll(now, std::chrono::milliseconds{10});
     if (!polled.ok()) {
+      if (lanlink::app::is_shutdown_interrupt(
+              stop_requested.load(std::memory_order_relaxed), polled.error())) {
+        break;
+      }
       std::cerr << "runtime error: " << polled.error() << '\n';
       exit_code = 1;
       break;
     }
     auto ticked = runtime->tick(now);
     if (!ticked.ok()) {
+      if (lanlink::app::is_shutdown_interrupt(
+              stop_requested.load(std::memory_order_relaxed), ticked.error())) {
+        break;
+      }
       std::cerr << "runtime error: " << ticked.error() << '\n';
       exit_code = 1;
       break;
@@ -125,6 +135,9 @@ int main(int argc, char** argv) {
     if (connected != was_connected) {
       std::cout << (connected ? "LANLink connected" : "LANLink disconnected") << '\n';
       was_connected = connected;
+    }
+    if (!stop_requested.load(std::memory_order_relaxed)) {
+      std::this_thread::sleep_for(lanlink::app::idle_wait(connected));
     }
   }
 
