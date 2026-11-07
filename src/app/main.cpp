@@ -128,8 +128,9 @@ int main(int argc, char** argv) {
         break;
       }
       std::cerr << "runtime error: " << polled.error() << '\n';
-      exit_code = 1;
-      break;
+      // ConnectionManager has already closed the failed session and either
+      // scheduled an outgoing retry or discarded the incoming peer. Keep the
+      // listener and input backend alive for transient peer/socket failures.
     }
     auto ticked = runtime->tick(now);
     if (!ticked.ok()) {
@@ -138,8 +139,7 @@ int main(int argc, char** argv) {
         break;
       }
       std::cerr << "runtime error: " << ticked.error() << '\n';
-      exit_code = 1;
-      break;
+      // The manager keeps reconnect/backoff state; continue serving the node.
     }
     const bool connected = runtime->connected();
     if (connected != was_connected) {
