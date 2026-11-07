@@ -16,6 +16,7 @@ FetchContent_MakeAvailable(googletest)
 add_library(lanlink_core
   src/core/common/ids.cpp
   src/core/common/clock.cpp
+  src/core/common/debug.cpp
   src/core/common/liveness.cpp
   src/core/topology/topology.cpp
   src/core/input/arbiter.cpp

@@ -1,6 +1,7 @@
 #include "lanlink/runtime/node.hpp"
 
 #include "lanlink/common/config.hpp"
+#include "lanlink/common/debug.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -50,6 +51,7 @@ Result<void> InputNodeRuntime::start() {
   }
   edge_overflow_edge_.reset();
   edge_overflow_ = 0.0;
+  warned_remote_without_suppression_ = false;
   auto listener = transport::Listener::bind(config_.listen_endpoint, config_.connection);
   if (!listener.ok()) return Result<void>::failure(listener.error());
   listener_ = std::make_unique<transport::Listener>(std::move(listener.value()));
@@ -112,6 +114,7 @@ Result<void> InputNodeRuntime::dispatch_actions(const std::vector<RouterAction>&
     if (action.kind == RouterActionKind::kReleaseInjectedState) {
       config_.backend->release_injected_state(action.session);
     } else if (action.kind == RouterActionKind::kRestoreLocal) {
+      debug::log("suppression off/recover (transport unavailable)");
       auto recovered = config_.backend->recover();
       if (!recovered.ok()) return recovered;
     } else if (action.kind == RouterActionKind::kArmLocalSuppression ||
@@ -268,6 +271,8 @@ Result<void> InputNodeRuntime::drain_events(TimePoint now) {
       const auto inbound = *arbiter_.lease();
       arbiter_.on_local_input(event, now);
       if (!arbiter_.has_lease()) {
+        debug::log("lease revoked by local input session=", inbound.session.low,
+                   " generation=", inbound.generation);
         config_.backend->release_injected_state(inbound.session);
         RouterAction revoke;
         revoke.kind = RouterActionKind::kRevoke;
@@ -282,18 +287,38 @@ Result<void> InputNodeRuntime::drain_events(TimePoint now) {
     if (queued.pointer.has_value() && std::holds_alternative<MouseDelta>(event.payload) &&
         (router_.state() == RouterState::kLocal || router_.state() == RouterState::kHandoff)) {
       if (const auto crossing = detect_crossing(event, pointer)) {
+        debug::log("edge crossing target_display=", crossing->crossing.target.low,
+                   " entry=", crossing->crossing.entry_point.x, ",",
+                   crossing->crossing.entry_point.y,
+                   " target_edge=", static_cast<unsigned>(crossing->crossing.target_edge),
+                   " tangent_ratio=", crossing->crossing.tangent_ratio,
+                   " source_boundary=", crossing->source_boundary.x, ",",
+                   crossing->source_boundary.y);
         // Put the source cursor back on its own edge before the asynchronous
         // acquire/activate handshake. This prevents the native desktop from
         // continuing past the edge while the target cursor is entering.
         auto warped = config_.backend->warp_pointer(crossing->source_boundary);
         if (!warped.ok()) {
+          debug::log("source boundary warp failed error=", warped.error());
           recover_after_handoff_failure();
           return warped;
         }
+        debug::log("source cursor warped to boundary=", crossing->source_boundary.x, ",",
+                   crossing->source_boundary.y);
         actions = router_.on_crossing(crossing->crossing, now);
       }
     }
     if (actions.empty()) {
+      const bool remote_physical = router_.state() == RouterState::kRemote &&
+                                   event.origin == InputOrigin::kPhysical;
+      if (remote_physical && !config_.backend->status().suppression) {
+        if (!warned_remote_without_suppression_) {
+          debug::log("WARNING remote physical input while suppression=off; local cursor may move");
+          warned_remote_without_suppression_ = true;
+        }
+      } else if (config_.backend->status().suppression) {
+        warned_remote_without_suppression_ = false;
+      }
       if (router_.state() == RouterState::kRemote &&
           event.origin == InputOrigin::kPhysical && config_.backend->status().suppression) {
         actions = router_.on_suppressed_event(event, pointer, now);
@@ -310,8 +335,10 @@ Result<void> InputNodeRuntime::drain_events(TimePoint now) {
           return action.kind == RouterActionKind::kAcquire;
         });
     if (acquire_requested && !config_.backend->status().suppression) {
+      debug::log("suppression on before acquire");
       auto suppressed = config_.backend->set_suppression(true);
       if (!suppressed.ok()) {
+        debug::log("suppression on failed error=", suppressed.error());
         recover_after_handoff_failure();
         return suppressed;
       }
@@ -385,6 +412,7 @@ Result<void> InputNodeRuntime::stop(TimePoint now) {
   running_ = false;
   edge_overflow_edge_.reset();
   edge_overflow_ = 0.0;
+  warned_remote_without_suppression_ = false;
   {
     std::lock_guard lock(queue_mutex_);
     queued_events_.clear();

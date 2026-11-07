@@ -85,6 +85,7 @@ class InputNodeRuntime {
   bool queue_overflowed_{false};
   std::optional<Edge> edge_overflow_edge_;
   double edge_overflow_{0.0};
+  bool warned_remote_without_suppression_{false};
   bool running_{false};
 };
 

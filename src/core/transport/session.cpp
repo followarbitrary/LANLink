@@ -1,6 +1,7 @@
 #include "lanlink/transport/session.hpp"
 
 #include "lanlink/common/config.hpp"
+#include "lanlink/common/debug.hpp"
 
 #include <string>
 #include <utility>
@@ -18,6 +19,8 @@ PeerSession::PeerSession(Connection connection, PeerSessionConfig config)
 Result<void> PeerSession::start(IClock::time_point now) {
     if (started_)
         return Result<void>::success();
+    debug::log("send hello local_device=", config_.local_device.low,
+               " protocol=", static_cast<unsigned>(protocol::kProtocolVersion));
     auto sent = connection_.send(protocol::Hello{config_.local_device, protocol::kProtocolVersion});
     if (!sent.ok())
         return fail_and_disconnect("hello send failed", now);
@@ -38,6 +41,8 @@ Result<void> PeerSession::dispatch_actions(const std::vector<RouterAction>& acti
         Result<void> result = Result<void>::success();
         switch (action.kind) {
         case RouterActionKind::kArmLocalSuppression:
+            debug::log("suppression on session=", action.session.low,
+                       " generation=", action.generation);
             if (config_.backend)
                 result = config_.backend->set_suppression(true);
             break;
@@ -46,10 +51,16 @@ Result<void> PeerSession::dispatch_actions(const std::vector<RouterAction>& acti
                 config_.backend->release_injected_state(action.session);
             break;
         case RouterActionKind::kRestoreLocal:
+            debug::log("suppression off/recover");
             if (config_.backend)
                 result = config_.backend->recover();
             break;
         case RouterActionKind::kAcquire:
+            debug::log("send acquire target_display=", action.target_display.low,
+                       " request=", action.request.low, " entry=", action.entry.x, ",",
+                       action.entry.y, " target_edge=", static_cast<unsigned>(action.target_edge),
+                       " tangent_ratio=", action.tangent_ratio,
+                       " normalized=", action.entry_normalized);
             pending_acquire_ = action;
             result = connection_.send(protocol::AcquireRequest{action.source, action.target_display,
                                                                action.request, action.entry,
@@ -58,6 +69,8 @@ Result<void> PeerSession::dispatch_actions(const std::vector<RouterAction>& acti
                                                                action.entry_normalized});
             break;
         case RouterActionKind::kActivate:
+            debug::log("send activate session=", action.session.low,
+                       " generation=", action.generation);
             result = connection_.send(protocol::ActivateRequest{action.session, action.generation});
             break;
         case RouterActionKind::kRenew:
@@ -70,6 +83,9 @@ Result<void> PeerSession::dispatch_actions(const std::vector<RouterAction>& acti
             result = connection_.send(protocol::Release{action.session, action.generation});
             break;
         case RouterActionKind::kRevoke:
+            debug::log("send lease revoke session=", action.session.low,
+                       " generation=", action.generation,
+                       " reason=", static_cast<unsigned>(action.reason));
             result = connection_.send(
                 protocol::Revoke{action.session, action.generation, action.reason});
             break;
@@ -102,6 +118,8 @@ Result<void> PeerSession::pump(IClock::time_point now, std::chrono::milliseconds
 Result<void> PeerSession::dispatch_message(const protocol::Message& message,
                                            IClock::time_point now) {
     if (const auto* hello = std::get_if<protocol::Hello>(&message)) {
+        debug::log("receive hello device=", hello->device.low,
+                   " protocol=", static_cast<unsigned>(hello->advertised_version));
         if (config_.peer.id != DeviceId{} && config_.peer.id != hello->device)
             return fail_and_disconnect("peer identity mismatch", now);
         hello_received_ = true;
@@ -124,6 +142,12 @@ Result<void> PeerSession::dispatch_message(const protocol::Message& message,
     if (const auto* request = std::get_if<protocol::AcquireRequest>(&message)) {
         if (!config_.arbiter)
             return fail_and_disconnect("unexpected acquire request", now);
+        debug::log("receive acquire source=", request->source.low,
+                   " target_display=", request->target_display.low,
+                   " request=", request->request.low,
+                   " target_edge=", static_cast<unsigned>(request->target_edge),
+                   " tangent_ratio=", request->tangent_ratio,
+                   " normalized=", request->entry_normalized);
         pending_target_acquire_ = *request;
         const auto result = config_.arbiter->acquire(
             config_.peer, request->source, request->target_display, request->request, now);
@@ -135,6 +159,9 @@ Result<void> PeerSession::dispatch_message(const protocol::Message& message,
         } else {
             pending_target_acquire_.reset();
         }
+        debug::log("acquire ", result.granted() ? "granted" : "rejected",
+                   " request=", request->request.low,
+                   result.granted() ? "" : " error=" + result.error_message);
         auto sent = connection_.send(response);
         if (!sent.ok())
             return fail_and_disconnect("acquire response failed", now);
@@ -143,6 +170,9 @@ Result<void> PeerSession::dispatch_message(const protocol::Message& message,
     if (const auto* response = std::get_if<protocol::AcquireResponse>(&message)) {
         if (!config_.router || !pending_acquire_ || pending_acquire_->request != response->request)
             return fail_and_disconnect("unexpected acquire response", now);
+        debug::log("receive acquire response request=", response->request.low,
+                   " granted=", response->granted,
+                   response->granted ? "" : " error=" + response->error);
         AcquireResult result;
         result.granted_value = response->granted;
         result.error_message = response->error;
@@ -161,6 +191,8 @@ Result<void> PeerSession::dispatch_message(const protocol::Message& message,
     if (const auto* request = std::get_if<protocol::ActivateRequest>(&message)) {
         if (!config_.arbiter)
             return fail_and_disconnect("unexpected activate request", now);
+        debug::log("receive activate session=", request->session.low,
+                   " generation=", request->generation);
         const auto result = config_.arbiter->activate(request->session, request->generation, now);
         bool success = result.ok();
         std::string error = result.ok() ? std::string{} : result.error();
@@ -170,8 +202,12 @@ Result<void> PeerSession::dispatch_message(const protocol::Message& message,
             if (pending_target_acquire_->entry_normalized) {
                 const auto bounds = config_.backend->display_bounds();
                 if (bounds.has_value()) {
+                    debug::log("target display bounds=", bounds->left, ",", bounds->top,
+                               " ", bounds->right, "x", bounds->bottom);
                     entry = edge_entry_point(*bounds, pending_target_acquire_->target_edge,
                                              pending_target_acquire_->tangent_ratio);
+                } else {
+                    debug::log("target display bounds unavailable; using wire entry");
                 }
             }
             InputEvent warp{pending_target_acquire_->source,
@@ -180,8 +216,12 @@ Result<void> PeerSession::dispatch_message(const protocol::Message& message,
                             0,
                             PointerWarp{entry.x, entry.y},
                             InputOrigin::kRemoteInjected};
+            debug::log("target warp session=", request->session.low, " point=", entry.x, ",",
+                       entry.y);
             const auto injected = config_.backend->inject(warp);
             if (!injected.ok()) {
+                debug::log("target warp failed session=", request->session.low,
+                           " error=", injected.error());
                 config_.arbiter->revoke_current(RevokeReason::kProtocolError, now);
                 config_.backend->release_injected_state(request->session);
                 success = false;
@@ -191,6 +231,9 @@ Result<void> PeerSession::dispatch_message(const protocol::Message& message,
         pending_target_acquire_.reset();
         auto sent = connection_.send(protocol::ActivateAck{
             request->session, request->generation, success, error});
+        debug::log("activate ", success ? "completed" : "failed",
+                   " session=", request->session.low,
+                   success ? "" : " error=" + error);
         if (!sent.ok())
             return fail_and_disconnect("activate response failed", now);
         return Result<void>::success();
@@ -198,6 +241,9 @@ Result<void> PeerSession::dispatch_message(const protocol::Message& message,
     if (const auto* ack = std::get_if<protocol::ActivateAck>(&message)) {
         if (!config_.router)
             return fail_and_disconnect("unexpected activate response", now);
+        debug::log("receive activate ack session=", ack->session.low,
+                   " success=", ack->success,
+                   ack->success ? "" : " error=" + ack->error);
         return dispatch_actions(
             config_.router->on_activation_ack(ack->session, ack->generation, ack->success, now),
             now);
@@ -230,6 +276,10 @@ Result<void> PeerSession::dispatch_message(const protocol::Message& message,
             return fail_and_disconnect("unexpected input message", now);
         auto validation = config_.arbiter->validate(config_.peer, input->event, now);
         if (validation.revoked()) {
+            debug::log("lease revoke on input session=", input->event.session.low,
+                       " generation=", input->event.generation,
+                       " reason=", static_cast<unsigned>(validation.reason()),
+                       " error=", validation.error());
             auto sent = connection_.send(protocol::Revoke{
                 input->event.session, input->event.generation, validation.reason()});
             if (!sent.ok())
@@ -239,6 +289,8 @@ Result<void> PeerSession::dispatch_message(const protocol::Message& message,
         if (validation.accepted() && config_.backend) {
             auto injected = config_.backend->inject(input->event);
             if (!injected.ok()) {
+                debug::log("remote input injection failed session=", input->event.session.low,
+                           " error=", injected.error());
                 config_.arbiter->revoke_current(RevokeReason::kProtocolError, now);
                 auto sent = connection_.send(protocol::Revoke{
                     input->event.session, input->event.generation, RevokeReason::kProtocolError});
@@ -251,6 +303,8 @@ Result<void> PeerSession::dispatch_message(const protocol::Message& message,
     if (const auto* release = std::get_if<protocol::Release>(&message)) {
         if (!config_.arbiter)
             return fail_and_disconnect("unexpected release message", now);
+        debug::log("lease release session=", release->session.low,
+                   " generation=", release->generation);
         config_.arbiter->release(release->session, now);
         if (config_.backend)
             config_.backend->release_injected_state(release->session);
@@ -259,6 +313,9 @@ Result<void> PeerSession::dispatch_message(const protocol::Message& message,
     if (const auto* revoke = std::get_if<protocol::Revoke>(&message)) {
         if (!config_.router)
             return fail_and_disconnect("unexpected revoke message", now);
+        debug::log("receive lease revoke session=", revoke->session.low,
+                   " generation=", revoke->generation,
+                   " reason=", static_cast<unsigned>(revoke->reason));
         return dispatch_actions(config_.router->on_revoke(revoke->reason, now), now);
     }
     return fail_and_disconnect("unsupported protocol message", now);
@@ -287,6 +344,7 @@ Result<void> PeerSession::apply_local_actions(const std::vector<RouterAction>& a
 Result<void> PeerSession::disconnect(IClock::time_point now) {
     if (disconnected_)
         return Result<void>::success();
+    debug::log("session disconnect peer=", config_.peer.id.low);
     disconnected_ = true;
     connection_.close();
     if (config_.router) {
@@ -307,6 +365,7 @@ Result<void> PeerSession::disconnect(IClock::time_point now) {
 }
 
 Result<void> PeerSession::fail_and_disconnect(const char* error, IClock::time_point now) {
+    debug::log("session failure peer=", config_.peer.id.low, " error=", error);
     disconnect(now);
     return Result<void>::failure(error);
 }

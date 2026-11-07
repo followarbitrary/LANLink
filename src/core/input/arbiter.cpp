@@ -1,6 +1,7 @@
 #include "lanlink/input/arbiter.hpp"
 
 #include "lanlink/common/config.hpp"
+#include "lanlink/common/debug.hpp"
 
 #include <string>
 #include <type_traits>
@@ -35,6 +36,8 @@ AcquireResult InputArbiter::acquire(const AuthenticatedPeer& peer, const SourceI
                                     TimePoint now) {
     expire_if_needed(now);
     if (lease_.has_value()) {
+        debug::log("lease acquire rejected target_display=", target_display.low,
+                   " request=", request.low, " reason=already leased");
         return AcquireResult{false, {}, "target already has a lease"};
     }
 
@@ -55,23 +58,35 @@ AcquireResult InputArbiter::acquire(const AuthenticatedPeer& peer, const SourceI
     last_seq_ = 0;
     released_keys_.clear();
     released_buttons_.clear();
+    debug::log("lease acquired session=", lease.session.low,
+               " generation=", lease.generation,
+               " target_display=", target_display.low);
     return AcquireResult{true, lease, {}};
 }
 
 Result<void> InputArbiter::activate(const SessionId& session, std::uint64_t generation,
                                     TimePoint now) {
     expire_if_needed(now);
-    if (!lease_.has_value())
+    if (!lease_.has_value()) {
+        debug::log("lease activate rejected session=", session.low,
+                   " generation=", generation, " reason=no pending lease");
         return Result<void>::failure("no pending lease");
+    }
     if (lease_->session != session || lease_->generation != generation) {
+        debug::log("lease activate rejected session=", session.low,
+                   " generation=", generation, " reason=identity mismatch");
         return Result<void>::failure("session or generation mismatch");
     }
-    if (generation == 0)
+    if (generation == 0) {
+        debug::log("lease activate rejected session=", session.low,
+                   " reason=zero generation");
         return Result<void>::failure("generation must be non-zero");
+    }
     if (lease_->active)
         return Result<void>::success();
     lease_->active = true;
     last_seq_ = 0;
+    debug::log("lease activated session=", session.low, " generation=", generation);
     return Result<void>::success();
 }
 
@@ -142,6 +157,8 @@ void InputArbiter::release(const SessionId& session, TimePoint now) {
     (void)now;
     if (!lease_.has_value() || lease_->session != session)
         return;
+    debug::log("lease released session=", session.low,
+               " generation=", lease_->generation);
     clear_ledger();
     lease_.reset();
     last_seq_ = 0;
@@ -152,6 +169,9 @@ void InputArbiter::revoke_current(RevokeReason reason, TimePoint now) {
     (void)now;
     if (!lease_.has_value())
         return;
+    debug::log("lease revoked session=", lease_->session.low,
+               " generation=", lease_->generation,
+               " reason=", static_cast<unsigned>(reason));
     clear_ledger();
     lease_.reset();
     last_seq_ = 0;

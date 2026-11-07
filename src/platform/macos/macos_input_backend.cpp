@@ -1,5 +1,6 @@
 #include "lanlink/platform/macos_input_backend.hpp"
 
+#include "lanlink/common/debug.hpp"
 #include "lanlink/platform/key_mapping.hpp"
 
 #include <algorithm>
@@ -165,6 +166,7 @@ CGEventRef tap_callback(CGEventTapProxy, CGEventType type, CGEventRef event, voi
   if (type == kCGEventTapDisabledByTimeout || type == kCGEventTapDisabledByUserInput) {
     std::lock_guard lock(impl->mutex);
     impl->tap_disabled = true;
+    debug::log("mac event tap disabled type=", static_cast<int>(type), "; re-enabling");
     if (impl->tap != nullptr) CGEventTapEnable(impl->tap, true);
     return event;
   }
@@ -223,6 +225,7 @@ Result<void> MacOSInputBackend::start(EventCallback callback) {
     return Result<void>::success();
   }
   if (!AXIsProcessTrusted()) {
+    debug::log("mac backend start failed: Accessibility permission denied");
     status_.permission = false;
     status_.capture = false;
     status_.injection = false;
@@ -303,6 +306,7 @@ Result<void> MacOSInputBackend::start(EventCallback callback) {
         impl_->owner->status_.suppression = false;
         impl_->owner->status_.degraded = true;
         impl_->owner->status_.last_error = "CGEventTap stopped unexpectedly";
+        debug::log("mac event tap stopped unexpectedly");
       }
     });
   }
@@ -317,6 +321,7 @@ Result<void> MacOSInputBackend::start(EventCallback callback) {
     status_.injection = false;
     status_.degraded = true;
     status_.last_error = "CGEventTap startup timed out";
+    debug::log("mac backend start failed: event tap startup timed out");
     return Result<void>::failure(status_.last_error);
   }
   if (!impl_->ready) {
@@ -326,6 +331,7 @@ Result<void> MacOSInputBackend::start(EventCallback callback) {
     status_.injection = false;
     status_.degraded = true;
     status_.last_error = "CGEventTapCreate failed";
+    debug::log("mac backend start failed: CGEventTapCreate failed");
     return Result<void>::failure(status_.last_error);
   }
   status_.permission = true;
@@ -334,6 +340,7 @@ Result<void> MacOSInputBackend::start(EventCallback callback) {
   status_.running = true;
   status_.degraded = false;
   status_.last_error.clear();
+  debug::log("mac backend started capture=1 injection=1");
   return Result<void>::success();
 }
 
@@ -374,15 +381,25 @@ Result<void> MacOSInputBackend::set_suppression(bool enabled) {
   if (enabled && (!status_.running || !status_.capture)) {
     status_.last_error = "capture unavailable";
     status_.degraded = true;
+    debug::log("mac suppression failed enabled=", enabled, " reason=capture unavailable");
     return Result<void>::failure(status_.last_error);
   }
+  if (status_.suppression != enabled)
+    debug::log("mac suppression=", enabled ? "on" : "off");
   status_.suppression = enabled;
   impl_->suppression = enabled;
   return Result<void>::success();
 }
 
 std::optional<Rect> MacOSInputBackend::display_bounds() const noexcept {
-  return query_display_bounds();
+  const auto bounds = query_display_bounds();
+  if (bounds.has_value()) {
+    debug::log("mac display_bounds=", bounds->left, ",", bounds->top, " ", bounds->right,
+               "x", bounds->bottom);
+  } else {
+    debug::log("mac display_bounds unavailable");
+  }
+  return bounds;
 }
 
 Result<void> MacOSInputBackend::warp_pointer(Point point) {
@@ -470,8 +487,10 @@ Result<void> MacOSInputBackend::inject(const InputEvent& event) {
       status_.injection = false;
       status_.degraded = true;
       status_.last_error = "CGWarpMouseCursorPosition failed";
+      debug::log("mac pointer warp failed point=", warp->x, ",", warp->y);
       return Result<void>::failure(status_.last_error);
     }
+    debug::log("mac pointer warp point=", warp->x, ",", warp->y);
     return Result<void>::success();
   }
 

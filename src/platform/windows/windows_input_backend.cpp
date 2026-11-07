@@ -1,5 +1,6 @@
 #include "lanlink/platform/windows_input_backend.hpp"
 
+#include "lanlink/common/debug.hpp"
 #include "lanlink/platform/key_mapping.hpp"
 
 #include <algorithm>
@@ -79,6 +80,7 @@ Result<void> WindowsInputBackend::start(EventCallback callback) {
         active_instance_.load(std::memory_order_acquire) != this) {
       status_.last_error = "another Windows input backend is active";
       status_.degraded = true;
+      debug::log("windows backend start failed: another backend is active");
       return Result<void>::failure(status_.last_error);
     }
     callback_ = std::move(callback);
@@ -109,6 +111,7 @@ Result<void> WindowsInputBackend::start(EventCallback callback) {
     status_.capture = false;
     status_.degraded = true;
     status_.last_error = "low-level hook startup timed out";
+    debug::log("windows backend start failed: low-level hook startup timed out");
     return Result<void>::failure(status_.last_error);
   }
   if (!status_.capture) {
@@ -118,10 +121,13 @@ Result<void> WindowsInputBackend::start(EventCallback callback) {
     status_.running = false;
     status_.degraded = true;
     if (status_.last_error.empty()) status_.last_error = "low-level hooks unavailable";
+    debug::log("windows backend start failed: ", status_.last_error);
     return Result<void>::failure(status_.last_error);
   }
   status_.running = true;
   status_.degraded = false;
+  debug::log("windows backend started capture=", status_.capture,
+             " injection=", status_.injection);
   return Result<void>::success();
 }
 
@@ -156,8 +162,12 @@ Result<void> WindowsInputBackend::set_suppression(bool enabled) {
   if (enabled && !status_.running) {
     status_.last_error = "capture unavailable";
     status_.degraded = true;
+    debug::log("windows suppression failed enabled=", enabled,
+               " reason=capture unavailable");
     return Result<void>::failure(status_.last_error);
   }
+  if (status_.suppression != enabled)
+    debug::log("windows suppression=", enabled ? "on" : "off");
   status_.suppression = enabled;
   return Result<void>::success();
 }
@@ -168,9 +178,15 @@ std::optional<Rect> WindowsInputBackend::display_bounds() const noexcept {
   const int top = GetSystemMetrics(SM_YVIRTUALSCREEN);
   const int width = GetSystemMetrics(SM_CXVIRTUALSCREEN);
   const int height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
-  if (width <= 0 || height <= 0) return std::nullopt;
-  return Rect{static_cast<double>(left), static_cast<double>(top),
-              static_cast<double>(left + width), static_cast<double>(top + height)};
+  if (width <= 0 || height <= 0) {
+    debug::log("windows display_bounds unavailable");
+    return std::nullopt;
+  }
+  const Rect bounds{static_cast<double>(left), static_cast<double>(top),
+                    static_cast<double>(left + width), static_cast<double>(top + height)};
+  debug::log("windows display_bounds=", bounds.left, ",", bounds.top, " ", bounds.right,
+             "x", bounds.bottom);
+  return bounds;
 }
 
 Result<void> WindowsInputBackend::warp_pointer(Point point) {
@@ -256,6 +272,7 @@ Result<void> WindowsInputBackend::inject(const InputEvent& event) {
     input.mi.dy = static_cast<LONG>(windows_absolute_mouse_coordinate(warp->y, origin_y, height));
     input.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE;
     input.mi.dwExtraInfo = own_extra_info();
+    debug::log("windows pointer warp point=", warp->x, ",", warp->y);
   }
 
   {
@@ -272,6 +289,7 @@ Result<void> WindowsInputBackend::inject(const InputEvent& event) {
     status_.injection = false;
     status_.degraded = true;
     status_.last_error = "SendInput failed";
+    debug::log("windows input injection failed: SendInput failed");
     return Result<void>::failure(status_.last_error);
   }
   if (track_key || track_button) {
@@ -516,6 +534,7 @@ void WindowsInputBackend::message_thread() {
     status_.injection = false;
     status_.degraded = true;
     status_.last_error = "low-level hook thread exited unexpectedly";
+    debug::log("windows hook thread exited unexpectedly");
   }
 }
 

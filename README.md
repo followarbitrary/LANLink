@@ -85,3 +85,12 @@ Device B listens on the same port and does not pass `--connect`. Its reciprocal 
 ```
 
 Each process should print `LANLink listening on 0.0.0.0:41000`. When the peer session becomes active, both terminals print `LANLink connected`. Device A's `--connect` initiates the session; device B accepts it while listening. After the connection is established, move the pointer across the configured edge to exercise input forwarding. Connection failures are printed as `error:` or `runtime error:` messages. Press **Ctrl+C** in each terminal to stop the node and clean up input state.
+
+To inspect a handoff without logging every normal mouse delta, set `LANLINK_DEBUG=1` before
+starting either node. The debug stream reports edge crossings, acquire/activate messages,
+suppression changes, target cursor warps, and lease revocations.
+
+```sh
+LANLINK_DEBUG=1 ./build/debug/lanlink_app \
+  --device-id 1 --peer-id 2 --listen-port 41000 --connect 192.168.1.20:41000
+```

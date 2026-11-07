@@ -1,5 +1,6 @@
 #include "lanlink/app/options.hpp"
 #include "lanlink/app/runtime_loop.hpp"
+#include "lanlink/common/debug.hpp"
 #include "lanlink/runtime/node.hpp"
 
 #include <atomic>
@@ -59,6 +60,10 @@ int main(int argc, char** argv) {
     std::cerr << "error: unable to detect the local display bounds\n";
     return 3;
   }
+  lanlink::debug::log("local display bounds=", detected_bounds->left, ",", detected_bounds->top,
+                      " ", detected_bounds->right, "x", detected_bounds->bottom,
+                      " width_override=", options.width_explicit,
+                      " height_override=", options.height_explicit);
   if (!options.width_explicit) options.width = detected_bounds->width();
   if (!options.height_explicit) options.height = detected_bounds->height();
   options.left = detected_bounds->left;
