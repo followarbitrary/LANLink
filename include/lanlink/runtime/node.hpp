@@ -56,11 +56,15 @@ class InputNodeRuntime {
   struct CrossingDetection {
     Crossing crossing;
     Point source_boundary;
+    Edge source_edge{Edge::kRight};
   };
 
-  struct ReturnDetection {
-    Edge edge;
-    Point source_boundary;
+  struct RemoteCursorState {
+    Point position;
+    Rect bounds;
+    Rect source_bounds;
+    Edge source_edge{Edge::kRight};
+    Edge target_edge{Edge::kLeft};
   };
 
   struct QueuedEvent {
@@ -76,8 +80,9 @@ class InputNodeRuntime {
   Result<void> dispatch_actions(const std::vector<RouterAction>& actions, TimePoint now);
   std::optional<CrossingDetection> detect_crossing(const InputEvent& event,
                                                    const Point& pointer);
-  std::optional<ReturnDetection> detect_return_to_local(const InputEvent& event,
-                                                        const Point& pointer) const;
+  std::optional<Edge> detect_remote_exit(const InputEvent& event);
+  void begin_remote_cursor(const Crossing& crossing, Edge source_edge);
+  void clear_remote_cursor() noexcept { remote_cursor_.reset(); }
   Result<void> queue_event(const InputEvent& event);
 
   InputRuntimeConfig config_;
@@ -92,6 +97,8 @@ class InputNodeRuntime {
   bool queue_overflowed_{false};
   std::optional<Edge> edge_overflow_edge_;
   double edge_overflow_{0.0};
+  std::optional<RemoteCursorState> remote_cursor_;
+  bool require_peer_display_info_{false};
   bool warned_remote_without_suppression_{false};
   bool running_{false};
 };

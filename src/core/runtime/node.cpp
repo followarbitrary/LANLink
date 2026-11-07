@@ -39,7 +39,7 @@ Result<void> InputNodeRuntime::set_topology(ScreenTopology topology) {
 
 transport::PeerSessionConfig InputNodeRuntime::session_config() noexcept {
   return transport::PeerSessionConfig{config_.local_device, config_.peer, &router_, &arbiter_,
-                                      config_.backend};
+                                      config_.backend, config_.local_display};
 }
 
 Result<void> InputNodeRuntime::start() {
@@ -51,6 +51,8 @@ Result<void> InputNodeRuntime::start() {
   }
   edge_overflow_edge_.reset();
   edge_overflow_ = 0.0;
+  remote_cursor_.reset();
+  require_peer_display_info_ = config_.backend->display_bounds().has_value();
   warned_remote_without_suppression_ = false;
   auto listener = transport::Listener::bind(config_.listen_endpoint, config_.connection);
   if (!listener.ok()) return Result<void>::failure(listener.error());
@@ -130,6 +132,14 @@ Result<void> InputNodeRuntime::dispatch_actions(const std::vector<RouterAction>&
 
 std::optional<InputNodeRuntime::CrossingDetection> InputNodeRuntime::detect_crossing(
     const InputEvent& event, const Point& pointer) {
+  // Native backends advertise their own bounds during the handshake. Do not
+  // initialize the virtual remote cursor from the synthetic topology size
+  // until the peer has sent its real logical bounds; otherwise the first
+  // handoff on a scaled display would use a permanently wrong return edge.
+  if (require_peer_display_info_ && !router_.peer_display_bounds()) {
+    debug::log("edge crossing deferred until peer display info arrives");
+    return std::nullopt;
+  }
   const auto display_it = std::find_if(
       topology_.displays().begin(), topology_.displays().end(),
       [this](const Display& display) { return display.id == config_.local_display; });
@@ -239,59 +249,71 @@ std::optional<InputNodeRuntime::CrossingDetection> InputNodeRuntime::detect_cros
   }
   edge_overflow_edge_.reset();
   edge_overflow_ = 0.0;
-  return CrossingDetection{std::move(*crossing), source_boundary};
+  return CrossingDetection{std::move(*crossing), source_boundary, edge};
 }
 
-std::optional<InputNodeRuntime::ReturnDetection> InputNodeRuntime::detect_return_to_local(
-    const InputEvent& event, const Point& pointer) const {
-  if (event.origin != InputOrigin::kPhysical) return std::nullopt;
-  const auto* delta = std::get_if<MouseDelta>(&event.payload);
-  if (delta == nullptr || delta->zero()) return std::nullopt;
-  const auto display_it = std::find_if(
+void InputNodeRuntime::begin_remote_cursor(const Crossing& crossing, Edge source_edge) {
+  Rect bounds{0.0, 0.0, 1.0, 1.0};
+  Rect source_bounds{0.0, 0.0, 1.0, 1.0};
+  Point position = crossing.entry_point;
+  const auto source_it = std::find_if(
       topology_.displays().begin(), topology_.displays().end(),
       [this](const Display& display) { return display.id == config_.local_display; });
-  if (display_it == topology_.displays().end()) return std::nullopt;
-  const auto& bounds = display_it->logical_bounds;
-  constexpr double kBoundaryTolerance = 1.0;
+  if (source_it != topology_.displays().end()) source_bounds = source_it->logical_bounds;
+  const auto target_it = std::find_if(
+      topology_.displays().begin(), topology_.displays().end(),
+      [&crossing](const Display& display) { return display.id == crossing.target; });
+  if (target_it != topology_.displays().end()) {
+    bounds = Rect{0.0, 0.0, target_it->logical_bounds.width(),
+                  target_it->logical_bounds.height()};
+  }
 
-  Edge edge = Edge::kRight;
-  double inward_motion = 0.0;
-  const auto consider = [&](Edge candidate, double motion) {
-    if (motion > inward_motion) {
-      edge = candidate;
-      inward_motion = motion;
-    }
-  };
-  if (pointer.x <= bounds.left + kBoundaryTolerance && delta->dx > 0.0)
-    consider(Edge::kLeft, delta->dx);
-  if (pointer.x >= bounds.right - kBoundaryTolerance && delta->dx < 0.0)
-    consider(Edge::kRight, -delta->dx);
-  if (pointer.y <= bounds.top + kBoundaryTolerance && delta->dy > 0.0)
-    consider(Edge::kUp, delta->dy);
-  if (pointer.y >= bounds.bottom - kBoundaryTolerance && delta->dy < 0.0)
-    consider(Edge::kDown, -delta->dy);
-  if (inward_motion <= 0.0) return std::nullopt;
+  if (router_.peer_display_bounds().has_value() &&
+      (router_.peer_display() == crossing.target || router_.peer_display() == DisplayId{})) {
+    bounds = *router_.peer_display_bounds();
+    position = edge_entry_point(bounds, crossing.target_edge, crossing.tangent_ratio);
+  } else {
+    position.x = std::clamp(position.x, bounds.left, std::nextafter(bounds.right, bounds.left));
+    position.y = std::clamp(position.y, bounds.top, std::nextafter(bounds.bottom, bounds.top));
+  }
+  remote_cursor_ = RemoteCursorState{position, bounds, source_bounds, source_edge,
+                                     crossing.target_edge};
+  debug::log("remote cursor initialized position=", position.x, ",", position.y,
+             " bounds=", bounds.left, ",", bounds.top, " ", bounds.right, "x", bounds.bottom,
+             " source_bounds=", source_bounds.left, ",", source_bounds.top, " ",
+             source_bounds.right, "x", source_bounds.bottom,
+             " source_edge=", static_cast<unsigned>(source_edge),
+             " target_edge=", static_cast<unsigned>(crossing.target_edge));
+}
 
-  Point source_boundary = pointer;
-  switch (edge) {
+std::optional<Edge> InputNodeRuntime::detect_remote_exit(const InputEvent& event) {
+  if (!remote_cursor_.has_value() || event.origin != InputOrigin::kPhysical) return std::nullopt;
+  const auto* delta = std::get_if<MouseDelta>(&event.payload);
+  if (delta == nullptr || delta->zero()) return std::nullopt;
+
+  auto& cursor = *remote_cursor_;
+  const Point next{cursor.position.x + delta->dx, cursor.position.y + delta->dy};
+  bool exits = false;
+  switch (cursor.target_edge) {
     case Edge::kLeft:
-      source_boundary.x = bounds.left;
-      source_boundary.y = std::clamp(pointer.y, bounds.top, bounds.bottom);
+      exits = delta->dx < 0.0 && next.x < cursor.bounds.left;
       break;
     case Edge::kRight:
-      source_boundary.x = bounds.right;
-      source_boundary.y = std::clamp(pointer.y, bounds.top, bounds.bottom);
+      exits = delta->dx > 0.0 && next.x >= cursor.bounds.right;
       break;
     case Edge::kUp:
-      source_boundary.x = std::clamp(pointer.x, bounds.left, bounds.right);
-      source_boundary.y = bounds.top;
+      exits = delta->dy < 0.0 && next.y < cursor.bounds.top;
       break;
     case Edge::kDown:
-      source_boundary.x = std::clamp(pointer.x, bounds.left, bounds.right);
-      source_boundary.y = bounds.bottom;
+      exits = delta->dy > 0.0 && next.y >= cursor.bounds.bottom;
       break;
   }
-  return ReturnDetection{edge, source_boundary};
+  cursor.position.x = std::clamp(next.x, cursor.bounds.left,
+                                 std::nextafter(cursor.bounds.right, cursor.bounds.left));
+  cursor.position.y = std::clamp(next.y, cursor.bounds.top,
+                                 std::nextafter(cursor.bounds.bottom, cursor.bounds.top));
+  if (exits) return cursor.target_edge;
+  return std::nullopt;
 }
 
 Result<void> InputNodeRuntime::drain_events(TimePoint now) {
@@ -304,6 +326,7 @@ Result<void> InputNodeRuntime::drain_events(TimePoint now) {
     events.swap(queued_events_);
   }
   if (overflowed) {
+    clear_remote_cursor();
     auto cleanup = router_.on_disconnect(now);
     auto dispatched = dispatch_actions(cleanup, now);
     if (!dispatched.ok()) return dispatched;
@@ -315,6 +338,7 @@ Result<void> InputNodeRuntime::drain_events(TimePoint now) {
     const Point pointer = queued.pointer.value_or(Point{});
     std::vector<RouterAction> actions;
     const auto recover_after_handoff_failure = [&] {
+      clear_remote_cursor();
       const auto cleanup = router_.on_disconnect(now);
       (void)dispatch_actions(cleanup, now);
     };
@@ -336,18 +360,66 @@ Result<void> InputNodeRuntime::drain_events(TimePoint now) {
       }
     }
 
-    if (queued.pointer.has_value() && std::holds_alternative<MouseDelta>(event.payload) &&
+    if (std::holds_alternative<MouseDelta>(event.payload) &&
         router_.state() == RouterState::kRemote) {
-      if (const auto returning = detect_return_to_local(event, pointer)) {
-        debug::log("returning to local edge=", static_cast<unsigned>(returning->edge),
-                   " source_boundary=", returning->source_boundary.x, ",",
-                   returning->source_boundary.y);
-        auto warped = config_.backend->warp_pointer(returning->source_boundary);
+      if (const auto returning = detect_remote_exit(event)) {
+        const auto display_it = std::find_if(
+            topology_.displays().begin(), topology_.displays().end(),
+            [this](const Display& display) { return display.id == config_.local_display; });
+        if (display_it == topology_.displays().end() || !remote_cursor_.has_value()) {
+          recover_after_handoff_failure();
+          return Result<void>::failure("local display bounds unavailable during return");
+        }
+        const auto& source_bounds = remote_cursor_->source_bounds;
+        const auto& target_bounds = remote_cursor_->bounds;
+        const bool horizontal_target_edge = remote_cursor_->target_edge == Edge::kLeft ||
+                                            remote_cursor_->target_edge == Edge::kRight;
+        const double target_start = horizontal_target_edge ? target_bounds.top : target_bounds.left;
+        const double target_extent = horizontal_target_edge ? target_bounds.height() : target_bounds.width();
+        const double target_tangent = horizontal_target_edge ? remote_cursor_->position.y
+                                                             : remote_cursor_->position.x;
+        const double tangent_ratio = target_extent > 0.0
+                                         ? std::clamp((target_tangent - target_start) / target_extent,
+                                                      0.0, 1.0)
+                                         : 0.5;
+        const bool horizontal_source_edge = remote_cursor_->source_edge == Edge::kLeft ||
+                                            remote_cursor_->source_edge == Edge::kRight;
+        const double source_start = horizontal_source_edge ? source_bounds.top : source_bounds.left;
+        const double source_extent = horizontal_source_edge ? source_bounds.height() : source_bounds.width();
+        const double source_tangent = source_start + tangent_ratio * source_extent;
+        Point source_boundary{};
+        switch (remote_cursor_->source_edge) {
+          case Edge::kLeft:
+            source_boundary.x = source_bounds.left;
+            source_boundary.y = std::clamp(source_tangent, source_bounds.top,
+                                           std::nextafter(source_bounds.bottom, source_bounds.top));
+            break;
+          case Edge::kRight:
+            source_boundary.x = source_bounds.right;
+            source_boundary.y = std::clamp(source_tangent, source_bounds.top,
+                                           std::nextafter(source_bounds.bottom, source_bounds.top));
+            break;
+          case Edge::kUp:
+            source_boundary.x = std::clamp(source_tangent, source_bounds.left,
+                                           std::nextafter(source_bounds.right, source_bounds.left));
+            source_boundary.y = source_bounds.top;
+            break;
+          case Edge::kDown:
+            source_boundary.x = std::clamp(source_tangent, source_bounds.left,
+                                           std::nextafter(source_bounds.right, source_bounds.left));
+            source_boundary.y = source_bounds.bottom;
+            break;
+        }
+        debug::log("remote cursor exited target edge=", static_cast<unsigned>(*returning),
+                   " tangent_ratio=", tangent_ratio, " source_boundary=", source_boundary.x,
+                   ",", source_boundary.y);
+        auto warped = config_.backend->warp_pointer(source_boundary);
         if (!warped.ok()) {
-          debug::log("return boundary warp failed error=", warped.error());
+          debug::log("source return boundary warp failed error=", warped.error());
           recover_after_handoff_failure();
           return warped;
         }
+        clear_remote_cursor();
         actions = router_.on_return_to_local(now);
       }
     }
@@ -375,6 +447,10 @@ Result<void> InputNodeRuntime::drain_events(TimePoint now) {
         debug::log("source cursor warped to boundary=", crossing->source_boundary.x, ",",
                    crossing->source_boundary.y);
         actions = router_.on_crossing(crossing->crossing, now);
+        if (router_.state() == RouterState::kAcquiring ||
+            router_.state() == RouterState::kHandoff) {
+          begin_remote_cursor(crossing->crossing, crossing->source_edge);
+        }
       }
     }
     if (actions.empty()) {
@@ -481,6 +557,7 @@ Result<void> InputNodeRuntime::stop(TimePoint now) {
   running_ = false;
   edge_overflow_edge_.reset();
   edge_overflow_ = 0.0;
+  remote_cursor_.reset();
   warned_remote_without_suppression_ = false;
   {
     std::lock_guard lock(queue_mutex_);

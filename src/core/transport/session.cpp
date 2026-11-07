@@ -24,6 +24,17 @@ Result<void> PeerSession::start(IClock::time_point now) {
     auto sent = connection_.send(protocol::Hello{config_.local_device, protocol::kProtocolVersion});
     if (!sent.ok())
         return fail_and_disconnect("hello send failed", now);
+    if (config_.local_display != DisplayId{} && config_.backend != nullptr) {
+        if (const auto bounds = config_.backend->display_bounds(); bounds.has_value()) {
+            auto display = connection_.send(protocol::DisplayInfo{
+                config_.local_display, *bounds, 1.0});
+            if (!display.ok())
+                return fail_and_disconnect("display info send failed", now);
+            debug::log("send display info display=", config_.local_display.low,
+                       " bounds=", bounds->left, ",", bounds->top, " ", bounds->right,
+                       "x", bounds->bottom);
+        }
+    }
     started_ = true;
     next_heartbeat_ = now + m0::kHeartbeatInterval;
     return Result<void>::success();
@@ -126,6 +137,18 @@ Result<void> PeerSession::dispatch_message(const protocol::Message& message,
             return fail_and_disconnect("peer identity mismatch", now);
         hello_received_ = true;
         liveness_.mark_alive(now);
+        return Result<void>::success();
+    }
+    if (const auto* display = std::get_if<protocol::DisplayInfo>(&message)) {
+        if (!hello_received_)
+            return fail_and_disconnect("hello required", now);
+        debug::log("receive display info display=", display->display.low,
+                   " bounds=", display->logical_bounds.left, ",", display->logical_bounds.top,
+                   " ", display->logical_bounds.right, "x", display->logical_bounds.bottom,
+                   " scale=", display->scale);
+        if (config_.router)
+            config_.router->set_peer_display_info(display->display, display->logical_bounds,
+                                                  display->scale);
         return Result<void>::success();
     }
     if (const auto* heartbeat = std::get_if<protocol::Heartbeat>(&message)) {

@@ -13,7 +13,7 @@ namespace {
 constexpr std::uint8_t to_u8(MessageType type) { return static_cast<std::uint8_t>(type); }
 
 bool valid_type(std::uint8_t value) {
-    return value >= to_u8(MessageType::kHello) && value <= to_u8(MessageType::kError);
+    return value >= to_u8(MessageType::kHello) && value <= to_u8(MessageType::kDisplayInfo);
 }
 bool valid_reason(std::uint8_t value) {
     return value <= static_cast<std::uint8_t>(RevokeReason::kProtocolError);
@@ -267,6 +267,20 @@ Result<std::vector<std::uint8_t>> encode(const Message& message) {
                 w.id(value.device);
                 w.u16(value.advertised_version);
                 return make_frame(MessageType::kHello, std::move(w));
+            } else if constexpr (std::is_same_v<T, DisplayInfo>) {
+                const auto& bounds = value.logical_bounds;
+                if (zero(value.display) || !finite(bounds.left) || !finite(bounds.top) ||
+                    !finite(bounds.right) || !finite(bounds.bottom) ||
+                    !(bounds.left < bounds.right) || !(bounds.top < bounds.bottom) ||
+                    !finite(value.scale) || value.scale <= 0.0)
+                    return Result<std::vector<std::uint8_t>>::failure("invalid display info");
+                w.id(value.display);
+                w.f64(bounds.left);
+                w.f64(bounds.top);
+                w.f64(bounds.right);
+                w.f64(bounds.bottom);
+                w.f64(value.scale);
+                return make_frame(MessageType::kDisplayInfo, std::move(w));
             } else if constexpr (std::is_same_v<T, Heartbeat>) {
                 w.u64(value.counter);
                 return make_frame(MessageType::kHeartbeat, std::move(w));
@@ -390,6 +404,21 @@ Result<Message> decode(std::span<const std::uint8_t> frame) {
         if (!r.id(value.device) || !r.u16(value.advertised_version) || zero(value.device) ||
             value.advertised_version != kProtocolVersion)
             return fail("invalid hello");
+        message = value;
+        break;
+    }
+    case MessageType::kDisplayInfo: {
+        DisplayInfo value;
+        if (!r.id(value.display) || !r.f64(value.logical_bounds.left) ||
+            !r.f64(value.logical_bounds.top) || !r.f64(value.logical_bounds.right) ||
+            !r.f64(value.logical_bounds.bottom) || !r.f64(value.scale) ||
+            zero(value.display) || !finite(value.logical_bounds.left) ||
+            !finite(value.logical_bounds.top) || !finite(value.logical_bounds.right) ||
+            !finite(value.logical_bounds.bottom) ||
+            !(value.logical_bounds.left < value.logical_bounds.right) ||
+            !(value.logical_bounds.top < value.logical_bounds.bottom) || !finite(value.scale) ||
+            value.scale <= 0.0)
+            return fail("invalid display info");
         message = value;
         break;
     }

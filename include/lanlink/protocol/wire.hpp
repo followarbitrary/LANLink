@@ -15,11 +15,11 @@
 
 namespace lanlink::protocol {
 
-// Version 2 adds the target-edge and normalized-tangent fields to
-// AcquireRequest.  Keep the version in the frame header and Hello handshake
-// aligned so an older executable rejects the connection before trying to
-// decode a newer payload as the legacy schema.
-constexpr std::uint8_t kProtocolVersion = 2;
+// Version 3 adds DisplayInfo, which lets each peer advertise the native
+// logical desktop bounds used for target cursor tracking. Keep the version in
+// the frame header and Hello handshake aligned so an older executable rejects
+// the connection before trying to decode a newer payload.
+constexpr std::uint8_t kProtocolVersion = 3;
 constexpr std::size_t kHeaderSize = 12;
 constexpr std::size_t kMaxFrameSize = 64 * 1024;
 constexpr std::size_t kMaxErrorText = 4 * 1024;
@@ -37,12 +37,24 @@ enum class MessageType : std::uint8_t {
     kRelease,
     kRevoke,
     kError,
+    kDisplayInfo,
 };
 
 struct Hello {
     DeviceId device;
     std::uint16_t advertised_version{};
     friend bool operator==(const Hello&, const Hello&) = default;
+};
+struct DisplayInfo {
+    DisplayId display;
+    Rect logical_bounds;
+    double scale{1.0};
+    friend bool operator==(const DisplayInfo& a, const DisplayInfo& b) {
+        return a.display == b.display && a.logical_bounds.left == b.logical_bounds.left &&
+               a.logical_bounds.top == b.logical_bounds.top &&
+               a.logical_bounds.right == b.logical_bounds.right &&
+               a.logical_bounds.bottom == b.logical_bounds.bottom && a.scale == b.scale;
+    }
 };
 struct Heartbeat {
     std::uint64_t counter{};
@@ -112,8 +124,8 @@ struct ErrorMessage {
 };
 
 using Message =
-    std::variant<Hello, Heartbeat, AcquireRequest, AcquireResponse, ActivateRequest, ActivateAck,
-                 RenewRequest, RenewAck, InputMessage, Release, Revoke, ErrorMessage>;
+    std::variant<Hello, DisplayInfo, Heartbeat, AcquireRequest, AcquireResponse, ActivateRequest,
+                 ActivateAck, RenewRequest, RenewAck, InputMessage, Release, Revoke, ErrorMessage>;
 
 Result<std::vector<std::uint8_t>> encode(const Message& message);
 Result<Message> decode(std::span<const std::uint8_t> frame);

@@ -22,6 +22,7 @@ struct PeerSessionConfig {
     InputRouter* router{nullptr};
     InputArbiter* arbiter{nullptr};
     platform::IInputBackend* backend{nullptr};
+    DisplayId local_display{};
 };
 
 class PeerSession {

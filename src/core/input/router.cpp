@@ -3,6 +3,7 @@
 #include "lanlink/common/config.hpp"
 #include "lanlink/common/debug.hpp"
 
+#include <cmath>
 #include <type_traits>
 #include <utility>
 
@@ -14,6 +15,17 @@ InputRouter::InputRouter(SourceId source, AuthenticatedPeer peer, DisplayId loca
                          RequestId request, std::size_t queue_capacity)
     : source_(source), peer_(peer), local_display_(local_display),
       request_(request == RequestId{} ? source : request), queue_capacity_(queue_capacity) {}
+
+void InputRouter::set_peer_display_info(DisplayId display, Rect bounds, double scale) {
+  if (display == DisplayId{} || !(bounds.left < bounds.right) ||
+      !(bounds.top < bounds.bottom) || !std::isfinite(scale) || scale <= 0.0)
+    return;
+  peer_display_ = display;
+  peer_display_bounds_ = bounds;
+  peer_display_scale_ = scale;
+  debug::log("peer display info display=", display.low, " bounds=", bounds.left, ",",
+             bounds.top, " ", bounds.right, "x", bounds.bottom, " scale=", scale);
+}
 
 bool InputRouter::is_button(const Payload& payload) {
     return std::holds_alternative<MouseButton>(payload);

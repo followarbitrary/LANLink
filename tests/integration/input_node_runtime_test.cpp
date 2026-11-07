@@ -228,6 +228,7 @@ TEST(InputNodeRuntime, RemoteSourceReturnsToLocalAtEdge) {
   ASSERT_TRUE(right_result.ok()) << right_result.error();
   auto left = std::move(left_result.value());
   auto right = std::move(right_result.value());
+  right_backend.set_display_bounds(Rect{0.0, 0.0, 200.0, 100.0});
   ASSERT_TRUE(left->set_topology(topology_for(id(310), id(320), true)).ok());
   ASSERT_TRUE(right->set_topology(topology_for(id(320), id(310), true)).ok());
   ASSERT_TRUE(left->start().ok());
@@ -245,16 +246,95 @@ TEST(InputNodeRuntime, RemoteSourceReturnsToLocalAtEdge) {
   ASSERT_EQ(left->router().state(), RouterState::kRemote);
   ASSERT_TRUE(right->arbiter().has_active_lease());
 
-  // The source is already remote. Moving inward from its local edge releases
-  // the target lease and restores this node's local cursor.
+  // The source is already remote. The virtual target cursor must travel all
+  // the way back to its entry edge before the target lease is released.
   left_backend.set_pointer_position(Point{100.0, 50.0});
+  for (int index = 0; index < 2; ++index) {
+    left_backend.emit_physical(
+        InputEvent{{}, {}, 0, 0, MouseDelta{-4.0, 0.0}, InputOrigin::kPhysical});
+    ASSERT_TRUE(left->poll(now, 0ms).ok());
+    pump_pair(*left, *right, now, 2);
+    EXPECT_EQ(left->router().state(), RouterState::kRemote);
+  }
   left_backend.emit_physical(
-      InputEvent{{}, {}, 0, 0, MouseDelta{-4.0, 0.0}, InputOrigin::kPhysical});
+      InputEvent{{}, {}, 0, 0, MouseDelta{-1.0, 0.0}, InputOrigin::kPhysical});
   ASSERT_TRUE(left->poll(now, 0ms).ok());
   pump_pair(*left, *right, now, 4);
   EXPECT_EQ(left->router().state(), RouterState::kLocal);
   EXPECT_FALSE(left_backend.status().suppression);
   EXPECT_FALSE(right->arbiter().has_lease());
+}
+
+TEST(InputNodeRuntime, RemoteReturnMapsTargetTangentToSourceBounds) {
+  FakeInputBackend left_backend;
+  FakeInputBackend right_backend;
+  auto left_result = InputNodeRuntime::create(config(
+      id(401), id(402), AuthenticatedPeer{id(403)}, id(410), Endpoint{"127.0.0.1", 0},
+      &left_backend));
+  auto right_result = InputNodeRuntime::create(config(
+      id(403), id(404), AuthenticatedPeer{id(401)}, id(420), Endpoint{"127.0.0.1", 0},
+      &right_backend));
+  ASSERT_TRUE(left_result.ok()) << left_result.error();
+  ASSERT_TRUE(right_result.ok()) << right_result.error();
+  auto left = std::move(left_result.value());
+  auto right = std::move(right_result.value());
+  right_backend.set_display_bounds(Rect{0.0, 0.0, 200.0, 100.0});
+
+  ScreenTopology left_topology;
+  ASSERT_TRUE(left_topology
+                  .set_snapshot(
+                      1,
+                      {Display{id(1), id(410), {0.0, 0.0, 100.0, 200.0}, 1.0, Rotation::k0},
+                       Display{id(3), id(420), {100.0, 0.0, 300.0, 100.0}, 1.0,
+                               Rotation::k0}},
+                      {ScreenLink{id(410), Edge::kRight, id(420), Edge::kLeft, 0.0, 1.0, 1}})
+                  .ok());
+  ScreenTopology right_topology;
+  ASSERT_TRUE(right_topology
+                  .set_snapshot(
+                      1,
+                      {Display{id(3), id(420), {0.0, 0.0, 200.0, 100.0}, 1.0, Rotation::k0},
+                       Display{id(1), id(410), {200.0, 0.0, 300.0, 200.0}, 1.0,
+                               Rotation::k0}},
+                      {ScreenLink{id(420), Edge::kRight, id(410), Edge::kLeft, 0.0, 1.0, 1}})
+                  .ok());
+  ASSERT_TRUE(left->set_topology(std::move(left_topology)).ok());
+  ASSERT_TRUE(right->set_topology(std::move(right_topology)).ok());
+  ASSERT_TRUE(left->start().ok());
+  ASSERT_TRUE(right->start().ok());
+  ASSERT_TRUE(left->connect_peer(right->local_endpoint()).ok());
+
+  IClock::time_point now{};
+  pump_pair(*left, *right, now, 20);
+
+  left_backend.set_pointer_position(Point{100.0, 150.0});
+  left_backend.emit_physical(
+      InputEvent{{}, {}, 0, 0, MouseDelta{4.0, 0.0}, InputOrigin::kPhysical});
+  ASSERT_TRUE(left->poll(now, 0ms).ok());
+  pump_pair(*left, *right, now, 12);
+  ASSERT_EQ(left->router().state(), RouterState::kRemote);
+  ASSERT_TRUE(right->arbiter().has_active_lease());
+  ASSERT_EQ(right_backend.injected_events().size(), 1u);
+  const auto& entry = std::get<PointerWarp>(right_backend.injected_events().front().payload);
+  EXPECT_DOUBLE_EQ(entry.x, 8.0);
+  EXPECT_DOUBLE_EQ(entry.y, 75.0);
+
+  left_backend.set_pointer_position(Point{100.0, 0.0});
+  for (int index = 0; index < 2; ++index) {
+    left_backend.emit_physical(
+        InputEvent{{}, {}, 0, 0, MouseDelta{-4.0, 0.0}, InputOrigin::kPhysical});
+    ASSERT_TRUE(left->poll(now, 0ms).ok());
+    pump_pair(*left, *right, now, 2);
+    EXPECT_EQ(left->router().state(), RouterState::kRemote);
+  }
+  left_backend.emit_physical(
+      InputEvent{{}, {}, 0, 0, MouseDelta{-1.0, 0.0}, InputOrigin::kPhysical});
+  ASSERT_TRUE(left->poll(now, 0ms).ok());
+  pump_pair(*left, *right, now, 4);
+  EXPECT_EQ(left->router().state(), RouterState::kLocal);
+  ASSERT_TRUE(left_backend.pointer_position().has_value());
+  EXPECT_DOUBLE_EQ(left_backend.pointer_position()->x, 100.0);
+  EXPECT_DOUBLE_EQ(left_backend.pointer_position()->y, 150.0);
 }
 
 TEST(InputNodeRuntime, NoPeerOverflowStillReleasesInjectedStateAndRestoresLocal) {

@@ -97,6 +97,7 @@ Result<void> WindowsInputBackend::start(EventCallback callback) {
     have_last_point_ = false;
     pending_move_dx_ = 0.0;
     pending_move_dy_ = 0.0;
+    pending_injected_moves_.clear();
     hook_thread_ = std::thread(&WindowsInputBackend::message_thread, this);
   }
 
@@ -137,13 +138,17 @@ Result<void> WindowsInputBackend::start(EventCallback callback) {
 void WindowsInputBackend::stop() {
   std::lock_guard operation_lock(operation_mutex_);
   DWORD thread_id = 0;
+  bool restore_cursor = false;
   {
     std::lock_guard lock(mutex_);
     status_.running = false;
     status_.suppression = false;
+    restore_cursor = cursor_hidden_;
+    cursor_hidden_ = false;
     stop_requested_.store(true, std::memory_order_release);
     thread_id = hook_thread_id_;
   }
+  if (restore_cursor) (void)ShowCursor(TRUE);
   if (thread_id != 0) PostThreadMessageW(thread_id, WM_QUIT, 0, 0);
   join_thread();
   std::lock_guard lock(mutex_);
@@ -158,9 +163,12 @@ void WindowsInputBackend::stop() {
   have_last_point_ = false;
   pending_move_dx_ = 0.0;
   pending_move_dy_ = 0.0;
+  pending_injected_moves_.clear();
 }
 
 Result<void> WindowsInputBackend::set_suppression(bool enabled) {
+  std::lock_guard operation_lock(operation_mutex_);
+  bool update_cursor = false;
   std::lock_guard lock(mutex_);
   if (enabled && !status_.running) {
     status_.last_error = "capture unavailable";
@@ -169,9 +177,22 @@ Result<void> WindowsInputBackend::set_suppression(bool enabled) {
                " reason=capture unavailable");
     return Result<void>::failure(status_.last_error);
   }
-  if (status_.suppression != enabled)
+  if (status_.suppression != enabled) {
     debug::log("windows suppression=", enabled ? "on" : "off");
+    update_cursor = true;
+  }
   status_.suppression = enabled;
+  if (update_cursor) {
+    if (enabled) {
+      (void)ShowCursor(FALSE);
+      cursor_hidden_ = true;
+      debug::log("windows cursor hidden");
+    } else if (cursor_hidden_) {
+      (void)ShowCursor(TRUE);
+      cursor_hidden_ = false;
+      debug::log("windows cursor shown");
+    }
+  }
   return Result<void>::success();
 }
 
@@ -287,8 +308,48 @@ Result<void> WindowsInputBackend::inject(const InputEvent& event) {
       return Result<void>::failure(status_.last_error);
     }
   }
-  if (!send_inputs(&input, 1)) {
+  // SendInput relative motion is affected by the user's pointer acceleration
+  // curve. Deskflow temporarily switches to 1:1 motion for the injected
+  // delta, then restores the user's settings so the remote cursor advances at
+  // the same rate as the captured raw delta on scaled Windows desktops.
+  int old_mouse[3]{};
+  UINT old_speed = 0;
+  bool mouse_settings_changed = false;
+  bool speed_changed = false;
+  const bool relative_move = std::holds_alternative<MouseDelta>(event.payload);
+  if (relative_move && SystemParametersInfoW(SPI_GETMOUSE, 0, old_mouse, 0) != FALSE &&
+      SystemParametersInfoW(SPI_GETMOUSESPEED, 0, &old_speed, 0) != FALSE) {
+    int one_to_one[3] = {0, 0, 0};
+    UINT one_to_one_speed = 1;
+    mouse_settings_changed =
+        SystemParametersInfoW(SPI_SETMOUSE, 0, one_to_one, 0) != FALSE;
+    speed_changed =
+        SystemParametersInfoW(SPI_SETMOUSESPEED, 0, &one_to_one_speed, 0) != FALSE;
+  }
+
+  const bool track_injected_move =
+      relative_move && (injected_move_dx != 0 || injected_move_dy != 0);
+  if (track_injected_move) {
     std::lock_guard lock(mutex_);
+    pending_injected_moves_.push_back(PendingInjectedMove{
+        injected_move_dx, injected_move_dy,
+        std::chrono::steady_clock::now() + std::chrono::milliseconds{250}});
+    while (pending_injected_moves_.size() > 64) pending_injected_moves_.pop_front();
+  }
+  const bool sent = send_inputs(&input, 1);
+  if (mouse_settings_changed) {
+    (void)SystemParametersInfoW(SPI_SETMOUSE, 0, old_mouse, 0);
+  }
+  if (speed_changed) {
+    (void)SystemParametersInfoW(SPI_SETMOUSESPEED, 0, &old_speed, 0);
+  }
+  if (!sent) {
+    std::lock_guard lock(mutex_);
+    if (track_injected_move && !pending_injected_moves_.empty()) {
+      const auto& pending = pending_injected_moves_.back();
+      if (pending.dx == injected_move_dx && pending.dy == injected_move_dy)
+        pending_injected_moves_.pop_back();
+    }
     status_.injection = false;
     status_.degraded = true;
     status_.last_error = "SendInput failed";
@@ -506,6 +567,27 @@ void WindowsInputBackend::handle_raw_input(HRAWINPUT input) {
   if (mouse.ulExtraInformation == static_cast<ULONG>(own_extra_info())) return;
   if ((mouse.usFlags & MOUSE_MOVE_ABSOLUTE) != 0) return;
   if (mouse.lLastX == 0 && mouse.lLastY == 0) return;
+  {
+    std::lock_guard lock(mutex_);
+    const auto now = std::chrono::steady_clock::now();
+    for (auto it = pending_injected_moves_.begin(); it != pending_injected_moves_.end();) {
+      if (now >= it->deadline)
+        it = pending_injected_moves_.erase(it);
+      else
+        ++it;
+    }
+    const auto injected = std::find_if(
+        pending_injected_moves_.begin(), pending_injected_moves_.end(),
+        [&mouse](const PendingInjectedMove& pending) {
+          return pending.dx == mouse.lLastX && pending.dy == mouse.lLastY;
+        });
+    if (injected != pending_injected_moves_.end()) {
+      pending_injected_moves_.erase(injected);
+      debug::log("windows ignored echoed injected move dx=", mouse.lLastX,
+                 " dy=", mouse.lLastY);
+      return;
+    }
+  }
   InputEvent event{};
   event.origin = InputOrigin::kPhysical;
   event.payload = MouseDelta{static_cast<double>(mouse.lLastX),
