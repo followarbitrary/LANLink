@@ -15,7 +15,11 @@
 
 namespace lanlink::protocol {
 
-constexpr std::uint8_t kProtocolVersion = 1;
+// Version 2 adds the target-edge and normalized-tangent fields to
+// AcquireRequest.  Keep the version in the frame header and Hello handshake
+// aligned so an older executable rejects the connection before trying to
+// decode a newer payload as the legacy schema.
+constexpr std::uint8_t kProtocolVersion = 2;
 constexpr std::size_t kHeaderSize = 12;
 constexpr std::size_t kMaxFrameSize = 64 * 1024;
 constexpr std::size_t kMaxErrorText = 4 * 1024;

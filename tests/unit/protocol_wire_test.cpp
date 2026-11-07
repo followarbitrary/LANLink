@@ -64,7 +64,8 @@ TEST(ProtocolWire, EncodesGoldenHeaderInNetworkOrder) {
     auto encoded = encode(Heartbeat{0x0102030405060708ULL});
     ASSERT_TRUE(encoded.ok());
     const std::vector<std::uint8_t> expected = {
-        'L', 'L', 'N', 'K', 1, static_cast<std::uint8_t>(MessageType::kHeartbeat),
+        'L', 'L', 'N', 'K', kProtocolVersion,
+        static_cast<std::uint8_t>(MessageType::kHeartbeat),
         0,   0,   0,   0,   0, 8,
         1,   2,   3,   4,   5, 6,
         7,   8};
@@ -78,7 +79,7 @@ TEST(ProtocolWire, RejectsMalformedHeadersAndTrailingBytes) {
     bytes[0] = 'X';
     EXPECT_FALSE(decode(bytes).ok());
     bytes = encoded.value();
-    bytes[4] = 2;
+    bytes[4] = static_cast<std::uint8_t>(kProtocolVersion + 1);
     EXPECT_FALSE(decode(bytes).ok());
     bytes = encoded.value();
     bytes[6] = 1;
@@ -100,7 +101,8 @@ TEST(ProtocolWire, RejectsMalformedHeadersAndTrailingBytes) {
 
 TEST(ProtocolWire, RejectsInvalidValuesAndSizeLimits) {
     EXPECT_FALSE(encode(Hello{{}, kProtocolVersion}).ok());
-    EXPECT_FALSE(encode(Hello{id(1, 1), 2}).ok());
+    EXPECT_FALSE(encode(Hello{id(1, 1),
+                              static_cast<std::uint16_t>(kProtocolVersion + 1)}).ok());
     EXPECT_FALSE(encode(AcquireRequest{{}, id(1, 1), id(2, 2), Point{0, 0}}).ok());
     EXPECT_FALSE(encode(Revoke{{}, 1, RevokeReason::kProtocolError}).ok());
     EXPECT_FALSE(encode(AcquireResponse{id(1, 1), true, {}, 0, ""}).ok());
@@ -168,7 +170,8 @@ TEST(ProtocolWire, FrameDecoderHandlesSplitAndCoalescedFrames) {
 TEST(ProtocolWire, FrameDecoderClearsAfterOversizedOrMalformedFrame) {
     FrameDecoder decoder;
     std::vector<std::uint8_t> header = {
-        'L', 'L', 'N',  'K',  1,    static_cast<std::uint8_t>(MessageType::kHeartbeat),
+        'L', 'L', 'N',  'K',  kProtocolVersion,
+        static_cast<std::uint8_t>(MessageType::kHeartbeat),
         0,   0,   0xff, 0xff, 0xff, 0xff};
     auto result = decoder.feed(header);
     EXPECT_FALSE(result.ok());
