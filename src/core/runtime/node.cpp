@@ -285,7 +285,8 @@ Result<void> InputNodeRuntime::drain_events(TimePoint now) {
     }
 
     if (queued.pointer.has_value() && std::holds_alternative<MouseDelta>(event.payload) &&
-        (router_.state() == RouterState::kLocal || router_.state() == RouterState::kHandoff)) {
+        (router_.state() == RouterState::kLocal || router_.state() == RouterState::kHandoff ||
+         router_.state() == RouterState::kRemote)) {
       if (const auto crossing = detect_crossing(event, pointer)) {
         debug::log("edge crossing target_display=", crossing->crossing.target.low,
                    " entry=", crossing->crossing.entry_point.x, ",",

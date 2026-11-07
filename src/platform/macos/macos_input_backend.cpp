@@ -8,6 +8,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <cmath>
+#include <deque>
 #include <mutex>
 #include <optional>
 #include <thread>
@@ -147,6 +148,7 @@ struct MacOSInputBackend::Impl {
   bool stop_requested{false};
   bool tap_disabled{false};
   bool suppression{false};
+  bool cursor_hidden{false};
   CGPoint last_point{};
   bool have_last_point{false};
   // CGWarpMouseCursorPosition emits a normal mouse-moved event without the
@@ -154,8 +156,18 @@ struct MacOSInputBackend::Impl {
   // warp point so a remote handoff is not mistaken for local input and
   // immediately revoked. Keep the point separately because remote deltas may
   // be posted before the asynchronous warp event reaches the tap.
-  std::optional<CGPoint> ignored_warp_point;
-  std::chrono::steady_clock::time_point ignored_warp_deadline{};
+  struct PendingWarp {
+    CGPoint point{};
+    std::chrono::steady_clock::time_point deadline{};
+  };
+  struct PendingInjectedMove {
+    CGPoint point{};
+    std::int64_t dx{};
+    std::int64_t dy{};
+    std::chrono::steady_clock::time_point deadline{};
+  };
+  std::deque<PendingWarp> ignored_warps;
+  std::deque<PendingInjectedMove> pending_injected_moves;
   std::unordered_map<SessionId, HeldState> held;
 };
 
@@ -170,7 +182,8 @@ CGEventRef tap_callback(CGEventTapProxy, CGEventType type, CGEventRef event, voi
     if (impl->tap != nullptr) CGEventTapEnable(impl->tap, true);
     return event;
   }
-  if (CGEventGetIntegerValueField(event, kCGEventSourceUserData) == kOwnEventUserData) return event;
+  const bool own_event =
+      CGEventGetIntegerValueField(event, kCGEventSourceUserData) == kOwnEventUserData;
 
   std::optional<InputEvent> converted;
   IInputBackend::EventCallback callback;
@@ -180,28 +193,52 @@ CGEventRef tap_callback(CGEventTapProxy, CGEventType type, CGEventRef event, voi
     if (type == kCGEventMouseMoved || type == kCGEventLeftMouseDragged ||
         type == kCGEventRightMouseDragged || type == kCGEventOtherMouseDragged) {
       const CGPoint point = CGEventGetLocation(event);
-      if (impl->ignored_warp_point.has_value()) {
-        const auto expected = *impl->ignored_warp_point;
-        // Quartz may quantize a fractional warp coordinate to a physical
-        // pixel before delivering the callback. Treat a one-point neighborhood
-        // as the same warp while preserving real movement beyond it.
-        constexpr double kWarpTolerance = 1.0;
-        const bool is_warp = std::abs(point.x - expected.x) <= kWarpTolerance &&
-                             std::abs(point.y - expected.y) <= kWarpTolerance;
+      const auto now = std::chrono::steady_clock::now();
+      for (auto it = impl->pending_injected_moves.begin();
+           it != impl->pending_injected_moves.end();) {
+        if (now >= it->deadline)
+          it = impl->pending_injected_moves.erase(it);
+        else
+          ++it;
+      }
+      const auto event_dx = CGEventGetIntegerValueField(event, kCGMouseEventDeltaX);
+      const auto event_dy = CGEventGetIntegerValueField(event, kCGMouseEventDeltaY);
+      for (auto it = impl->pending_injected_moves.begin();
+           it != impl->pending_injected_moves.end(); ++it) {
+        const bool same_point = std::abs(point.x - it->point.x) <= 1.0 &&
+                                std::abs(point.y - it->point.y) <= 1.0;
+        const bool same_delta = event_dx == it->dx && event_dy == it->dy;
+        if (same_point && same_delta) {
+          impl->pending_injected_moves.erase(it);
+          if (!own_event)
+            debug::log("mac ignored echoed injected move point=", point.x, ",", point.y);
+          return own_event || !impl->suppression ? event : nullptr;
+        }
+      }
+      // CGWarpMouseCursorPosition is asynchronous. Keep all recent warp
+      // points because an older source-edge warp can arrive after a newer
+      // target-entry warp. A single slot would misclassify that stale event
+      // as physical input and revoke the new lease.
+      for (auto it = impl->ignored_warps.begin(); it != impl->ignored_warps.end();) {
+        if (now >= it->deadline)
+          it = impl->ignored_warps.erase(it);
+        else
+          ++it;
+      }
+      constexpr double kWarpTolerance = 1.0;
+      for (auto it = impl->ignored_warps.begin(); it != impl->ignored_warps.end(); ++it) {
+        const bool is_warp = std::abs(point.x - it->point.x) <= kWarpTolerance &&
+                             std::abs(point.y - it->point.y) <= kWarpTolerance;
         if (is_warp) {
           impl->last_point = point;
           impl->have_last_point = true;
-          impl->ignored_warp_point.reset();
-          impl->ignored_warp_deadline = {};
+          impl->ignored_warps.erase(it);
           debug::log("mac ignored asynchronous warp event point=", point.x, ",", point.y);
           return impl->suppression ? nullptr : event;
         }
-        if (std::chrono::steady_clock::now() >= impl->ignored_warp_deadline) {
-          impl->ignored_warp_point.reset();
-          impl->ignored_warp_deadline = {};
-        }
       }
     }
+    if (own_event) return event;
     converted = convert_event(type, event, impl->last_point, impl->have_last_point);
     callback = impl->callback;
     suppress = impl->suppression;
@@ -244,9 +281,10 @@ Result<void> MacOSInputBackend::start(EventCallback callback) {
     impl_->stop_requested = false;
     impl_->tap_disabled = false;
     impl_->suppression = false;
+    impl_->cursor_hidden = false;
     impl_->have_last_point = false;
-    impl_->ignored_warp_point.reset();
-    impl_->ignored_warp_deadline = {};
+    impl_->ignored_warps.clear();
+    impl_->pending_injected_moves.clear();
     impl_->thread = std::thread([this] {
       CFMachPortRef tap = CGEventTapCreate(
           kCGHIDEventTap, kCGHeadInsertEventTap, kCGEventTapOptionDefault,
@@ -355,7 +393,7 @@ void MacOSInputBackend::stop() {
   bool restore_cursor = false;
   {
     std::lock_guard lock(impl_->mutex);
-    restore_cursor = impl_->suppression || status_.suppression;
+    restore_cursor = impl_->suppression || status_.suppression || impl_->cursor_hidden;
     status_.running = false;
     status_.suppression = false;
     impl_->suppression = false;
@@ -369,6 +407,9 @@ void MacOSInputBackend::stop() {
     if (association_error != kCGErrorSuccess)
       debug::log("mac cursor association restore failed error=",
                  static_cast<int>(association_error));
+    const auto cursor_error = CGDisplayShowCursor(kCGNullDirectDisplay);
+    if (cursor_error != kCGErrorSuccess)
+      debug::log("mac cursor show failed error=", static_cast<int>(cursor_error));
   }
   for (const auto& session : sessions) release_injected_state(session);
   if (loop != nullptr) {
@@ -380,8 +421,8 @@ void MacOSInputBackend::stop() {
   std::lock_guard lock(impl_->mutex);
   impl_->callback = {};
   impl_->have_last_point = false;
-  impl_->ignored_warp_point.reset();
-  impl_->ignored_warp_deadline = {};
+  impl_->ignored_warps.clear();
+  impl_->pending_injected_moves.clear();
   status_.capture = false;
   status_.injection = status_.permission && impl_->held.empty();
   status_.degraded = !status_.permission || !status_.injection;
@@ -402,6 +443,19 @@ Result<void> MacOSInputBackend::set_suppression(bool enabled) {
     if (association_error != kCGErrorSuccess)
       debug::log("mac cursor association failed enabled=", enabled,
                  " error=", static_cast<int>(association_error));
+    if (enabled) {
+      const auto cursor_error = CGDisplayHideCursor(kCGNullDirectDisplay);
+      if (cursor_error != kCGErrorSuccess)
+        debug::log("mac cursor hide failed error=", static_cast<int>(cursor_error));
+      else
+        impl_->cursor_hidden = true;
+    } else if (impl_->cursor_hidden) {
+      const auto cursor_error = CGDisplayShowCursor(kCGNullDirectDisplay);
+      if (cursor_error != kCGErrorSuccess)
+        debug::log("mac cursor show failed error=", static_cast<int>(cursor_error));
+      else
+        impl_->cursor_hidden = false;
+    }
     debug::log("mac suppression=", enabled ? "on" : "off");
   }
   status_.suppression = enabled;
@@ -486,6 +540,16 @@ Result<void> MacOSInputBackend::inject(const InputEvent& event) {
     point.y += delta->dy;
     pointer_update = point;
     created = CGEventCreateMouseEvent(nullptr, kCGEventMouseMoved, point, kCGMouseButtonLeft);
+    if (created != nullptr) {
+      std::lock_guard lock(impl_->mutex);
+      impl_->pending_injected_moves.push_back(
+          Impl::PendingInjectedMove{point, static_cast<std::int64_t>(std::llround(delta->dx)),
+                                    static_cast<std::int64_t>(std::llround(delta->dy)),
+                                    std::chrono::steady_clock::now() +
+                                        std::chrono::milliseconds{250}});
+      while (impl_->pending_injected_moves.size() > 64)
+        impl_->pending_injected_moves.pop_front();
+    }
   } else if (const auto* wheel = std::get_if<MouseWheel>(&event.payload)) {
     created = CGEventCreateScrollWheelEvent(nullptr, kCGScrollEventUnitLine, 1,
                                             static_cast<int32_t>(std::llround(wheel->delta)));
@@ -494,18 +558,18 @@ Result<void> MacOSInputBackend::inject(const InputEvent& event) {
       std::lock_guard lock(impl_->mutex);
       impl_->last_point = CGPointMake(warp->x, warp->y);
       impl_->have_last_point = true;
-      impl_->ignored_warp_point = CGPointMake(warp->x, warp->y);
-      // The Quartz callback is asynchronous. Keep the expected point pending
-      // long enough for the warp event to arrive, while still allowing a real
-      // physical move at a different point to preempt the lease immediately.
-      impl_->ignored_warp_deadline =
-          std::chrono::steady_clock::now() + std::chrono::milliseconds{250};
+      // The Quartz callback is asynchronous. Keep this point pending long
+      // enough for the warp event to arrive, while preserving older pending
+      // warps that may be delivered out of order.
+      impl_->ignored_warps.push_back(
+          Impl::PendingWarp{CGPointMake(warp->x, warp->y),
+                            std::chrono::steady_clock::now() + std::chrono::milliseconds{250}});
+      while (impl_->ignored_warps.size() > 16) impl_->ignored_warps.pop_front();
     }
     const CGError error = CGWarpMouseCursorPosition(CGPointMake(warp->x, warp->y));
     if (error != kCGErrorSuccess) {
       std::lock_guard lock(impl_->mutex);
-      impl_->ignored_warp_point.reset();
-      impl_->ignored_warp_deadline = {};
+      if (!impl_->ignored_warps.empty()) impl_->ignored_warps.pop_back();
       status_.injection = false;
       status_.degraded = true;
       status_.last_error = "CGWarpMouseCursorPosition failed";
@@ -638,6 +702,13 @@ Result<void> MacOSInputBackend::recover() {
   if (association_error != kCGErrorSuccess)
     debug::log("mac cursor association restore failed error=",
                static_cast<int>(association_error));
+  if (impl_->cursor_hidden) {
+    const auto cursor_error = CGDisplayShowCursor(kCGNullDirectDisplay);
+    if (cursor_error != kCGErrorSuccess)
+      debug::log("mac cursor show failed error=", static_cast<int>(cursor_error));
+    else
+      impl_->cursor_hidden = false;
+  }
   std::vector<SessionId> sessions;
   {
     std::lock_guard lock(impl_->mutex);

@@ -101,11 +101,12 @@ TEST(InputNodeRuntime, CrossesAtExactThresholdAndForwardsSuppressedInput) {
 
   // Once the handoff is active, source motion is consumed by the hook while
   // the target alone advances from its local entry point.
+  left_backend.set_pointer_position(Point{80.0, 50.0});
   left_backend.emit_physical(
       InputEvent{{}, {}, 0, 0, MouseDelta{20.0, 0.0}, InputOrigin::kPhysical});
   ASSERT_TRUE(left->poll(now, 0ms).ok());
   pump_pair(*left, *right, now, 4);
-  EXPECT_EQ(*left_backend.pointer_position(), (Point{100.0, 50.0}));
+  EXPECT_EQ(*left_backend.pointer_position(), (Point{80.0, 50.0}));
   EXPECT_EQ(*right_backend.pointer_position(), (Point{28.0, 50.0}));
 
   left_backend.emit_physical(
@@ -212,6 +213,48 @@ TEST(InputNodeRuntime, AccumulatesOutwardDeltaWhenPointerIsClampedAtEdge) {
   const auto& entry = std::get<PointerWarp>(right_backend.injected_events().front().payload);
   EXPECT_DOUBLE_EQ(entry.x, 8.0);
   EXPECT_DOUBLE_EQ(entry.y, 50.0);
+}
+
+TEST(InputNodeRuntime, RemoteSourceCanInitiateAnotherCrossing) {
+  FakeInputBackend left_backend;
+  FakeInputBackend right_backend;
+  auto left_result = InputNodeRuntime::create(config(
+      id(301), id(302), AuthenticatedPeer{id(303)}, id(310), Endpoint{"127.0.0.1", 0},
+      &left_backend));
+  auto right_result = InputNodeRuntime::create(config(
+      id(303), id(304), AuthenticatedPeer{id(301)}, id(320), Endpoint{"127.0.0.1", 0},
+      &right_backend));
+  ASSERT_TRUE(left_result.ok()) << left_result.error();
+  ASSERT_TRUE(right_result.ok()) << right_result.error();
+  auto left = std::move(left_result.value());
+  auto right = std::move(right_result.value());
+  ASSERT_TRUE(left->set_topology(topology_for(id(310), id(320), true)).ok());
+  ASSERT_TRUE(right->set_topology(topology_for(id(320), id(310), true)).ok());
+  ASSERT_TRUE(left->start().ok());
+  ASSERT_TRUE(right->start().ok());
+  ASSERT_TRUE(left->connect_peer(right->local_endpoint()).ok());
+
+  IClock::time_point now{};
+  pump_pair(*left, *right, now, 20);
+
+  left_backend.set_pointer_position(Point{100.0, 50.0});
+  left_backend.emit_physical(
+      InputEvent{{}, {}, 0, 0, MouseDelta{4.0, 0.0}, InputOrigin::kPhysical});
+  ASSERT_TRUE(left->poll(now, 0ms).ok());
+  pump_pair(*left, *right, now, 12);
+  ASSERT_EQ(left->router().state(), RouterState::kRemote);
+  ASSERT_TRUE(right->arbiter().has_active_lease());
+
+  // The source is already remote. Moving outward at its local edge must
+  // release that lease and start the next handoff instead of forwarding the
+  // edge delta forever.
+  left_backend.set_pointer_position(Point{100.0, 50.0});
+  left_backend.emit_physical(
+      InputEvent{{}, {}, 0, 0, MouseDelta{4.0, 0.0}, InputOrigin::kPhysical});
+  ASSERT_TRUE(left->poll(now, 0ms).ok());
+  pump_pair(*left, *right, now, 12);
+  EXPECT_EQ(left->router().state(), RouterState::kRemote);
+  EXPECT_TRUE(right->arbiter().has_active_lease());
 }
 
 TEST(InputNodeRuntime, NoPeerOverflowStillReleasesInjectedStateAndRestoresLocal) {
