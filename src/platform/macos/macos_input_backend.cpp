@@ -352,8 +352,10 @@ void MacOSInputBackend::stop() {
   std::lock_guard operation_lock(impl_->operation_mutex);
   CFRunLoopRef loop = nullptr;
   std::vector<SessionId> sessions;
+  bool restore_cursor = false;
   {
     std::lock_guard lock(impl_->mutex);
+    restore_cursor = impl_->suppression || status_.suppression;
     status_.running = false;
     status_.suppression = false;
     impl_->suppression = false;
@@ -361,6 +363,12 @@ void MacOSInputBackend::stop() {
     loop = impl_->run_loop;
     sessions.reserve(impl_->held.size());
     for (const auto& entry : impl_->held) sessions.push_back(entry.first);
+  }
+  if (restore_cursor) {
+    const auto association_error = CGAssociateMouseAndMouseCursorPosition(true);
+    if (association_error != kCGErrorSuccess)
+      debug::log("mac cursor association restore failed error=",
+                 static_cast<int>(association_error));
   }
   for (const auto& session : sessions) release_injected_state(session);
   if (loop != nullptr) {
@@ -388,8 +396,14 @@ Result<void> MacOSInputBackend::set_suppression(bool enabled) {
     debug::log("mac suppression failed enabled=", enabled, " reason=capture unavailable");
     return Result<void>::failure(status_.last_error);
   }
-  if (status_.suppression != enabled)
+  if (status_.suppression != enabled) {
+    const auto association_error =
+        CGAssociateMouseAndMouseCursorPosition(enabled ? false : true);
+    if (association_error != kCGErrorSuccess)
+      debug::log("mac cursor association failed enabled=", enabled,
+                 " error=", static_cast<int>(association_error));
     debug::log("mac suppression=", enabled ? "on" : "off");
+  }
   status_.suppression = enabled;
   impl_->suppression = enabled;
   return Result<void>::success();
@@ -620,6 +634,10 @@ Result<void> MacOSInputBackend::recover() {
   std::lock_guard operation_lock(impl_->operation_mutex);
   ++status_.recovery_count;
   status_.suppression = false;
+  const auto association_error = CGAssociateMouseAndMouseCursorPosition(true);
+  if (association_error != kCGErrorSuccess)
+    debug::log("mac cursor association restore failed error=",
+               static_cast<int>(association_error));
   std::vector<SessionId> sessions;
   {
     std::lock_guard lock(impl_->mutex);
