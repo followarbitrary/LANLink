@@ -49,6 +49,9 @@ struct AcquireRequest {
     DisplayId target_display;
     RequestId request;
     Point entry;
+    Edge target_edge{Edge::kLeft};
+    double tangent_ratio{};
+    bool entry_normalized{false};
     friend bool operator==(const AcquireRequest&, const AcquireRequest&) = default;
 };
 struct AcquireResponse {

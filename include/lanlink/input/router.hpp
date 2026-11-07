@@ -79,6 +79,9 @@ struct RouterAction {
     std::uint64_t seq{};
     RevokeReason reason{RevokeReason::kProtocolError};
     Point entry{};
+    Edge target_edge{Edge::kLeft};
+    double tangent_ratio{};
+    bool entry_normalized{false};
     InputEvent event{};
     bool success{true};
     std::string error;

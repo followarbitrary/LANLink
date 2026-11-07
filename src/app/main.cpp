@@ -42,13 +42,7 @@ int main(int argc, char** argv) {
     std::cerr << "error: " << parsed.error() << '\n';
     return 2;
   }
-  const auto options = parsed.value();
-
-  auto topology = lanlink::app::make_topology(options);
-  if (!topology.ok()) {
-    std::cerr << "error: " << topology.error() << '\n';
-    return 2;
-  }
+  auto options = parsed.value();
 
   std::unique_ptr<lanlink::platform::IInputBackend> backend;
 #if defined(_WIN32)
@@ -59,6 +53,22 @@ int main(int argc, char** argv) {
   std::cerr << "error: unsupported platform; LANLink requires Windows or macOS\n";
   return 3;
 #endif
+
+  const auto detected_bounds = backend->display_bounds();
+  if (!detected_bounds.has_value()) {
+    std::cerr << "error: unable to detect the local display bounds\n";
+    return 3;
+  }
+  if (!options.width_explicit) options.width = detected_bounds->width();
+  if (!options.height_explicit) options.height = detected_bounds->height();
+  options.left = detected_bounds->left;
+  options.top = detected_bounds->top;
+
+  auto topology = lanlink::app::make_topology(options);
+  if (!topology.ok()) {
+    std::cerr << "error: " << topology.error() << '\n';
+    return 2;
+  }
 
   lanlink::runtime::InputRuntimeConfig config;
   config.local_device = lanlink::app::numeric_id(options.device_id);

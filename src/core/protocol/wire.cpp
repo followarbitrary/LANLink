@@ -18,6 +18,9 @@ bool valid_type(std::uint8_t value) {
 bool valid_reason(std::uint8_t value) {
     return value <= static_cast<std::uint8_t>(RevokeReason::kProtocolError);
 }
+bool valid_edge(std::uint8_t value) {
+    return value <= static_cast<std::uint8_t>(Edge::kDown);
+}
 bool zero(const Uuid128& id) { return id.high == 0 && id.low == 0; }
 bool finite(double value) { return std::isfinite(value); }
 
@@ -269,13 +272,19 @@ Result<std::vector<std::uint8_t>> encode(const Message& message) {
                 return make_frame(MessageType::kHeartbeat, std::move(w));
             } else if constexpr (std::is_same_v<T, AcquireRequest>) {
                 if (zero(value.source) || zero(value.target_display) || zero(value.request) ||
-                    !finite(value.entry.x) || !finite(value.entry.y))
+                    !finite(value.entry.x) || !finite(value.entry.y) ||
+                    !valid_edge(static_cast<std::uint8_t>(value.target_edge)) ||
+                    !finite(value.tangent_ratio) || value.tangent_ratio < 0.0 ||
+                    value.tangent_ratio > 1.0)
                     return Result<std::vector<std::uint8_t>>::failure("invalid acquire request");
                 w.id(value.source);
                 w.id(value.target_display);
                 w.id(value.request);
                 w.f64(value.entry.x);
                 w.f64(value.entry.y);
+                w.u8(static_cast<std::uint8_t>(value.target_edge));
+                w.f64(value.tangent_ratio);
+                w.u8(value.entry_normalized ? 1 : 0);
                 return make_frame(MessageType::kAcquireRequest, std::move(w));
             } else if constexpr (std::is_same_v<T, AcquireResponse>) {
                 if (zero(value.request) ||
@@ -393,10 +402,16 @@ Result<Message> decode(std::span<const std::uint8_t> frame) {
     }
     case MessageType::kAcquireRequest: {
         AcquireRequest value;
+        std::uint8_t edge{};
+        bool normalized{};
         if (!r.id(value.source) || !r.id(value.target_display) || !r.id(value.request) ||
-            !r.f64(value.entry.x) || !r.f64(value.entry.y) || zero(value.source) ||
-            zero(value.target_display) || zero(value.request))
+            !r.f64(value.entry.x) || !r.f64(value.entry.y) || !r.u8(edge) ||
+            !r.f64(value.tangent_ratio) || !read_bool(r, normalized) ||
+            zero(value.source) || zero(value.target_display) || zero(value.request) ||
+            !valid_edge(edge) || value.tangent_ratio < 0.0 || value.tangent_ratio > 1.0)
             return fail("invalid acquire request");
+        value.target_edge = static_cast<Edge>(edge);
+        value.entry_normalized = normalized;
         message = value;
         break;
     }

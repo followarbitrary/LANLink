@@ -98,8 +98,12 @@ std::optional<Rect> query_display_bounds() noexcept {
       return std::nullopt;
 
     CGRect total_bounds = CGRectZero;
-    for (CGDisplayCount index = 0; index < display_count; ++index)
-      total_bounds = CGRectUnion(total_bounds, CGDisplayBounds(displays[index]));
+    bool have_bounds = false;
+    for (CGDisplayCount index = 0; index < display_count; ++index) {
+      const CGRect bounds = CGDisplayBounds(displays[index]);
+      total_bounds = have_bounds ? CGRectUnion(total_bounds, bounds) : bounds;
+      have_bounds = true;
+    }
 
     if (!(total_bounds.size.width > 0.0) || !(total_bounds.size.height > 0.0) ||
         !std::isfinite(total_bounds.origin.x) || !std::isfinite(total_bounds.origin.y) ||

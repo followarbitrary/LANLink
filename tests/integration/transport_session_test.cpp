@@ -31,6 +31,7 @@ TEST(PeerSession, CompletesAcquireActivateInputAndReleaseOverTcp) {
     FakeInputBackend target_backend;
     ASSERT_TRUE(source_backend.start({}).ok());
     ASSERT_TRUE(target_backend.start({}).ok());
+    target_backend.set_display_bounds(Rect{0.0, 0.0, 1920.0, 1080.0});
     PeerSession source(
         std::move(client_result.value()),
         PeerSessionConfig{id(2), AuthenticatedPeer{id(3)}, &router, nullptr, &source_backend});
@@ -43,7 +44,8 @@ TEST(PeerSession, CompletesAcquireActivateInputAndReleaseOverTcp) {
     ASSERT_TRUE(source.pump({}).ok());
     ASSERT_TRUE(target.pump({}).ok());
 
-    auto actions = router.on_crossing(Crossing{id(5), Edge::kLeft, 0.5, {20, 10}}, {});
+    auto actions = router.on_crossing(
+        Crossing{id(5), Edge::kLeft, 0.5, {20, 10}, 0.5, true}, {});
     ASSERT_TRUE(source.send_actions(actions).ok());
     ASSERT_TRUE(target.pump({}).ok());
     ASSERT_TRUE(source.pump({}).ok());
@@ -54,8 +56,8 @@ TEST(PeerSession, CompletesAcquireActivateInputAndReleaseOverTcp) {
     ASSERT_TRUE(source_backend.status().suppression);
     ASSERT_EQ(target_backend.injected_events().size(), 1u);
     ASSERT_TRUE(std::holds_alternative<PointerWarp>(target_backend.injected_events().front().payload));
-    EXPECT_DOUBLE_EQ(std::get<PointerWarp>(target_backend.injected_events().front().payload).x, 20.0);
-    EXPECT_DOUBLE_EQ(std::get<PointerWarp>(target_backend.injected_events().front().payload).y, 10.0);
+    EXPECT_DOUBLE_EQ(std::get<PointerWarp>(target_backend.injected_events().front().payload).x, 8.0);
+    EXPECT_DOUBLE_EQ(std::get<PointerWarp>(target_backend.injected_events().front().payload).y, 540.0);
 
     auto input = router.on_local_event(
         InputEvent{{}, {}, 0, 0, Key{65, true}, InputOrigin::kSynthetic}, {}, {});

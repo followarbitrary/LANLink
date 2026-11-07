@@ -85,12 +85,21 @@ Point ScreenTopology::clamp_entry(const Display& target_display, Edge target_edg
                                   double tangent) const {
   const Rect& bounds = target_display.logical_bounds;
   const double extent = edge_extent(bounds, target_edge);
+  if (!(extent > 0.0)) return Point{};
+  return edge_entry_point(bounds, target_edge,
+                          (tangent - edge_start(bounds, target_edge)) / extent);
+}
+
+Point edge_entry_point(const Rect& bounds, Edge edge, double tangent_ratio) {
+  const double extent = edge_extent(bounds, edge);
   const double inset = std::min(m0::kEntryInset, extent / 2.0);
-  const double min_tangent = edge_start(bounds, target_edge) + inset;
-  const double max_tangent = edge_start(bounds, target_edge) + extent - inset;
+  const double ratio = std::clamp(tangent_ratio, 0.0, 1.0);
+  const double tangent = edge_start(bounds, edge) + ratio * extent;
+  const double min_tangent = edge_start(bounds, edge) + inset;
+  const double max_tangent = edge_start(bounds, edge) + extent - inset;
   const double clamped = std::clamp(tangent, min_tangent, max_tangent);
 
-  switch (target_edge) {
+  switch (edge) {
     case Edge::kLeft:
       return Point{bounds.left + inset, clamped};
     case Edge::kRight:
@@ -128,7 +137,7 @@ std::optional<Crossing> ScreenTopology::crossing(const DisplayId& source_display
     const double target_tangent = edge_start(target.logical_bounds, link.target_edge) +
                                   ratio * edge_extent(target.logical_bounds, link.target_edge);
     return Crossing{target.id, link.target_edge, target_tangent,
-                    clamp_entry(target, link.target_edge, target_tangent)};
+                    clamp_entry(target, link.target_edge, target_tangent), ratio, true};
   }
   return std::nullopt;
 }

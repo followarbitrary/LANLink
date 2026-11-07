@@ -58,7 +58,9 @@ class FakeInputBackend final : public IInputBackend {
   std::unordered_map<SessionId, HeldState> held_;
   Point pointer_position_{};
   bool have_pointer_position_{false};
-  std::optional<Rect> display_bounds_{Rect{0.0, 0.0, 1920.0, 1080.0}};
+  // Tests opt into a concrete desktop shape when they need normalized
+  // handoff mapping; a missing shape exercises the legacy absolute fallback.
+  std::optional<Rect> display_bounds_{};
 };
 
 }  // namespace lanlink::platform

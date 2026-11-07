@@ -146,12 +146,7 @@ TEST(BackendContract, PointerPositionTracksPhysicalAndInjectedMovement) {
 
 TEST(BackendContract, ReportsConfiguredDisplayBounds) {
   FakeInputBackend backend;
-  ASSERT_TRUE(backend.display_bounds().has_value());
-  const auto initial = *backend.display_bounds();
-  EXPECT_DOUBLE_EQ(initial.left, 0.0);
-  EXPECT_DOUBLE_EQ(initial.top, 0.0);
-  EXPECT_DOUBLE_EQ(initial.right, 1920.0);
-  EXPECT_DOUBLE_EQ(initial.bottom, 1080.0);
+  EXPECT_FALSE(backend.display_bounds().has_value());
 
   backend.set_display_bounds(Rect{-1440.0, 0.0, 0.0, 900.0});
   ASSERT_TRUE(backend.display_bounds().has_value());

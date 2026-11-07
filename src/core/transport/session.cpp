@@ -52,7 +52,10 @@ Result<void> PeerSession::dispatch_actions(const std::vector<RouterAction>& acti
         case RouterActionKind::kAcquire:
             pending_acquire_ = action;
             result = connection_.send(protocol::AcquireRequest{action.source, action.target_display,
-                                                               action.request, action.entry});
+                                                               action.request, action.entry,
+                                                               action.target_edge,
+                                                               action.tangent_ratio,
+                                                               action.entry_normalized});
             break;
         case RouterActionKind::kActivate:
             result = connection_.send(protocol::ActivateRequest{action.session, action.generation});
@@ -163,7 +166,14 @@ Result<void> PeerSession::dispatch_message(const protocol::Message& message,
         std::string error = result.ok() ? std::string{} : result.error();
         if (success && config_.backend && pending_target_acquire_.has_value() &&
             pending_target_acquire_->request == request->session) {
-            const auto& entry = pending_target_acquire_->entry;
+            Point entry = pending_target_acquire_->entry;
+            if (pending_target_acquire_->entry_normalized) {
+                const auto bounds = config_.backend->display_bounds();
+                if (bounds.has_value()) {
+                    entry = edge_entry_point(*bounds, pending_target_acquire_->target_edge,
+                                             pending_target_acquire_->tangent_ratio);
+                }
+            }
             InputEvent warp{pending_target_acquire_->source,
                             request->session,
                             request->generation,

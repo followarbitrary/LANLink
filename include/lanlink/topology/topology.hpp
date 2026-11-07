@@ -60,14 +60,25 @@ struct Crossing {
   Edge target_edge;
   double tangent{};
   Point entry_point{};
+  // The source-edge tangent expressed as a normalized ratio.  The target
+  // computes its concrete local entry point from its own display bounds.
+  double tangent_ratio{};
+  bool has_tangent_ratio{false};
   // Descriptive aliases retained for callers that use the API vocabulary.
   DisplayId target_display;
   Point entry;
 
-  Crossing(DisplayId target_id, Edge edge, double mapped_tangent, Point point)
+  Crossing(DisplayId target_id, Edge edge, double mapped_tangent, Point point,
+           double ratio = 0.0, bool ratio_is_normalized = false)
       : target(target_id), target_edge(edge), tangent(mapped_tangent), entry_point(point),
+        tangent_ratio(ratio), has_tangent_ratio(ratio_is_normalized),
         target_display(target_id), entry(point) {}
 };
+
+// Returns a safe local entry point on a display edge for a normalized tangent
+// ratio.  The result uses the same logical coordinate space as the display
+// bounds supplied by the platform backend.
+Point edge_entry_point(const Rect& bounds, Edge edge, double tangent_ratio);
 
 class ScreenTopology {
  public:

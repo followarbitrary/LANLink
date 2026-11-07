@@ -42,6 +42,9 @@ std::vector<RouterAction> InputRouter::begin_acquire(TimePoint) {
     pending_target_ = pending_crossing_->target;
     auto action = RouterAction::acquire(source_, pending_crossing_->target, request_);
     action.entry = pending_crossing_->entry_point;
+    action.target_edge = pending_crossing_->target_edge;
+    action.tangent_ratio = pending_crossing_->tangent_ratio;
+    action.entry_normalized = pending_crossing_->has_tangent_ratio;
     actions.push_back(action);
     return actions;
 }
