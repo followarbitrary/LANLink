@@ -53,9 +53,12 @@ class WindowsInputBackend final : public IInputBackend {
 
   static LRESULT CALLBACK keyboard_proc(int code, WPARAM wparam, LPARAM lparam);
   static LRESULT CALLBACK mouse_proc(int code, WPARAM wparam, LPARAM lparam);
+  static LRESULT CALLBACK raw_input_proc(HWND window, UINT message, WPARAM wparam,
+                                         LPARAM lparam);
   void message_thread();
   void handle_keyboard(const KBDLLHOOKSTRUCT& info, WPARAM message);
   void handle_mouse(const MSLLHOOKSTRUCT& info, WPARAM message);
+  void handle_raw_input(HRAWINPUT input);
   void dispatch(InputEvent event);
   bool send_inputs(INPUT* inputs, UINT count);
   bool release_session_locked(const SessionId& session);
@@ -67,6 +70,7 @@ class WindowsInputBackend final : public IInputBackend {
   static std::atomic<WindowsInputBackend*> active_instance_;
   HHOOK keyboard_hook_{nullptr};
   HHOOK mouse_hook_{nullptr};
+  HWND raw_input_window_{nullptr};
   std::thread hook_thread_;
   DWORD hook_thread_id_{0};
   mutable std::mutex mutex_;
@@ -74,6 +78,7 @@ class WindowsInputBackend final : public IInputBackend {
   std::condition_variable hook_ready_cv_;
   bool hook_ready_{false};
   std::atomic<bool> stop_requested_{false};
+  bool raw_input_ready_{false};
   EventCallback callback_;
   std::unordered_map<SessionId, HeldState> held_;
   POINT last_point_{};

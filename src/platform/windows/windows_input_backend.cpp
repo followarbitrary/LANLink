@@ -17,6 +17,8 @@ namespace lanlink::platform {
 std::atomic<WindowsInputBackend*> WindowsInputBackend::active_instance_{nullptr};
 
 namespace {
+constexpr wchar_t kRawInputWindowClass[] = L"LANLink.RawInputWindow";
+
 // Keep Win32 pointer hooks, cursor APIs, and screen metrics in one coordinate
 // space. Without an explicit process DPI context, user32 virtualizes
 // GetSystemMetrics/GetCursorPos while low-level hook points remain physical,
@@ -91,6 +93,7 @@ Result<void> WindowsInputBackend::start(EventCallback callback) {
     status_.last_error.clear();
     hook_ready_ = false;
     stop_requested_.store(false, std::memory_order_release);
+    raw_input_ready_ = false;
     have_last_point_ = false;
     pending_move_dx_ = 0.0;
     pending_move_dy_ = 0.0;
@@ -418,6 +421,20 @@ LRESULT CALLBACK WindowsInputBackend::mouse_proc(int code, WPARAM wparam, LPARAM
   return backend->status_.suppression ? 1 : CallNextHookEx(nullptr, code, wparam, lparam);
 }
 
+LRESULT CALLBACK WindowsInputBackend::raw_input_proc(HWND window, UINT message, WPARAM wparam,
+                                                     LPARAM lparam) {
+  auto* backend = reinterpret_cast<WindowsInputBackend*>(
+      GetWindowLongPtrW(window, GWLP_USERDATA));
+  if (message == WM_NCCREATE) {
+    const auto* create = reinterpret_cast<const CREATESTRUCTW*>(lparam);
+    backend = static_cast<WindowsInputBackend*>(create->lpCreateParams);
+    SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(backend));
+  }
+  if (backend != nullptr && message == WM_INPUT)
+    backend->handle_raw_input(reinterpret_cast<HRAWINPUT>(lparam));
+  return DefWindowProcW(window, message, wparam, lparam);
+}
+
 void WindowsInputBackend::handle_keyboard(const KBDLLHOOKSTRUCT& info, WPARAM message) {
   std::optional<std::uint32_t> hid;
   if (info.vkCode == VK_SHIFT) {
@@ -446,7 +463,17 @@ void WindowsInputBackend::handle_mouse(const MSLLHOOKSTRUCT& info, WPARAM messag
   event.origin = InputOrigin::kPhysical;
   if (message == WM_MOUSEMOVE) {
     std::lock_guard lock(mutex_);
-    if (!have_last_point_) { last_point_ = info.pt; have_last_point_ = true; return; }
+    if (!have_last_point_) {
+      last_point_ = info.pt;
+      have_last_point_ = true;
+      return;
+    }
+    if (raw_input_ready_) {
+      // The low-level hook exposes only the clamped screen point. Raw Input
+      // below supplies relative deltas when the pointer is held at an edge.
+      last_point_ = info.pt;
+      return;
+    }
     event.payload = MouseDelta{static_cast<double>(info.pt.x - last_point_.x),
                                static_cast<double>(info.pt.y - last_point_.y)};
     last_point_ = info.pt;
@@ -457,6 +484,32 @@ void WindowsInputBackend::handle_mouse(const MSLLHOOKSTRUCT& info, WPARAM messag
     if (button == 0) return;
     event.payload = MouseButton{button, message == WM_LBUTTONDOWN || message == WM_RBUTTONDOWN || message == WM_MBUTTONDOWN || message == WM_XBUTTONDOWN};
   }
+  dispatch(std::move(event));
+}
+
+void WindowsInputBackend::handle_raw_input(HRAWINPUT input) {
+  UINT size = 0;
+  if (GetRawInputData(input, RID_INPUT, nullptr, &size, sizeof(RAWINPUTHEADER)) ==
+      static_cast<UINT>(-1))
+    return;
+  if (size < sizeof(RAWINPUT)) return;
+  std::vector<std::uint8_t> buffer(size);
+  if (GetRawInputData(input, RID_INPUT, buffer.data(), &size, sizeof(RAWINPUTHEADER)) ==
+      static_cast<UINT>(-1))
+    return;
+  const auto* raw = reinterpret_cast<const RAWINPUT*>(buffer.data());
+  if (raw->header.dwType != RIM_TYPEMOUSE) return;
+  const auto& mouse = raw->data.mouse;
+  // Some Windows versions mirror SendInput motion through WM_INPUT. Preserve
+  // the backend marker so injected remote movement never re-enters the local
+  // physical-input path and preempts the active lease.
+  if (mouse.ulExtraInformation == static_cast<ULONG>(own_extra_info())) return;
+  if ((mouse.usFlags & MOUSE_MOVE_ABSOLUTE) != 0) return;
+  if (mouse.lLastX == 0 && mouse.lLastY == 0) return;
+  InputEvent event{};
+  event.origin = InputOrigin::kPhysical;
+  event.payload = MouseDelta{static_cast<double>(mouse.lLastX),
+                             static_cast<double>(mouse.lLastY)};
   dispatch(std::move(event));
 }
 
@@ -481,6 +534,36 @@ void WindowsInputBackend::release_all_locked() {
 }
 
 void WindowsInputBackend::message_thread() {
+  bool raw_class_registered = false;
+  WNDCLASSEXW window_class{};
+  window_class.cbSize = sizeof(window_class);
+  window_class.lpfnWndProc = &WindowsInputBackend::raw_input_proc;
+  window_class.hInstance = GetModuleHandleW(nullptr);
+  window_class.lpszClassName = kRawInputWindowClass;
+  const auto class_atom = RegisterClassExW(&window_class);
+  if (class_atom != 0) {
+    raw_class_registered = true;
+  } else if (GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
+    debug::log("windows raw input class registration failed");
+  }
+  raw_input_window_ = CreateWindowExW(0, kRawInputWindowClass, L"LANLink raw input", 0, 0, 0,
+                                      0, 0, HWND_MESSAGE, nullptr, GetModuleHandleW(nullptr),
+                                      this);
+  if (raw_input_window_ != nullptr) {
+    RAWINPUTDEVICE device{};
+    device.usUsagePage = 0x01;
+    device.usUsage = 0x02;
+    device.dwFlags = RIDEV_INPUTSINK;
+    device.hwndTarget = raw_input_window_;
+    raw_input_ready_ = RegisterRawInputDevices(&device, 1, sizeof(device)) != FALSE;
+    if (raw_input_ready_)
+      debug::log("windows raw input ready");
+    else
+      debug::log("windows raw input registration failed; using hook deltas");
+  } else {
+    raw_input_ready_ = false;
+    debug::log("windows raw input window creation failed; using hook deltas");
+  }
   {
     std::lock_guard lock(mutex_);
     hook_thread_id_ = GetCurrentThreadId();
@@ -516,26 +599,44 @@ void WindowsInputBackend::message_thread() {
     status_.suppression = false;
     if (active_instance_.load(std::memory_order_acquire) == this)
       active_instance_.store(nullptr, std::memory_order_release);
+    raw_input_ready_ = false;
+    if (raw_input_window_ != nullptr) {
+      DestroyWindow(raw_input_window_);
+      raw_input_window_ = nullptr;
+    }
+    if (raw_class_registered)
+      UnregisterClassW(kRawInputWindowClass, GetModuleHandleW(nullptr));
     return;
   }
   MSG message;
   while (GetMessageW(&message, nullptr, 0, 0) > 0) DispatchMessageW(&message);
-  std::lock_guard lock(mutex_);
-  if (keyboard_hook_) UnhookWindowsHookEx(keyboard_hook_);
-  if (mouse_hook_) UnhookWindowsHookEx(mouse_hook_);
-  const bool unexpected_exit = !stop_requested_.load(std::memory_order_acquire);
-  keyboard_hook_ = nullptr; mouse_hook_ = nullptr;
-  status_.capture = false;
-  if (active_instance_.load(std::memory_order_acquire) == this)
-    active_instance_.store(nullptr, std::memory_order_release);
-  status_.running = false;
-  status_.suppression = false;
-  if (unexpected_exit) {
-    status_.injection = false;
-    status_.degraded = true;
-    status_.last_error = "low-level hook thread exited unexpectedly";
-    debug::log("windows hook thread exited unexpectedly");
+  bool unexpected_exit = false;
+  {
+    std::lock_guard lock(mutex_);
+    if (keyboard_hook_) UnhookWindowsHookEx(keyboard_hook_);
+    if (mouse_hook_) UnhookWindowsHookEx(mouse_hook_);
+    unexpected_exit = !stop_requested_.load(std::memory_order_acquire);
+    keyboard_hook_ = nullptr;
+    mouse_hook_ = nullptr;
+    status_.capture = false;
+    if (active_instance_.load(std::memory_order_acquire) == this)
+      active_instance_.store(nullptr, std::memory_order_release);
+    status_.running = false;
+    status_.suppression = false;
+    raw_input_ready_ = false;
+    if (unexpected_exit) {
+      status_.injection = false;
+      status_.degraded = true;
+      status_.last_error = "low-level hook thread exited unexpectedly";
+      debug::log("windows hook thread exited unexpectedly");
+    }
   }
+  if (raw_input_window_ != nullptr) {
+    DestroyWindow(raw_input_window_);
+    raw_input_window_ = nullptr;
+  }
+  if (raw_class_registered)
+    UnregisterClassW(kRawInputWindowClass, GetModuleHandleW(nullptr));
 }
 
 void WindowsInputBackend::set_hook_error(const char* operation) {

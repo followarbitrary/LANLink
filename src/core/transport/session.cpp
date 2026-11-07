@@ -74,6 +74,8 @@ Result<void> PeerSession::dispatch_actions(const std::vector<RouterAction>& acti
             result = connection_.send(protocol::ActivateRequest{action.session, action.generation});
             break;
         case RouterActionKind::kRenew:
+            debug::log("send renew session=", action.session.low,
+                       " generation=", action.generation);
             result = connection_.send(protocol::RenewRequest{action.session, action.generation});
             break;
         case RouterActionKind::kSendInput:
@@ -251,8 +253,13 @@ Result<void> PeerSession::dispatch_message(const protocol::Message& message,
     if (const auto* request = std::get_if<protocol::RenewRequest>(&message)) {
         if (!config_.arbiter)
             return fail_and_disconnect("unexpected renew request", now);
+        debug::log("receive renew session=", request->session.low,
+                   " generation=", request->generation);
         const auto result =
             config_.arbiter->renew(config_.peer, request->session, request->generation, now);
+        debug::log("renew ", result.ok() ? "accepted" : "rejected",
+                   " session=", request->session.low,
+                   result.ok() ? "" : " error=" + result.error());
         auto sent = connection_.send(protocol::RenewAck{
             request->session, request->generation, result.ok(), result.ok() ? "" : result.error()});
         if (!sent.ok())
@@ -264,6 +271,10 @@ Result<void> PeerSession::dispatch_message(const protocol::Message& message,
             config_.router->lease()->session != ack->session ||
             config_.router->lease()->generation != ack->generation)
             return Result<void>::success();
+        debug::log("receive renew ack session=", ack->session.low,
+                   " generation=", ack->generation,
+                   " success=", ack->success,
+                   ack->success ? "" : " error=" + ack->error);
         if (!ack->success)
             return dispatch_actions(config_.router->on_revoke(RevokeReason::kProtocolError, now),
                                     now);

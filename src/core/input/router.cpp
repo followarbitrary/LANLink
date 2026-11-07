@@ -1,6 +1,7 @@
 #include "lanlink/input/router.hpp"
 
 #include "lanlink/common/config.hpp"
+#include "lanlink/common/debug.hpp"
 
 #include <type_traits>
 #include <utility>
@@ -208,6 +209,8 @@ std::vector<RouterAction> InputRouter::on_activation_ack(bool success, TimePoint
     if (!success) return recover(now);
     state_ = RouterState::kRemote;
     next_renew_ = now + m0::kLeaseRenewInterval;
+    debug::log("router entered remote session=", lease_->session.low,
+               " generation=", lease_->generation);
     return {};
 }
 
@@ -243,12 +246,17 @@ std::vector<RouterAction> InputRouter::on_disconnect(TimePoint now) {
 
 std::vector<RouterAction> InputRouter::on_tick(TimePoint now) {
     if (state_ == RouterState::kRecovering) {
+        debug::log("router recovered to local");
         state_ = RouterState::kLocal;
         connected_ = true;
         return {};
     }
     if (state_ != RouterState::kRemote || !lease_.has_value()) return {};
-    if (now >= lease_->expires_at) return recover(now);
+    if (now >= lease_->expires_at) {
+        debug::log("router lease expired session=", lease_->session.low,
+                   " generation=", lease_->generation);
+        return recover(now);
+    }
     if (now < next_renew_) return {};
     RouterAction renew;
     renew.kind = RouterActionKind::kRenew;
