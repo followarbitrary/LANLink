@@ -53,6 +53,11 @@ class InputNodeRuntime {
   const ScreenTopology& topology() const noexcept { return topology_; }
 
  private:
+  struct CrossingDetection {
+    Crossing crossing;
+    Point source_boundary;
+  };
+
   struct QueuedEvent {
     InputEvent event;
     std::optional<Point> pointer;
@@ -64,7 +69,7 @@ class InputNodeRuntime {
   Result<void> accept_incoming(TimePoint now);
   Result<void> drain_events(TimePoint now);
   Result<void> dispatch_actions(const std::vector<RouterAction>& actions, TimePoint now);
-  std::optional<Crossing> detect_crossing(const Point& pointer) const;
+  std::optional<CrossingDetection> detect_crossing(const Point& pointer) const;
   Result<void> queue_event(const InputEvent& event);
 
   InputRuntimeConfig config_;

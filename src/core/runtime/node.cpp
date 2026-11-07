@@ -123,7 +123,8 @@ Result<void> InputNodeRuntime::dispatch_actions(const std::vector<RouterAction>&
   return Result<void>::success();
 }
 
-std::optional<Crossing> InputNodeRuntime::detect_crossing(const Point& pointer) const {
+std::optional<InputNodeRuntime::CrossingDetection> InputNodeRuntime::detect_crossing(
+    const Point& pointer) const {
   const auto display_it = std::find_if(
       topology_.displays().begin(), topology_.displays().end(),
       [this](const Display& display) { return display.id == config_.local_display; });
@@ -143,7 +144,42 @@ std::optional<Crossing> InputNodeRuntime::detect_crossing(const Point& pointer) 
   if (pointer.y < bounds.top) consider(Edge::kUp, bounds.top - pointer.y);
   if (pointer.y > bounds.bottom) consider(Edge::kDown, pointer.y - bounds.bottom);
   if (overflow < 0.0) return std::nullopt;
-  return topology_.crossing(config_.local_display, edge, pointer, overflow);
+  auto crossing = topology_.crossing(config_.local_display, edge, pointer, overflow);
+  if (!crossing.has_value()) return std::nullopt;
+
+  // Topology coordinates describe the displays in one logical layout. The
+  // target process, however, injects into its own local desktop, whose origin
+  // is the target display's top-left corner. Convert the handoff entry before
+  // it is sent over the wire so a right-side target receives x ~= 0 instead of
+  // the layout coordinate x ~= source_width.
+  const auto target_it = std::find_if(
+      topology_.displays().begin(), topology_.displays().end(),
+      [&crossing](const Display& display) { return display.id == crossing->target; });
+  if (target_it == topology_.displays().end()) return std::nullopt;
+  crossing->entry_point.x -= target_it->logical_bounds.left;
+  crossing->entry_point.y -= target_it->logical_bounds.top;
+  crossing->entry = crossing->entry_point;
+
+  Point source_boundary = pointer;
+  switch (edge) {
+    case Edge::kLeft:
+      source_boundary.x = bounds.left;
+      source_boundary.y = std::clamp(pointer.y, bounds.top, bounds.bottom);
+      break;
+    case Edge::kRight:
+      source_boundary.x = bounds.right;
+      source_boundary.y = std::clamp(pointer.y, bounds.top, bounds.bottom);
+      break;
+    case Edge::kUp:
+      source_boundary.x = std::clamp(pointer.x, bounds.left, bounds.right);
+      source_boundary.y = bounds.top;
+      break;
+    case Edge::kDown:
+      source_boundary.x = std::clamp(pointer.x, bounds.left, bounds.right);
+      source_boundary.y = bounds.bottom;
+      break;
+  }
+  return CrossingDetection{std::move(*crossing), source_boundary};
 }
 
 Result<void> InputNodeRuntime::drain_events(TimePoint now) {
@@ -166,6 +202,10 @@ Result<void> InputNodeRuntime::drain_events(TimePoint now) {
     const auto& event = queued.event;
     const Point pointer = queued.pointer.value_or(Point{});
     std::vector<RouterAction> actions;
+    const auto recover_after_handoff_failure = [&] {
+      const auto cleanup = router_.on_disconnect(now);
+      (void)dispatch_actions(cleanup, now);
+    };
 
     if (event.origin == InputOrigin::kPhysical && arbiter_.has_active_lease()) {
       const auto inbound = *arbiter_.lease();
@@ -185,7 +225,15 @@ Result<void> InputNodeRuntime::drain_events(TimePoint now) {
     if (queued.pointer.has_value() && std::holds_alternative<MouseDelta>(event.payload) &&
         (router_.state() == RouterState::kLocal || router_.state() == RouterState::kHandoff)) {
       if (const auto crossing = detect_crossing(pointer)) {
-        actions = router_.on_crossing(*crossing, now);
+        // Put the source cursor back on its own edge before the asynchronous
+        // acquire/activate handshake. This prevents the native desktop from
+        // continuing past the edge while the target cursor is entering.
+        auto warped = config_.backend->warp_pointer(crossing->source_boundary);
+        if (!warped.ok()) {
+          recover_after_handoff_failure();
+          return warped;
+        }
+        actions = router_.on_crossing(crossing->crossing, now);
       }
     }
     if (actions.empty()) {
@@ -196,8 +244,32 @@ Result<void> InputNodeRuntime::drain_events(TimePoint now) {
         actions = router_.on_local_event(event, pointer, now);
       }
     }
+
+    // Arm suppression only once an acquire is actually being sent. A held
+    // mouse button keeps the router in handoff until its release reaches the
+    // local desktop; suppressing that release would leave the button stuck.
+    const auto acquire_requested = std::any_of(
+        actions.begin(), actions.end(), [](const RouterAction& action) {
+          return action.kind == RouterActionKind::kAcquire;
+        });
+    if (acquire_requested && !config_.backend->status().suppression) {
+      auto suppressed = config_.backend->set_suppression(true);
+      if (!suppressed.ok()) {
+        recover_after_handoff_failure();
+        return suppressed;
+      }
+    }
+
     auto dispatched = dispatch_actions(actions, now);
-    if (!dispatched.ok()) return dispatched;
+    if (!dispatched.ok()) {
+      // The source suppression was enabled before the control-plane request
+      // was sent. If transport dispatch fails, roll the router and backend
+      // back to local input immediately instead of leaving the cursor locked.
+      if (config_.backend->status().suppression) {
+        recover_after_handoff_failure();
+      }
+      return dispatched;
+    }
   }
   return Result<void>::success();
 }

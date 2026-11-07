@@ -90,6 +90,23 @@ TEST(InputNodeRuntime, CrossesAtExactThresholdAndForwardsSuppressedInput) {
   ASSERT_TRUE(right->arbiter().has_active_lease());
   ASSERT_EQ(right_backend.injected_events().size(), 1u);
   ASSERT_TRUE(std::holds_alternative<PointerWarp>(right_backend.injected_events().front().payload));
+  ASSERT_TRUE(left_backend.pointer_position().has_value());
+  EXPECT_EQ(*left_backend.pointer_position(), (Point{100.0, 50.0}));
+  ASSERT_TRUE(right_backend.pointer_position().has_value());
+  EXPECT_EQ(*right_backend.pointer_position(), (Point{8.0, 50.0}));
+
+  const auto entry = std::get<PointerWarp>(right_backend.injected_events().front().payload);
+  EXPECT_DOUBLE_EQ(entry.x, 8.0);
+  EXPECT_DOUBLE_EQ(entry.y, 50.0);
+
+  // Once the handoff is active, source motion is consumed by the hook while
+  // the target alone advances from its local entry point.
+  left_backend.emit_physical(
+      InputEvent{{}, {}, 0, 0, MouseDelta{20.0, 0.0}, InputOrigin::kPhysical});
+  ASSERT_TRUE(left->poll(now, 0ms).ok());
+  pump_pair(*left, *right, now, 4);
+  EXPECT_EQ(*left_backend.pointer_position(), (Point{100.0, 50.0}));
+  EXPECT_EQ(*right_backend.pointer_position(), (Point{28.0, 50.0}));
 
   left_backend.emit_physical(
       InputEvent{{}, {}, 0, 0, Key{0x04, true}, InputOrigin::kPhysical});
@@ -97,9 +114,9 @@ TEST(InputNodeRuntime, CrossesAtExactThresholdAndForwardsSuppressedInput) {
       InputEvent{{}, {}, 0, 0, MouseButton{1, true}, InputOrigin::kPhysical});
   ASSERT_TRUE(left->poll(now, 0ms).ok());
   pump_pair(*left, *right, now, 4);
-  ASSERT_EQ(right_backend.injected_events().size(), 3u);
-  EXPECT_EQ(std::get<Key>(right_backend.injected_events()[1].payload).code, 0x04u);
-  EXPECT_EQ(std::get<MouseButton>(right_backend.injected_events()[2].payload).button, 1u);
+  ASSERT_EQ(right_backend.injected_events().size(), 4u);
+  EXPECT_EQ(std::get<Key>(right_backend.injected_events()[2].payload).code, 0x04u);
+  EXPECT_EQ(std::get<MouseButton>(right_backend.injected_events()[3].payload).button, 1u);
 
   left_backend.emit_physical(
       InputEvent{{}, {}, 0, 0, MouseButton{1, false}, InputOrigin::kPhysical});

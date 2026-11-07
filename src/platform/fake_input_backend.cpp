@@ -78,6 +78,18 @@ Result<void> FakeInputBackend::inject(const InputEvent& event) {
   return Result<void>::success();
 }
 
+Result<void> FakeInputBackend::warp_pointer(Point position) {
+  if (!status_.running || injection_failure_ || !status_.injection) {
+    status_.injection = false;
+    status_.degraded = true;
+    set_error("pointer warp failed");
+    return Result<void>::failure(status_.last_error);
+  }
+  pointer_position_ = position;
+  have_pointer_position_ = true;
+  return Result<void>::success();
+}
+
 void FakeInputBackend::release_injected_state(const SessionId& session) {
   released_sessions_.push_back(session);
   held_.erase(session);
@@ -133,10 +145,12 @@ void FakeInputBackend::emit_physical(const InputEvent& event) {
   if (!status_.running || !status_.capture) return;
   auto tagged = event;
   tagged.origin = InputOrigin::kPhysical;
-  if (const auto* delta = std::get_if<MouseDelta>(&tagged.payload)) {
-    if (have_pointer_position_) {
-      pointer_position_.x += delta->dx;
-      pointer_position_.y += delta->dy;
+  if (!status_.suppression) {
+    if (const auto* delta = std::get_if<MouseDelta>(&tagged.payload)) {
+      if (have_pointer_position_) {
+        pointer_position_.x += delta->dx;
+        pointer_position_.y += delta->dy;
+      }
     }
   }
   physical_events_.push_back(tagged);

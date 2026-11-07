@@ -31,6 +31,13 @@ class IInputBackend {
   virtual void stop() = 0;
   virtual Result<void> set_suppression(bool enabled) = 0;
   virtual Result<void> inject(const InputEvent& event) = 0;
+  // Move the local cursor without treating the move as a remote input event.
+  // Runtime handoff uses this to return the source cursor to its edge while
+  // the control lease is being negotiated.
+  virtual Result<void> warp_pointer(Point point) {
+    return inject(InputEvent{{}, {}, 0, 0, PointerWarp{point.x, point.y},
+                             InputOrigin::kSynthetic});
+  }
   virtual std::optional<Point> pointer_position() const noexcept = 0;
   virtual void release_injected_state(const SessionId& session) = 0;
   virtual Result<void> recover() = 0;

@@ -304,6 +304,11 @@ Result<void> MacOSInputBackend::set_suppression(bool enabled) {
   return Result<void>::success();
 }
 
+Result<void> MacOSInputBackend::warp_pointer(Point point) {
+  return inject(InputEvent{{}, {}, 0, 0, PointerWarp{point.x, point.y},
+                           InputOrigin::kSynthetic});
+}
+
 std::optional<Point> MacOSInputBackend::pointer_position() const noexcept {
   std::lock_guard lock(impl_->mutex);
   if (!impl_->have_last_point) return std::nullopt;
@@ -541,6 +546,12 @@ Result<void> MacOSInputBackend::start(EventCallback) {
 }
 void MacOSInputBackend::stop() { status_.running = false; status_.suppression = false; }
 Result<void> MacOSInputBackend::set_suppression(bool) {
+  status_.last_error = kUnsupported;
+  status_.degraded = true;
+  return Result<void>::failure(status_.last_error);
+}
+
+Result<void> MacOSInputBackend::warp_pointer(Point) {
   status_.last_error = kUnsupported;
   status_.degraded = true;
   return Result<void>::failure(status_.last_error);

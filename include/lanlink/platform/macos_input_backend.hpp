@@ -19,6 +19,7 @@ class MacOSInputBackend final : public IInputBackend {
   void stop() override;
   Result<void> set_suppression(bool enabled) override;
   Result<void> inject(const InputEvent& event) override;
+  Result<void> warp_pointer(Point point) override;
   std::optional<Point> pointer_position() const noexcept override;
   void release_injected_state(const SessionId& session) override;
   Result<void> recover() override;

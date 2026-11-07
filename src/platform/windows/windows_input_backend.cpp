@@ -133,6 +133,11 @@ Result<void> WindowsInputBackend::set_suppression(bool enabled) {
   return Result<void>::success();
 }
 
+Result<void> WindowsInputBackend::warp_pointer(Point point) {
+  return inject(InputEvent{{}, {}, 0, 0, PointerWarp{point.x, point.y},
+                           InputOrigin::kSynthetic});
+}
+
 std::optional<Point> WindowsInputBackend::pointer_position() const noexcept {
   std::lock_guard lock(mutex_);
   if (!have_last_point_) return std::nullopt;
@@ -496,6 +501,12 @@ void WindowsInputBackend::stop() {
 }
 
 Result<void> WindowsInputBackend::set_suppression(bool) {
+  status_.last_error = kUnsupported;
+  status_.degraded = true;
+  return Result<void>::failure(status_.last_error);
+}
+
+Result<void> WindowsInputBackend::warp_pointer(Point) {
   status_.last_error = kUnsupported;
   status_.degraded = true;
   return Result<void>::failure(status_.last_error);
