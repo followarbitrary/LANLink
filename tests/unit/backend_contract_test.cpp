@@ -144,5 +144,23 @@ TEST(BackendContract, PointerPositionTracksPhysicalAndInjectedMovement) {
   EXPECT_EQ(*backend.pointer_position(), (Point{50.0, 60.0}));
 }
 
+TEST(BackendContract, ReportsConfiguredDisplayBounds) {
+  FakeInputBackend backend;
+  ASSERT_TRUE(backend.display_bounds().has_value());
+  const auto initial = *backend.display_bounds();
+  EXPECT_DOUBLE_EQ(initial.left, 0.0);
+  EXPECT_DOUBLE_EQ(initial.top, 0.0);
+  EXPECT_DOUBLE_EQ(initial.right, 1920.0);
+  EXPECT_DOUBLE_EQ(initial.bottom, 1080.0);
+
+  backend.set_display_bounds(Rect{-1440.0, 0.0, 0.0, 900.0});
+  ASSERT_TRUE(backend.display_bounds().has_value());
+  const auto configured = *backend.display_bounds();
+  EXPECT_DOUBLE_EQ(configured.left, -1440.0);
+  EXPECT_DOUBLE_EQ(configured.top, 0.0);
+  EXPECT_DOUBLE_EQ(configured.right, 0.0);
+  EXPECT_DOUBLE_EQ(configured.bottom, 900.0);
+}
+
 }  // namespace
 }  // namespace lanlink::platform

@@ -84,6 +84,35 @@ std::optional<InputEvent> convert_event(CGEventType type, CGEventRef event, CGPo
   }
 }
 
+// Quartz pointer APIs use the global desktop coordinate space in points. This
+// is the same logical space returned by CGEventGetLocation, including Retina
+// scaling, so callers must not multiply these dimensions by a backing scale.
+std::optional<Rect> query_display_bounds() noexcept {
+  try {
+    CGDisplayCount display_count = 0;
+    if (CGGetActiveDisplayList(0, nullptr, &display_count) != CGDisplayNoErr || display_count == 0)
+      return std::nullopt;
+
+    std::vector<CGDirectDisplayID> displays(display_count);
+    if (CGGetActiveDisplayList(display_count, displays.data(), &display_count) != CGDisplayNoErr)
+      return std::nullopt;
+
+    CGRect total_bounds = CGRectZero;
+    for (CGDisplayCount index = 0; index < display_count; ++index)
+      total_bounds = CGRectUnion(total_bounds, CGDisplayBounds(displays[index]));
+
+    if (!(total_bounds.size.width > 0.0) || !(total_bounds.size.height > 0.0) ||
+        !std::isfinite(total_bounds.origin.x) || !std::isfinite(total_bounds.origin.y) ||
+        !std::isfinite(total_bounds.size.width) || !std::isfinite(total_bounds.size.height))
+      return std::nullopt;
+    return Rect{total_bounds.origin.x, total_bounds.origin.y,
+                total_bounds.origin.x + total_bounds.size.width,
+                total_bounds.origin.y + total_bounds.size.height};
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
 }  // namespace
 
 struct MacOSInputBackend::Impl {
@@ -302,6 +331,10 @@ Result<void> MacOSInputBackend::set_suppression(bool enabled) {
   status_.suppression = enabled;
   impl_->suppression = enabled;
   return Result<void>::success();
+}
+
+std::optional<Rect> MacOSInputBackend::display_bounds() const noexcept {
+  return query_display_bounds();
 }
 
 Result<void> MacOSInputBackend::warp_pointer(Point point) {
@@ -579,6 +612,10 @@ Result<void> MacOSInputBackend::inject(const InputEvent&) {
 }
 
 std::optional<Point> MacOSInputBackend::pointer_position() const noexcept {
+  return std::nullopt;
+}
+
+std::optional<Rect> MacOSInputBackend::display_bounds() const noexcept {
   return std::nullopt;
 }
 void MacOSInputBackend::release_injected_state(const SessionId&) {}

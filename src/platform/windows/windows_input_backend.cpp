@@ -16,6 +16,31 @@ namespace lanlink::platform {
 std::atomic<WindowsInputBackend*> WindowsInputBackend::active_instance_{nullptr};
 
 namespace {
+// Keep Win32 pointer hooks, cursor APIs, and screen metrics in one coordinate
+// space. Without an explicit process DPI context, user32 virtualizes
+// GetSystemMetrics/GetCursorPos while low-level hook points remain physical,
+// which makes edge detection and handoff drift on scaled displays.
+void enable_process_dpi_awareness() noexcept {
+  HMODULE user32 = GetModuleHandleW(L"user32.dll");
+  if (user32 == nullptr) return;
+
+  using SetProcessDpiAwarenessContextFn = BOOL(WINAPI*)(HANDLE);
+  const auto set_context = reinterpret_cast<SetProcessDpiAwarenessContextFn>(
+      GetProcAddress(user32, "SetProcessDpiAwarenessContext"));
+  if (set_context != nullptr) {
+    // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 is the documented -4 handle.
+    const HANDLE per_monitor_v2 = reinterpret_cast<HANDLE>(static_cast<std::intptr_t>(-4));
+    if (set_context(per_monitor_v2) != FALSE || GetLastError() == ERROR_ACCESS_DENIED) return;
+  }
+
+  // Windows 7/8 do not expose Per-Monitor V2. System awareness still avoids
+  // the DPI virtualization that mixes logical metrics with physical hook data.
+  using SetProcessDpiAwareFn = BOOL(WINAPI*)();
+  const auto set_system = reinterpret_cast<SetProcessDpiAwareFn>(
+      GetProcAddress(user32, "SetProcessDPIAware"));
+  if (set_system != nullptr) (void)set_system();
+}
+
 std::uint32_t mouse_button_for_message(WPARAM message, DWORD mouse_data) {
   switch (message) {
     case WM_LBUTTONDOWN:
@@ -36,7 +61,7 @@ std::uint32_t mouse_button_for_message(WPARAM message, DWORD mouse_data) {
 }
 }  // namespace
 
-WindowsInputBackend::WindowsInputBackend() = default;
+WindowsInputBackend::WindowsInputBackend() { enable_process_dpi_awareness(); }
 
 WindowsInputBackend::~WindowsInputBackend() { stop(); }
 
@@ -135,6 +160,17 @@ Result<void> WindowsInputBackend::set_suppression(bool enabled) {
   }
   status_.suppression = enabled;
   return Result<void>::success();
+}
+
+std::optional<Rect> WindowsInputBackend::display_bounds() const noexcept {
+  enable_process_dpi_awareness();
+  const int left = GetSystemMetrics(SM_XVIRTUALSCREEN);
+  const int top = GetSystemMetrics(SM_YVIRTUALSCREEN);
+  const int width = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+  const int height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+  if (width <= 0 || height <= 0) return std::nullopt;
+  return Rect{static_cast<double>(left), static_cast<double>(top),
+              static_cast<double>(left + width), static_cast<double>(top + height)};
 }
 
 Result<void> WindowsInputBackend::warp_pointer(Point point) {
@@ -544,6 +580,10 @@ Result<void> WindowsInputBackend::inject(const InputEvent&) {
 }
 
 std::optional<Point> WindowsInputBackend::pointer_position() const noexcept {
+  return std::nullopt;
+}
+
+std::optional<Rect> WindowsInputBackend::display_bounds() const noexcept {
   return std::nullopt;
 }
 

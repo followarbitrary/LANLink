@@ -8,6 +8,7 @@ namespace {
 TEST(MacOSInputBackend, NonAppleBuildReportsUnsupported) {
 #if !defined(__APPLE__)
   MacOSInputBackend backend;
+  EXPECT_FALSE(backend.display_bounds().has_value());
   EXPECT_FALSE(backend.start({}).ok());
   EXPECT_NE(backend.status().last_error.find("unsupported"), std::string::npos);
   EXPECT_FALSE(backend.set_suppression(true).ok());

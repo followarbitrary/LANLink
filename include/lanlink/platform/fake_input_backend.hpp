@@ -15,6 +15,7 @@ class FakeInputBackend final : public IInputBackend {
   void stop() override;
   Result<void> set_suppression(bool enabled) override;
   Result<void> inject(const InputEvent& event) override;
+  std::optional<Rect> display_bounds() const noexcept override { return display_bounds_; }
   Result<void> warp_pointer(Point point) override;
   std::optional<Point> pointer_position() const noexcept override;
   void release_injected_state(const SessionId& session) override;
@@ -22,6 +23,7 @@ class FakeInputBackend final : public IInputBackend {
   const BackendStatus& status() const noexcept override { return status_; }
 
   void set_permission(bool available);
+  void set_display_bounds(Rect bounds) noexcept { display_bounds_ = bounds; }
   void set_pointer_position(Point position);
   void set_permission_available(bool available) { set_permission(available); }
   void set_capture_available(bool available);
@@ -56,6 +58,7 @@ class FakeInputBackend final : public IInputBackend {
   std::unordered_map<SessionId, HeldState> held_;
   Point pointer_position_{};
   bool have_pointer_position_{false};
+  std::optional<Rect> display_bounds_{Rect{0.0, 0.0, 1920.0, 1080.0}};
 };
 
 }  // namespace lanlink::platform

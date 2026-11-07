@@ -31,6 +31,11 @@ class IInputBackend {
   virtual void stop() = 0;
   virtual Result<void> set_suppression(bool enabled) = 0;
   virtual Result<void> inject(const InputEvent& event) = 0;
+  // Return the logical coordinates of the local virtual desktop. Native
+  // backends report the same coordinate space used by pointer events (Quartz
+  // points on macOS, DPI-aware Win32 pixels on Windows). Backends that cannot
+  // query a desktop, such as an unsupported platform build, return nullopt.
+  virtual std::optional<Rect> display_bounds() const noexcept { return std::nullopt; }
   // Move the local cursor without treating the move as a remote input event.
   // Runtime handoff uses this to return the source cursor to its edge while
   // the control lease is being negotiated.
