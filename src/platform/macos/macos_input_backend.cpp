@@ -443,18 +443,24 @@ Result<void> MacOSInputBackend::set_suppression(bool enabled) {
     if (association_error != kCGErrorSuccess)
       debug::log("mac cursor association failed enabled=", enabled,
                  " error=", static_cast<int>(association_error));
+    else
+      debug::log("mac cursor association=", enabled ? "disconnected" : "connected");
     if (enabled) {
       const auto cursor_error = CGDisplayHideCursor(kCGNullDirectDisplay);
       if (cursor_error != kCGErrorSuccess)
         debug::log("mac cursor hide failed error=", static_cast<int>(cursor_error));
-      else
+      else {
         impl_->cursor_hidden = true;
+        debug::log("mac cursor hidden");
+      }
     } else if (impl_->cursor_hidden) {
       const auto cursor_error = CGDisplayShowCursor(kCGNullDirectDisplay);
       if (cursor_error != kCGErrorSuccess)
         debug::log("mac cursor show failed error=", static_cast<int>(cursor_error));
-      else
+      else {
         impl_->cursor_hidden = false;
+        debug::log("mac cursor shown");
+      }
     }
     debug::log("mac suppression=", enabled ? "on" : "off");
   }
