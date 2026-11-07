@@ -154,6 +154,7 @@ struct MacOSInputBackend::Impl {
   // immediately revoked. Keep the point separately because remote deltas may
   // be posted before the asynchronous warp event reaches the tap.
   std::optional<CGPoint> ignored_warp_point;
+  std::uint8_t ignored_warp_events{0};
   std::unordered_map<SessionId, HeldState> held;
 };
 
@@ -177,14 +178,22 @@ CGEventRef tap_callback(CGEventTapProxy, CGEventType type, CGEventRef event, voi
     if (type == kCGEventMouseMoved || type == kCGEventLeftMouseDragged ||
         type == kCGEventRightMouseDragged || type == kCGEventOtherMouseDragged) {
       const CGPoint point = CGEventGetLocation(event);
-      if (impl->ignored_warp_point.has_value()) {
+      if (impl->ignored_warp_events > 0) {
         const auto expected = *impl->ignored_warp_point;
         const bool is_warp = std::abs(point.x - expected.x) < 0.001 &&
                              std::abs(point.y - expected.y) < 0.001;
+        --impl->ignored_warp_events;
         if (is_warp) {
+          impl->ignored_warp_events = 0;
           impl->ignored_warp_point.reset();
-          return impl->suppression ? nullptr : event;
+        } else if (impl->ignored_warp_events == 0) {
+          impl->ignored_warp_point.reset();
         }
+        // CGWarpMouseCursorPosition may emit one or more ordinary move
+        // events. Do not let any of those events preempt the newly activated
+        // remote lease. The budget is deliberately short so later real local
+        // movement still takes control back normally.
+        return impl->suppression ? nullptr : event;
       }
     }
     converted = convert_event(type, event, impl->last_point, impl->have_last_point);
@@ -230,6 +239,7 @@ Result<void> MacOSInputBackend::start(EventCallback callback) {
     impl_->suppression = false;
     impl_->have_last_point = false;
     impl_->ignored_warp_point.reset();
+    impl_->ignored_warp_events = 0;
     impl_->thread = std::thread([this] {
       CFMachPortRef tap = CGEventTapCreate(
           kCGHIDEventTap, kCGHeadInsertEventTap, kCGEventTapOptionDefault,
@@ -352,6 +362,7 @@ void MacOSInputBackend::stop() {
   impl_->callback = {};
   impl_->have_last_point = false;
   impl_->ignored_warp_point.reset();
+  impl_->ignored_warp_events = 0;
   status_.capture = false;
   status_.injection = status_.permission && impl_->held.empty();
   status_.degraded = !status_.permission || !status_.injection;
@@ -449,11 +460,13 @@ Result<void> MacOSInputBackend::inject(const InputEvent& event) {
       impl_->last_point = CGPointMake(warp->x, warp->y);
       impl_->have_last_point = true;
       impl_->ignored_warp_point = CGPointMake(warp->x, warp->y);
+      impl_->ignored_warp_events = 8;
     }
     const CGError error = CGWarpMouseCursorPosition(CGPointMake(warp->x, warp->y));
     if (error != kCGErrorSuccess) {
       std::lock_guard lock(impl_->mutex);
       impl_->ignored_warp_point.reset();
+      impl_->ignored_warp_events = 0;
       status_.injection = false;
       status_.degraded = true;
       status_.last_error = "CGWarpMouseCursorPosition failed";
