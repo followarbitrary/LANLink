@@ -157,6 +157,63 @@ TEST(InputNodeRuntime, CrossesAtExactThresholdAndForwardsSuppressedInput) {
   EXPECT_EQ(left->router().state(), RouterState::kLocal);
 }
 
+TEST(InputNodeRuntime, AccumulatesOutwardDeltaWhenPointerIsClampedAtEdge) {
+  FakeInputBackend left_backend;
+  FakeInputBackend right_backend;
+  auto left_result = InputNodeRuntime::create(config(
+      id(201), id(202), AuthenticatedPeer{id(203)}, id(210), Endpoint{"127.0.0.1", 0},
+      &left_backend));
+  auto right_result = InputNodeRuntime::create(config(
+      id(203), id(204), AuthenticatedPeer{id(201)}, id(220), Endpoint{"127.0.0.1", 0},
+      &right_backend));
+  ASSERT_TRUE(left_result.ok()) << left_result.error();
+  ASSERT_TRUE(right_result.ok()) << right_result.error();
+  auto left = std::move(left_result.value());
+  auto right = std::move(right_result.value());
+  ASSERT_TRUE(left->set_topology(topology_for(id(210), id(220), true)).ok());
+  ASSERT_TRUE(right->set_topology(topology_for(id(220), id(210), false)).ok());
+  ASSERT_TRUE(left->start().ok());
+  ASSERT_TRUE(right->start().ok());
+  ASSERT_TRUE(left->connect_peer(right->local_endpoint()).ok());
+
+  IClock::time_point now{};
+  pump_pair(*left, *right, now, 20);
+  ASSERT_TRUE(left->connected());
+  ASSERT_TRUE(right->connected());
+
+  // Fake the native desktop clamping every event at x=100. The physical
+  // deltas remain non-zero, as Quartz reports at a screen edge.
+  for (int index = 0; index < 3; ++index) {
+    left_backend.set_pointer_position(Point{99.0, 50.0});
+    left_backend.emit_physical(
+        InputEvent{{}, {}, 0, 0, MouseDelta{1.0, 0.0}, InputOrigin::kPhysical});
+    ASSERT_TRUE(left->poll(now, 0ms).ok());
+    EXPECT_EQ(left->router().state(), RouterState::kLocal);
+  }
+
+  // Moving away from the edge abandons the partial crossing budget.
+  left_backend.set_pointer_position(Point{100.0, 50.0});
+  left_backend.emit_physical(
+      InputEvent{{}, {}, 0, 0, MouseDelta{-1.0, 0.0}, InputOrigin::kPhysical});
+  ASSERT_TRUE(left->poll(now, 0ms).ok());
+  EXPECT_EQ(left->router().state(), RouterState::kLocal);
+
+  for (int index = 0; index < 4; ++index) {
+    left_backend.set_pointer_position(Point{99.0, 50.0});
+    left_backend.emit_physical(
+        InputEvent{{}, {}, 0, 0, MouseDelta{1.0, 0.0}, InputOrigin::kPhysical});
+    ASSERT_TRUE(left->poll(now, 0ms).ok());
+  }
+  EXPECT_EQ(left->router().state(), RouterState::kAcquiring);
+
+  pump_pair(*left, *right, now, 12);
+  EXPECT_EQ(left->router().state(), RouterState::kRemote);
+  ASSERT_EQ(right_backend.injected_events().size(), 1u);
+  const auto& entry = std::get<PointerWarp>(right_backend.injected_events().front().payload);
+  EXPECT_DOUBLE_EQ(entry.x, 8.0);
+  EXPECT_DOUBLE_EQ(entry.y, 50.0);
+}
+
 TEST(InputNodeRuntime, NoPeerOverflowStillReleasesInjectedStateAndRestoresLocal) {
   FakeInputBackend backend;
   auto result = InputNodeRuntime::create(config(

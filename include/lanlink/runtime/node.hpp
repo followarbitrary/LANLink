@@ -69,7 +69,8 @@ class InputNodeRuntime {
   Result<void> accept_incoming(TimePoint now);
   Result<void> drain_events(TimePoint now);
   Result<void> dispatch_actions(const std::vector<RouterAction>& actions, TimePoint now);
-  std::optional<CrossingDetection> detect_crossing(const Point& pointer) const;
+  std::optional<CrossingDetection> detect_crossing(const InputEvent& event,
+                                                   const Point& pointer);
   Result<void> queue_event(const InputEvent& event);
 
   InputRuntimeConfig config_;
@@ -82,6 +83,8 @@ class InputNodeRuntime {
   std::deque<QueuedEvent> queued_events_;
   mutable std::mutex queue_mutex_;
   bool queue_overflowed_{false};
+  std::optional<Edge> edge_overflow_edge_;
+  double edge_overflow_{0.0};
   bool running_{false};
 };
 

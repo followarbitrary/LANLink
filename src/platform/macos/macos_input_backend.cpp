@@ -59,7 +59,19 @@ std::optional<InputEvent> convert_event(CGEventType type, CGEventRef event, CGPo
         have_last = true;
         return std::nullopt;
       }
-      converted.payload = MouseDelta{point.x - last.x, point.y - last.y};
+      // At a desktop edge Quartz keeps the cursor location clamped, while
+      // the event still carries the raw device delta. Prefer those fields so
+      // the runtime can accumulate outward motion and hand off after the
+      // edge threshold instead of seeing an endless stream of zero deltas.
+      double dx = static_cast<double>(
+          CGEventGetIntegerValueField(event, kCGMouseEventDeltaX));
+      double dy = static_cast<double>(
+          CGEventGetIntegerValueField(event, kCGMouseEventDeltaY));
+      if (dx == 0.0 && dy == 0.0) {
+        dx = point.x - last.x;
+        dy = point.y - last.y;
+      }
+      converted.payload = MouseDelta{dx, dy};
       last = point;
       return converted;
     }
@@ -136,6 +148,12 @@ struct MacOSInputBackend::Impl {
   bool suppression{false};
   CGPoint last_point{};
   bool have_last_point{false};
+  // CGWarpMouseCursorPosition emits a normal mouse-moved event without the
+  // user-data marker used by CGEventPost. Consume that event at the exact
+  // warp point so a remote handoff is not mistaken for local input and
+  // immediately revoked. Keep the point separately because remote deltas may
+  // be posted before the asynchronous warp event reaches the tap.
+  std::optional<CGPoint> ignored_warp_point;
   std::unordered_map<SessionId, HeldState> held;
 };
 
@@ -156,6 +174,19 @@ CGEventRef tap_callback(CGEventTapProxy, CGEventType type, CGEventRef event, voi
   bool suppress = false;
   {
     std::lock_guard lock(impl->mutex);
+    if (type == kCGEventMouseMoved || type == kCGEventLeftMouseDragged ||
+        type == kCGEventRightMouseDragged || type == kCGEventOtherMouseDragged) {
+      const CGPoint point = CGEventGetLocation(event);
+      if (impl->ignored_warp_point.has_value()) {
+        const auto expected = *impl->ignored_warp_point;
+        const bool is_warp = std::abs(point.x - expected.x) < 0.001 &&
+                             std::abs(point.y - expected.y) < 0.001;
+        if (is_warp) {
+          impl->ignored_warp_point.reset();
+          return impl->suppression ? nullptr : event;
+        }
+      }
+    }
     converted = convert_event(type, event, impl->last_point, impl->have_last_point);
     callback = impl->callback;
     suppress = impl->suppression;
@@ -198,6 +229,7 @@ Result<void> MacOSInputBackend::start(EventCallback callback) {
     impl_->tap_disabled = false;
     impl_->suppression = false;
     impl_->have_last_point = false;
+    impl_->ignored_warp_point.reset();
     impl_->thread = std::thread([this] {
       CFMachPortRef tap = CGEventTapCreate(
           kCGHIDEventTap, kCGHeadInsertEventTap, kCGEventTapOptionDefault,
@@ -319,6 +351,7 @@ void MacOSInputBackend::stop() {
   std::lock_guard lock(impl_->mutex);
   impl_->callback = {};
   impl_->have_last_point = false;
+  impl_->ignored_warp_point.reset();
   status_.capture = false;
   status_.injection = status_.permission && impl_->held.empty();
   status_.degraded = !status_.permission || !status_.injection;
@@ -411,18 +444,20 @@ Result<void> MacOSInputBackend::inject(const InputEvent& event) {
     created = CGEventCreateScrollWheelEvent(nullptr, kCGScrollEventUnitLine, 1,
                                             static_cast<int32_t>(std::llround(wheel->delta)));
   } else if (const auto* warp = std::get_if<PointerWarp>(&event.payload)) {
-    const CGError error = CGWarpMouseCursorPosition(CGPointMake(warp->x, warp->y));
-    if (error != kCGErrorSuccess) {
-      std::lock_guard lock(impl_->mutex);
-      status_.injection = false;
-      status_.degraded = true;
-      status_.last_error = "CGWarpMouseCursorPosition failed";
-      return Result<void>::failure(status_.last_error);
-    }
     {
       std::lock_guard lock(impl_->mutex);
       impl_->last_point = CGPointMake(warp->x, warp->y);
       impl_->have_last_point = true;
+      impl_->ignored_warp_point = CGPointMake(warp->x, warp->y);
+    }
+    const CGError error = CGWarpMouseCursorPosition(CGPointMake(warp->x, warp->y));
+    if (error != kCGErrorSuccess) {
+      std::lock_guard lock(impl_->mutex);
+      impl_->ignored_warp_point.reset();
+      status_.injection = false;
+      status_.degraded = true;
+      status_.last_error = "CGWarpMouseCursorPosition failed";
+      return Result<void>::failure(status_.last_error);
     }
     return Result<void>::success();
   }
@@ -443,6 +478,15 @@ Result<void> MacOSInputBackend::inject(const InputEvent& event) {
     return Result<void>::failure(status_.last_error);
   }
   CGEventSetIntegerValueField(created, kCGEventSourceUserData, kOwnEventUserData);
+  if (const auto* delta = std::get_if<MouseDelta>(&event.payload)) {
+    // Preserve the relative movement fields used by Quartz clients such as
+    // Deskflow in addition to the tracked absolute point. This avoids event
+    // coalescing treating a stream of absolute points as repeated warps.
+    CGEventSetIntegerValueField(created, kCGMouseEventDeltaX,
+                                static_cast<int64_t>(std::llround(delta->dx)));
+    CGEventSetIntegerValueField(created, kCGMouseEventDeltaY,
+                                static_cast<int64_t>(std::llround(delta->dy)));
+  }
   CGEventPost(kCGHIDEventTap, created);
   CFRelease(created);
 

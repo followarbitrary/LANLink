@@ -48,6 +48,8 @@ Result<void> InputNodeRuntime::start() {
     queued_events_.clear();
     queue_overflowed_ = false;
   }
+  edge_overflow_edge_.reset();
+  edge_overflow_ = 0.0;
   auto listener = transport::Listener::bind(config_.listen_endpoint, config_.connection);
   if (!listener.ok()) return Result<void>::failure(listener.error());
   listener_ = std::make_unique<transport::Listener>(std::move(listener.value()));
@@ -124,7 +126,7 @@ Result<void> InputNodeRuntime::dispatch_actions(const std::vector<RouterAction>&
 }
 
 std::optional<InputNodeRuntime::CrossingDetection> InputNodeRuntime::detect_crossing(
-    const Point& pointer) const {
+    const InputEvent& event, const Point& pointer) {
   const auto display_it = std::find_if(
       topology_.displays().begin(), topology_.displays().end(),
       [this](const Display& display) { return display.id == config_.local_display; });
@@ -143,8 +145,61 @@ std::optional<InputNodeRuntime::CrossingDetection> InputNodeRuntime::detect_cros
   if (pointer.x > bounds.right) consider(Edge::kRight, pointer.x - bounds.right);
   if (pointer.y < bounds.top) consider(Edge::kUp, bounds.top - pointer.y);
   if (pointer.y > bounds.bottom) consider(Edge::kDown, pointer.y - bounds.bottom);
+
+  const auto* delta = std::get_if<MouseDelta>(&event.payload);
+  if (overflow < 0.0 && delta != nullptr) {
+    // Native desktops clamp the cursor at the monitor edge. In that case the
+    // pointer coordinate never becomes outside the rectangle, so accumulate
+    // the outward deltas until the same threshold used by topology crossing
+    // is reached.
+    constexpr double kBoundaryTolerance = 1.0;
+    std::optional<Edge> contact_edge;
+    double contact_motion = 0.0;
+    const auto consider_contact = [&](Edge candidate, double motion) {
+      if (motion > contact_motion) {
+        contact_edge = candidate;
+        contact_motion = motion;
+      }
+    };
+    if (pointer.x >= bounds.right - kBoundaryTolerance && delta->dx > 0.0)
+      consider_contact(Edge::kRight, delta->dx);
+    if (pointer.x <= bounds.left + kBoundaryTolerance && delta->dx < 0.0)
+      consider_contact(Edge::kLeft, -delta->dx);
+    if (pointer.y >= bounds.bottom - kBoundaryTolerance && delta->dy > 0.0)
+      consider_contact(Edge::kDown, delta->dy);
+    if (pointer.y <= bounds.top + kBoundaryTolerance && delta->dy < 0.0)
+      consider_contact(Edge::kUp, -delta->dy);
+
+    if (contact_edge.has_value()) {
+      if (edge_overflow_edge_ == contact_edge) {
+        edge_overflow_ += contact_motion;
+      } else {
+        edge_overflow_edge_ = contact_edge;
+        edge_overflow_ = contact_motion;
+      }
+      edge = *contact_edge;
+      overflow = edge_overflow_;
+    } else {
+      edge_overflow_edge_.reset();
+      edge_overflow_ = 0.0;
+    }
+  } else if (overflow >= 0.0) {
+    edge_overflow_edge_ = edge;
+    edge_overflow_ = overflow;
+  } else {
+    edge_overflow_edge_.reset();
+    edge_overflow_ = 0.0;
+  }
   if (overflow < 0.0) return std::nullopt;
-  auto crossing = topology_.crossing(config_.local_display, edge, pointer, overflow);
+
+  Point candidate_point = pointer;
+  // ScreenTopology uses a half-open rectangle. Keep a clamped edge tangent
+  // when a native API reports the exact bottom/right coordinate.
+  candidate_point.x = std::clamp(candidate_point.x, bounds.left,
+                                 std::nextafter(bounds.right, bounds.left));
+  candidate_point.y = std::clamp(candidate_point.y, bounds.top,
+                                 std::nextafter(bounds.bottom, bounds.top));
+  auto crossing = topology_.crossing(config_.local_display, edge, candidate_point, overflow);
   if (!crossing.has_value()) return std::nullopt;
 
   // Topology coordinates describe the displays in one logical layout. The
@@ -179,6 +234,8 @@ std::optional<InputNodeRuntime::CrossingDetection> InputNodeRuntime::detect_cros
       source_boundary.y = bounds.bottom;
       break;
   }
+  edge_overflow_edge_.reset();
+  edge_overflow_ = 0.0;
   return CrossingDetection{std::move(*crossing), source_boundary};
 }
 
@@ -224,7 +281,7 @@ Result<void> InputNodeRuntime::drain_events(TimePoint now) {
 
     if (queued.pointer.has_value() && std::holds_alternative<MouseDelta>(event.payload) &&
         (router_.state() == RouterState::kLocal || router_.state() == RouterState::kHandoff)) {
-      if (const auto crossing = detect_crossing(pointer)) {
+      if (const auto crossing = detect_crossing(event, pointer)) {
         // Put the source cursor back on its own edge before the asynchronous
         // acquire/activate handshake. This prevents the native desktop from
         // continuing past the edge while the target cursor is entering.
@@ -326,6 +383,8 @@ Result<void> InputNodeRuntime::stop(TimePoint now) {
   }
   config_.backend->stop();
   running_ = false;
+  edge_overflow_edge_.reset();
+  edge_overflow_ = 0.0;
   {
     std::lock_guard lock(queue_mutex_);
     queued_events_.clear();
