@@ -77,6 +77,8 @@ class WindowsInputBackend final : public IInputBackend {
   std::unordered_map<SessionId, HeldState> held_;
   POINT last_point_{};
   bool have_last_point_{false};
+  double pending_move_dx_{0.0};
+  double pending_move_dy_{0.0};
 #else
   EventCallback callback_;
 #endif

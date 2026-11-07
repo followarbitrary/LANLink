@@ -347,9 +347,25 @@ Result<void> MacOSInputBackend::inject(const InputEvent& event) {
       created = CGEventCreateMouseEvent(nullptr, button_type(button->button, button->pressed), point,
                                         static_cast<CGMouseButton>(button->button - 1));
   } else if (const auto* delta = std::get_if<MouseDelta>(&event.payload)) {
-    CGEventRef current = CGEventCreate(nullptr);
-    CGPoint point = current == nullptr ? CGPointZero : CGEventGetLocation(current);
-    if (current != nullptr) CFRelease(current);
+    // CGEventPost is asynchronous. Reading CGEventGetLocation for every
+    // delta can therefore reuse a stale position while several remote moves
+    // are queued, making the target cursor advance only a fraction of the
+    // source movement. Keep the backend's serialized logical position as the
+    // base and consult the system only for the first event.
+    CGPoint point{};
+    bool have_tracked_point = false;
+    {
+      std::lock_guard lock(impl_->mutex);
+      if (impl_->have_last_point) {
+        point = impl_->last_point;
+        have_tracked_point = true;
+      }
+    }
+    if (!have_tracked_point) {
+      CGEventRef current = CGEventCreate(nullptr);
+      point = current == nullptr ? CGPointZero : CGEventGetLocation(current);
+      if (current != nullptr) CFRelease(current);
+    }
     point.x += delta->dx;
     point.y += delta->dy;
     pointer_update = point;

@@ -65,6 +65,8 @@ Result<void> WindowsInputBackend::start(EventCallback callback) {
     hook_ready_ = false;
     stop_requested_.store(false, std::memory_order_release);
     have_last_point_ = false;
+    pending_move_dx_ = 0.0;
+    pending_move_dy_ = 0.0;
     hook_thread_ = std::thread(&WindowsInputBackend::message_thread, this);
   }
 
@@ -120,6 +122,8 @@ void WindowsInputBackend::stop() {
   hook_thread_id_ = 0;
   hook_ready_ = false;
   have_last_point_ = false;
+  pending_move_dx_ = 0.0;
+  pending_move_dy_ = 0.0;
 }
 
 Result<void> WindowsInputBackend::set_suppression(bool enabled) {
@@ -151,6 +155,11 @@ Result<void> WindowsInputBackend::inject(const InputEvent& event) {
   bool track_button = false;
   std::uint32_t code = 0;
   bool pressed = false;
+  bool has_pending_move = false;
+  double next_pending_move_dx = 0.0;
+  double next_pending_move_dy = 0.0;
+  LONG injected_move_dx = 0;
+  LONG injected_move_dy = 0;
   if (const auto* key = std::get_if<Key>(&event.payload)) {
     const auto vk = hid_to_windows_vk(key->code);
     if (!vk.has_value()) {
@@ -183,8 +192,18 @@ Result<void> WindowsInputBackend::inject(const InputEvent& event) {
   } else if (const auto* delta = std::get_if<MouseDelta>(&event.payload)) {
     input.type = INPUT_MOUSE;
     input.mi.dwFlags = MOUSEEVENTF_MOVE;
-    input.mi.dx = static_cast<LONG>(std::llround(delta->dx));
-    input.mi.dy = static_cast<LONG>(std::llround(delta->dy));
+    {
+      std::lock_guard lock(mutex_);
+      const double total_dx = pending_move_dx_ + delta->dx;
+      const double total_dy = pending_move_dy_ + delta->dy;
+      injected_move_dx = static_cast<LONG>(std::llround(total_dx));
+      injected_move_dy = static_cast<LONG>(std::llround(total_dy));
+      next_pending_move_dx = total_dx - static_cast<double>(injected_move_dx);
+      next_pending_move_dy = total_dy - static_cast<double>(injected_move_dy);
+      has_pending_move = true;
+    }
+    input.mi.dx = injected_move_dx;
+    input.mi.dy = injected_move_dy;
     input.mi.dwExtraInfo = own_extra_info();
   } else if (const auto* wheel = std::get_if<MouseWheel>(&event.payload)) {
     input.type = INPUT_MOUSE;
@@ -229,12 +248,18 @@ Result<void> WindowsInputBackend::inject(const InputEvent& event) {
   }
   if (const auto* delta = std::get_if<MouseDelta>(&event.payload)) {
     std::lock_guard lock(mutex_);
+    if (has_pending_move) {
+      pending_move_dx_ = next_pending_move_dx;
+      pending_move_dy_ = next_pending_move_dy;
+    }
     if (have_last_point_) {
-      last_point_.x += static_cast<LONG>(std::llround(delta->dx));
-      last_point_.y += static_cast<LONG>(std::llround(delta->dy));
+      last_point_.x += injected_move_dx;
+      last_point_.y += injected_move_dy;
     }
   } else if (const auto* warp = std::get_if<PointerWarp>(&event.payload)) {
     std::lock_guard lock(mutex_);
+    pending_move_dx_ = 0.0;
+    pending_move_dy_ = 0.0;
     last_point_.x = static_cast<LONG>(std::llround(warp->x));
     last_point_.y = static_cast<LONG>(std::llround(warp->y));
     have_last_point_ = true;

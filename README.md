@@ -38,7 +38,7 @@ Check the command-line interface with:
 .\build\debug\lanlink_app.exe --help
 ```
 
-The help output lists these flags: `--device-id`, `--peer-id`, `--listen-port`, `--connect`, `--display-id`, `--peer-display-id`, `--remote-side`, `--width`, `--height`, and `--help`. Device and display IDs are numeric; `--remote-side` accepts only `left` or `right`; `--connect` takes `HOST:PORT`.
+The help output lists these flags: `--device-id`, `--peer-id`, `--listen-port`, `--connect`, `--display-id`, `--peer-display-id`, `--remote-side`, `--width`, `--height`, `--peer-width`, `--peer-height`, and `--help`. Device and display IDs are numeric; `--remote-side` accepts only `left` or `right`; `--connect` takes `HOST:PORT`. `--width` and `--height` are the local display's logical pointer dimensions. Set `--peer-width` and `--peer-height` to the other computer's logical dimensions when the screens differ, especially with a scaled or Retina Mac.
 
 ## Two-device LAN test
 
