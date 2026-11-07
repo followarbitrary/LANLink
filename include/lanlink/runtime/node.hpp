@@ -58,6 +58,11 @@ class InputNodeRuntime {
     Point source_boundary;
   };
 
+  struct ReturnDetection {
+    Edge edge;
+    Point source_boundary;
+  };
+
   struct QueuedEvent {
     InputEvent event;
     std::optional<Point> pointer;
@@ -71,6 +76,8 @@ class InputNodeRuntime {
   Result<void> dispatch_actions(const std::vector<RouterAction>& actions, TimePoint now);
   std::optional<CrossingDetection> detect_crossing(const InputEvent& event,
                                                    const Point& pointer);
+  std::optional<ReturnDetection> detect_return_to_local(const InputEvent& event,
+                                                        const Point& pointer) const;
   Result<void> queue_event(const InputEvent& event);
 
   InputRuntimeConfig config_;

@@ -106,6 +106,10 @@ class InputRouter {
     std::vector<RouterAction> on_local_event(InputEvent event, Point point, TimePoint now);
     std::vector<RouterAction> on_suppressed_event(InputEvent event, Point point, TimePoint now);
     std::vector<RouterAction> on_crossing(Crossing crossing, TimePoint now);
+    // Return from the remote display to this node's local display. This releases
+    // the active target lease and restores local input without starting another
+    // acquire request for the same remote display.
+    std::vector<RouterAction> on_return_to_local(TimePoint now);
     std::vector<RouterAction> on_grant(AcquireResult result, TimePoint now);
     std::vector<RouterAction> on_activation_ack(const Result<void>& result, TimePoint now);
     std::vector<RouterAction> on_activation_ack(bool success, TimePoint now);

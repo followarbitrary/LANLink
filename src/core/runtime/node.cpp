@@ -242,6 +242,58 @@ std::optional<InputNodeRuntime::CrossingDetection> InputNodeRuntime::detect_cros
   return CrossingDetection{std::move(*crossing), source_boundary};
 }
 
+std::optional<InputNodeRuntime::ReturnDetection> InputNodeRuntime::detect_return_to_local(
+    const InputEvent& event, const Point& pointer) const {
+  if (event.origin != InputOrigin::kPhysical) return std::nullopt;
+  const auto* delta = std::get_if<MouseDelta>(&event.payload);
+  if (delta == nullptr || delta->zero()) return std::nullopt;
+  const auto display_it = std::find_if(
+      topology_.displays().begin(), topology_.displays().end(),
+      [this](const Display& display) { return display.id == config_.local_display; });
+  if (display_it == topology_.displays().end()) return std::nullopt;
+  const auto& bounds = display_it->logical_bounds;
+  constexpr double kBoundaryTolerance = 1.0;
+
+  Edge edge = Edge::kRight;
+  double inward_motion = 0.0;
+  const auto consider = [&](Edge candidate, double motion) {
+    if (motion > inward_motion) {
+      edge = candidate;
+      inward_motion = motion;
+    }
+  };
+  if (pointer.x <= bounds.left + kBoundaryTolerance && delta->dx > 0.0)
+    consider(Edge::kLeft, delta->dx);
+  if (pointer.x >= bounds.right - kBoundaryTolerance && delta->dx < 0.0)
+    consider(Edge::kRight, -delta->dx);
+  if (pointer.y <= bounds.top + kBoundaryTolerance && delta->dy > 0.0)
+    consider(Edge::kUp, delta->dy);
+  if (pointer.y >= bounds.bottom - kBoundaryTolerance && delta->dy < 0.0)
+    consider(Edge::kDown, -delta->dy);
+  if (inward_motion <= 0.0) return std::nullopt;
+
+  Point source_boundary = pointer;
+  switch (edge) {
+    case Edge::kLeft:
+      source_boundary.x = bounds.left;
+      source_boundary.y = std::clamp(pointer.y, bounds.top, bounds.bottom);
+      break;
+    case Edge::kRight:
+      source_boundary.x = bounds.right;
+      source_boundary.y = std::clamp(pointer.y, bounds.top, bounds.bottom);
+      break;
+    case Edge::kUp:
+      source_boundary.x = std::clamp(pointer.x, bounds.left, bounds.right);
+      source_boundary.y = bounds.top;
+      break;
+    case Edge::kDown:
+      source_boundary.x = std::clamp(pointer.x, bounds.left, bounds.right);
+      source_boundary.y = bounds.bottom;
+      break;
+  }
+  return ReturnDetection{edge, source_boundary};
+}
+
 Result<void> InputNodeRuntime::drain_events(TimePoint now) {
   bool overflowed = false;
   std::deque<QueuedEvent> events;
@@ -285,8 +337,24 @@ Result<void> InputNodeRuntime::drain_events(TimePoint now) {
     }
 
     if (queued.pointer.has_value() && std::holds_alternative<MouseDelta>(event.payload) &&
-        (router_.state() == RouterState::kLocal || router_.state() == RouterState::kHandoff ||
-         router_.state() == RouterState::kRemote)) {
+        router_.state() == RouterState::kRemote) {
+      if (const auto returning = detect_return_to_local(event, pointer)) {
+        debug::log("returning to local edge=", static_cast<unsigned>(returning->edge),
+                   " source_boundary=", returning->source_boundary.x, ",",
+                   returning->source_boundary.y);
+        auto warped = config_.backend->warp_pointer(returning->source_boundary);
+        if (!warped.ok()) {
+          debug::log("return boundary warp failed error=", warped.error());
+          recover_after_handoff_failure();
+          return warped;
+        }
+        actions = router_.on_return_to_local(now);
+      }
+    }
+
+    if (actions.empty() && queued.pointer.has_value() &&
+        std::holds_alternative<MouseDelta>(event.payload) &&
+        (router_.state() == RouterState::kLocal || router_.state() == RouterState::kHandoff)) {
       if (const auto crossing = detect_crossing(event, pointer)) {
         debug::log("edge crossing target_display=", crossing->crossing.target.low,
                    " entry=", crossing->crossing.entry_point.x, ",",

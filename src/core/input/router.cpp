@@ -172,6 +172,12 @@ std::vector<RouterAction> InputRouter::on_crossing(Crossing crossing, TimePoint 
     return begin_acquire(now);
 }
 
+std::vector<RouterAction> InputRouter::on_return_to_local(TimePoint now) {
+    if (state_ != RouterState::kRemote) return {};
+    debug::log("router returning to local");
+    return recover(now);
+}
+
 std::vector<RouterAction> InputRouter::on_grant(AcquireResult result, TimePoint now) {
     if (state_ != RouterState::kAcquiring) return {};
     if (!result.granted()) return recover(now);

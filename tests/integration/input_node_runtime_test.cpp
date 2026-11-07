@@ -215,7 +215,7 @@ TEST(InputNodeRuntime, AccumulatesOutwardDeltaWhenPointerIsClampedAtEdge) {
   EXPECT_DOUBLE_EQ(entry.y, 50.0);
 }
 
-TEST(InputNodeRuntime, RemoteSourceCanInitiateAnotherCrossing) {
+TEST(InputNodeRuntime, RemoteSourceReturnsToLocalAtEdge) {
   FakeInputBackend left_backend;
   FakeInputBackend right_backend;
   auto left_result = InputNodeRuntime::create(config(
@@ -245,16 +245,16 @@ TEST(InputNodeRuntime, RemoteSourceCanInitiateAnotherCrossing) {
   ASSERT_EQ(left->router().state(), RouterState::kRemote);
   ASSERT_TRUE(right->arbiter().has_active_lease());
 
-  // The source is already remote. Moving outward at its local edge must
-  // release that lease and start the next handoff instead of forwarding the
-  // edge delta forever.
+  // The source is already remote. Moving inward from its local edge releases
+  // the target lease and restores this node's local cursor.
   left_backend.set_pointer_position(Point{100.0, 50.0});
   left_backend.emit_physical(
-      InputEvent{{}, {}, 0, 0, MouseDelta{4.0, 0.0}, InputOrigin::kPhysical});
+      InputEvent{{}, {}, 0, 0, MouseDelta{-4.0, 0.0}, InputOrigin::kPhysical});
   ASSERT_TRUE(left->poll(now, 0ms).ok());
-  pump_pair(*left, *right, now, 12);
-  EXPECT_EQ(left->router().state(), RouterState::kRemote);
-  EXPECT_TRUE(right->arbiter().has_active_lease());
+  pump_pair(*left, *right, now, 4);
+  EXPECT_EQ(left->router().state(), RouterState::kLocal);
+  EXPECT_FALSE(left_backend.status().suppression);
+  EXPECT_FALSE(right->arbiter().has_lease());
 }
 
 TEST(InputNodeRuntime, NoPeerOverflowStillReleasesInjectedStateAndRestoresLocal) {
