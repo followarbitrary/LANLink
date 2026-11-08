@@ -39,7 +39,7 @@ bool InputRouter::is_nonzero_physical(const Payload& payload) {
             if constexpr (std::is_same_v<T, MouseWheel>) return !value.zero();
             if constexpr (std::is_same_v<T, Key>) return value.code != 0;
             if constexpr (std::is_same_v<T, MouseButton>) return value.button != 0;
-            return false; // PointerWarp is a synchronization hint.
+            return false; // PointerWarp and PointerMove are synchronization hints.
         }, payload);
 }
 

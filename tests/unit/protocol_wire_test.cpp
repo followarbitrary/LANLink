@@ -55,6 +55,8 @@ TEST(ProtocolWire, RoundTripsEveryMessageAndInputPayload) {
     expect_round_trip(InputMessage{base});
     base.payload = PointerWarp{100.0, 200.0};
     expect_round_trip(InputMessage{base});
+    base.payload = PointerMove{1234.5, -678.25};
+    expect_round_trip(InputMessage{base});
 
     expect_round_trip(Release{id(9, 10), 42});
     expect_round_trip(Revoke{id(9, 10), 42, RevokeReason::kProtocolError});
@@ -114,6 +116,9 @@ TEST(ProtocolWire, RejectsInvalidValuesAndSizeLimits) {
                             {}, id(1, 1), 1, 1, MouseDelta{0, 0}, InputOrigin::kPhysical}})
                      .ok());
     EXPECT_FALSE(encode(InputMessage{InputEvent{id(1, 1), id(1, 1), 1, 1, MouseDelta{NAN, 0},
+                                                InputOrigin::kPhysical}})
+                     .ok());
+    EXPECT_FALSE(encode(InputMessage{InputEvent{id(1, 1), id(1, 1), 1, 1, PointerMove{0, NAN},
                                                 InputOrigin::kPhysical}})
                      .ok());
     EXPECT_FALSE(encode(Revoke{id(1, 1), 1, static_cast<RevokeReason>(99)}).ok());

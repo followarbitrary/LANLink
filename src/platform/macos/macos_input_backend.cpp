@@ -556,6 +556,20 @@ Result<void> MacOSInputBackend::inject(const InputEvent& event) {
       while (impl_->pending_injected_moves.size() > 64)
         impl_->pending_injected_moves.pop_front();
     }
+  } else if (const auto* move = std::get_if<PointerMove>(&event.payload)) {
+    const CGPoint point = CGPointMake(move->x, move->y);
+    pointer_update = point;
+    created = CGEventCreateMouseEvent(nullptr, kCGEventMouseMoved, point, kCGMouseButtonLeft);
+    if (created != nullptr) {
+      std::lock_guard lock(impl_->mutex);
+      impl_->pending_injected_moves.push_back(
+          Impl::PendingInjectedMove{point, 0, 0,
+                                    std::chrono::steady_clock::now() +
+                                        std::chrono::milliseconds{250}});
+      while (impl_->pending_injected_moves.size() > 64)
+        impl_->pending_injected_moves.pop_front();
+    }
+    debug::log("mac pointer move point=", move->x, ",", move->y);
   } else if (const auto* wheel = std::get_if<MouseWheel>(&event.payload)) {
     created = CGEventCreateScrollWheelEvent(nullptr, kCGScrollEventUnitLine, 1,
                                             static_cast<int32_t>(std::llround(wheel->delta)));
@@ -610,6 +624,11 @@ Result<void> MacOSInputBackend::inject(const InputEvent& event) {
                                 static_cast<int64_t>(std::llround(delta->dx)));
     CGEventSetIntegerValueField(created, kCGMouseEventDeltaY,
                                 static_cast<int64_t>(std::llround(delta->dy)));
+  } else if (std::holds_alternative<PointerMove>(event.payload)) {
+    // Keep the fallback echo signature deterministic if an event tap strips
+    // the user-data marker from an absolute injected move.
+    CGEventSetIntegerValueField(created, kCGMouseEventDeltaX, 0);
+    CGEventSetIntegerValueField(created, kCGMouseEventDeltaY, 0);
   }
   CGEventPost(kCGHIDEventTap, created);
   CFRelease(created);

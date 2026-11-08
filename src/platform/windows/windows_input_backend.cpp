@@ -287,6 +287,17 @@ Result<void> WindowsInputBackend::inject(const InputEvent& event) {
     input.mi.dx = injected_move_dx;
     input.mi.dy = injected_move_dy;
     input.mi.dwExtraInfo = own_extra_info();
+  } else if (const auto* move = std::get_if<PointerMove>(&event.payload)) {
+    input.type = INPUT_MOUSE;
+    const auto origin_x = GetSystemMetrics(SM_XVIRTUALSCREEN);
+    const auto origin_y = GetSystemMetrics(SM_YVIRTUALSCREEN);
+    const auto width = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+    const auto height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+    input.mi.dx = static_cast<LONG>(windows_absolute_mouse_coordinate(move->x, origin_x, width));
+    input.mi.dy = static_cast<LONG>(windows_absolute_mouse_coordinate(move->y, origin_y, height));
+    input.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
+    input.mi.dwExtraInfo = own_extra_info();
+    debug::log("windows pointer move point=", move->x, ",", move->y);
   } else if (const auto* wheel = std::get_if<MouseWheel>(&event.payload)) {
     input.type = INPUT_MOUSE;
     input.mi.dwFlags = MOUSEEVENTF_WHEEL;
@@ -300,7 +311,7 @@ Result<void> WindowsInputBackend::inject(const InputEvent& event) {
     const auto height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
     input.mi.dx = static_cast<LONG>(windows_absolute_mouse_coordinate(warp->x, origin_x, width));
     input.mi.dy = static_cast<LONG>(windows_absolute_mouse_coordinate(warp->y, origin_y, height));
-    input.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE;
+    input.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
     input.mi.dwExtraInfo = own_extra_info();
     debug::log("windows pointer warp point=", warp->x, ",", warp->y);
   }
@@ -314,25 +325,7 @@ Result<void> WindowsInputBackend::inject(const InputEvent& event) {
       return Result<void>::failure(status_.last_error);
     }
   }
-  // SendInput relative motion is affected by the user's pointer acceleration
-  // curve. Deskflow temporarily switches to 1:1 motion for the injected
-  // delta, then restores the user's settings so the remote cursor advances at
-  // the same rate as the captured raw delta on scaled Windows desktops.
-  int old_mouse[3]{};
-  UINT old_speed = 0;
-  bool mouse_settings_changed = false;
-  bool speed_changed = false;
   const bool relative_move = std::holds_alternative<MouseDelta>(event.payload);
-  if (relative_move && SystemParametersInfoW(SPI_GETMOUSE, 0, old_mouse, 0) != FALSE &&
-      SystemParametersInfoW(SPI_GETMOUSESPEED, 0, &old_speed, 0) != FALSE) {
-    int one_to_one[3] = {0, 0, 0};
-    UINT one_to_one_speed = 1;
-    mouse_settings_changed =
-        SystemParametersInfoW(SPI_SETMOUSE, 0, one_to_one, 0) != FALSE;
-    speed_changed =
-        SystemParametersInfoW(SPI_SETMOUSESPEED, 0, &one_to_one_speed, 0) != FALSE;
-  }
-
   const bool track_injected_move =
       relative_move && (injected_move_dx != 0 || injected_move_dy != 0);
   if (track_injected_move) {
@@ -343,12 +336,6 @@ Result<void> WindowsInputBackend::inject(const InputEvent& event) {
     while (pending_injected_moves_.size() > 64) pending_injected_moves_.pop_front();
   }
   const bool sent = send_inputs(&input, 1);
-  if (mouse_settings_changed) {
-    (void)SystemParametersInfoW(SPI_SETMOUSE, 0, old_mouse, 0);
-  }
-  if (speed_changed) {
-    (void)SystemParametersInfoW(SPI_SETMOUSESPEED, 0, &old_speed, 0);
-  }
   if (!sent) {
     std::lock_guard lock(mutex_);
     if (track_injected_move && !pending_injected_moves_.empty()) {
@@ -386,6 +373,13 @@ Result<void> WindowsInputBackend::inject(const InputEvent& event) {
     pending_move_dy_ = 0.0;
     last_point_.x = static_cast<LONG>(std::llround(warp->x));
     last_point_.y = static_cast<LONG>(std::llround(warp->y));
+    have_last_point_ = true;
+  } else if (const auto* move = std::get_if<PointerMove>(&event.payload)) {
+    std::lock_guard lock(mutex_);
+    pending_move_dx_ = 0.0;
+    pending_move_dy_ = 0.0;
+    last_point_.x = static_cast<LONG>(std::llround(move->x));
+    last_point_.y = static_cast<LONG>(std::llround(move->y));
     have_last_point_ = true;
   }
   return Result<void>::success();

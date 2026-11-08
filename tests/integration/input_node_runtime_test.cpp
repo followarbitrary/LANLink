@@ -108,6 +108,11 @@ TEST(InputNodeRuntime, CrossesAtExactThresholdAndForwardsSuppressedInput) {
   pump_pair(*left, *right, now, 4);
   EXPECT_EQ(*left_backend.pointer_position(), (Point{80.0, 50.0}));
   EXPECT_EQ(*right_backend.pointer_position(), (Point{28.0, 50.0}));
+  ASSERT_EQ(right_backend.injected_events().size(), 2u);
+  ASSERT_TRUE(std::holds_alternative<PointerMove>(right_backend.injected_events()[1].payload));
+  const auto& remote_move = std::get<PointerMove>(right_backend.injected_events()[1].payload);
+  EXPECT_DOUBLE_EQ(remote_move.x, 28.0);
+  EXPECT_DOUBLE_EQ(remote_move.y, 50.0);
 
   left_backend.emit_physical(
       InputEvent{{}, {}, 0, 0, Key{0x04, true}, InputOrigin::kPhysical});

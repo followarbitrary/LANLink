@@ -15,11 +15,10 @@
 
 namespace lanlink::protocol {
 
-// Version 3 adds DisplayInfo, which lets each peer advertise the native
-// logical desktop bounds used for target cursor tracking. Keep the version in
-// the frame header and Hello handshake aligned so an older executable rejects
-// the connection before trying to decode a newer payload.
-constexpr std::uint8_t kProtocolVersion = 3;
+// Version 4 adds absolute PointerMove input payloads. Each peer advertises
+// the same version during Hello so an older executable rejects the connection
+// before trying to decode a newer payload.
+constexpr std::uint8_t kProtocolVersion = 4;
 constexpr std::size_t kHeaderSize = 12;
 constexpr std::size_t kMaxFrameSize = 64 * 1024;
 constexpr std::size_t kMaxErrorText = 4 * 1024;

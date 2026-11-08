@@ -54,6 +54,9 @@ Result<void> FakeInputBackend::inject(const InputEvent& event) {
   if (const auto* warp = std::get_if<PointerWarp>(&tagged.payload)) {
     pointer_position_ = Point{warp->x, warp->y};
     have_pointer_position_ = true;
+  } else if (const auto* move = std::get_if<PointerMove>(&tagged.payload)) {
+    pointer_position_ = Point{move->x, move->y};
+    have_pointer_position_ = true;
   } else if (const auto* delta = std::get_if<MouseDelta>(&tagged.payload)) {
     if (have_pointer_position_) {
       pointer_position_.x += delta->dx;

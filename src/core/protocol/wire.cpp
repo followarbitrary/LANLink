@@ -145,6 +145,10 @@ void write_input(Writer& w, const InputEvent& event) {
                 w.u8(5);
                 w.f64(payload.x);
                 w.f64(payload.y);
+            } else if constexpr (std::is_same_v<T, PointerMove>) {
+                w.u8(6);
+                w.f64(payload.x);
+                w.f64(payload.y);
             }
         },
         event.payload);
@@ -204,6 +208,13 @@ bool read_input(Reader& r, InputEvent& event) {
         if (!r.f64(x) || !r.f64(y))
             return false;
         event.payload = PointerWarp{x, y};
+        return true;
+    }
+    case 6: {
+        double x{}, y{};
+        if (!r.f64(x) || !r.f64(y))
+            return false;
+        event.payload = PointerMove{x, y};
         return true;
     }
     default:
@@ -354,6 +365,8 @@ Result<std::vector<std::uint8_t>> encode(const Message& message) {
                         else if constexpr (std::is_same_v<P, MouseWheel>)
                             valid = finite(payload.delta);
                         else if constexpr (std::is_same_v<P, PointerWarp>)
+                            valid = finite(payload.x) && finite(payload.y);
+                        else if constexpr (std::is_same_v<P, PointerMove>)
                             valid = finite(payload.x) && finite(payload.y);
                     },
                     value.event.payload);

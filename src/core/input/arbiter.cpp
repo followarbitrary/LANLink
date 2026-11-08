@@ -22,7 +22,8 @@ constexpr bool is_zero(const Payload& payload) {
             } else if constexpr (std::is_same_v<T, MouseButton>) {
                 return value.button == 0;
             } else {
-                // Pointer warps are synchronization hints and never constitute local physical
+                // Pointer warps and absolute virtual cursor moves are
+                // synchronization hints and never constitute local physical
                 // input.
                 return true;
             }

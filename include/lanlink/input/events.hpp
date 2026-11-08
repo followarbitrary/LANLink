@@ -51,7 +51,18 @@ struct PointerWarp {
     constexpr PointerWarp(double x_value, double y_value) : x(x_value), y(y_value) {}
 };
 
-using Payload = std::variant<MouseDelta, MouseButton, MouseWheel, Key, PointerWarp>;
+// An absolute move follows the runtime's virtual cursor. Unlike PointerWarp,
+// which is a control-plane synchronization operation used during handoff,
+// this is a regular remote motion event and must be injected as a screen
+// coordinate on the target desktop.
+struct PointerMove {
+    double x{};
+    double y{};
+    constexpr PointerMove() = default;
+    constexpr PointerMove(double x_value, double y_value) : x(x_value), y(y_value) {}
+};
+
+using Payload = std::variant<MouseDelta, MouseButton, MouseWheel, Key, PointerWarp, PointerMove>;
 
 enum class InputOrigin {
     kPhysical,

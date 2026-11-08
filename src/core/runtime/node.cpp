@@ -466,7 +466,17 @@ Result<void> InputNodeRuntime::drain_events(TimePoint now) {
       }
       if (router_.state() == RouterState::kRemote &&
           event.origin == InputOrigin::kPhysical && config_.backend->status().suppression) {
-        actions = router_.on_suppressed_event(event, pointer, now);
+        // The runtime owns the target-side virtual cursor. Forward its
+        // absolute position so the target backend can inject directly into
+        // its desktop coordinate space without applying Windows pointer
+        // acceleration to a relative delta.
+        InputEvent forwarded = event;
+        if (remote_cursor_.has_value() &&
+            std::holds_alternative<MouseDelta>(forwarded.payload)) {
+          forwarded.payload = PointerMove{remote_cursor_->position.x,
+                                          remote_cursor_->position.y};
+        }
+        actions = router_.on_suppressed_event(std::move(forwarded), pointer, now);
       } else {
         actions = router_.on_local_event(event, pointer, now);
       }
