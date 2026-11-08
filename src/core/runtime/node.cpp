@@ -393,6 +393,10 @@ Result<void> InputNodeRuntime::drain_events(TimePoint now) {
       clear_remote_cursor();
       const auto cleanup = router_.on_disconnect(now);
       (void)dispatch_actions(cleanup, now);
+      // Make the router usable for the remaining events already drained from
+      // this batch. The next outer tick would normally perform this transition,
+      // but returning here would silently discard those events first.
+      (void)router_.on_tick(now);
     };
 
     if (event.origin == InputOrigin::kPhysical && arbiter_.has_active_lease()) {
@@ -469,7 +473,7 @@ Result<void> InputNodeRuntime::drain_events(TimePoint now) {
         if (!warped.ok()) {
           debug::log("source return boundary warp failed error=", warped.error());
           recover_after_handoff_failure();
-          return warped;
+          continue;
         }
         clear_remote_cursor();
         actions = router_.on_return_to_local(now);

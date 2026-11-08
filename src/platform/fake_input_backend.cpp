@@ -82,6 +82,11 @@ Result<void> FakeInputBackend::inject(const InputEvent& event) {
 }
 
 Result<void> FakeInputBackend::warp_pointer(Point position) {
+  if (warp_failures_remaining_ != 0) {
+    --warp_failures_remaining_;
+    set_error("pointer warp failed");
+    return Result<void>::failure(status_.last_error);
+  }
   if (!status_.running || injection_failure_ || !status_.injection) {
     status_.injection = false;
     status_.degraded = true;

@@ -32,6 +32,10 @@ class FakeInputBackend final : public IInputBackend {
   void set_capture_failure(bool failed) { set_capture_available(!failed); }
   void set_injection_available(bool available);
   void set_injection_failure(bool failed);
+  // Cause exactly one subsequent pointer warp to fail. This lets runtime tests
+  // exercise the return-to-local recovery path without disabling injection for
+  // the whole session.
+  void fail_next_warp() noexcept { ++warp_failures_remaining_; }
   void emit_physical(const InputEvent& event);
   void emit_physical_event(const InputEvent& event) { emit_physical(event); }
 
@@ -53,6 +57,7 @@ class FakeInputBackend final : public IInputBackend {
   BackendStatus status_{};
   EventCallback callback_;
   bool injection_failure_{false};
+  std::size_t warp_failures_remaining_{0};
   std::vector<bool> suppression_history_;
   std::vector<InputEvent> physical_events_;
   std::vector<InputEvent> injected_events_;

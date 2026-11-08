@@ -3,10 +3,8 @@
 #include "lanlink/platform/input_backend.hpp"
 
 #include <atomic>
-#include <chrono>
 #include <cstdint>
 #include <condition_variable>
-#include <deque>
 #include <mutex>
 #include <thread>
 #include <unordered_map>
@@ -53,11 +51,6 @@ class WindowsInputBackend final : public IInputBackend {
     std::unordered_set<std::uint32_t> keys;
     std::unordered_set<std::uint32_t> buttons;
   };
-  struct PendingInjectedMove {
-    LONG dx{};
-    LONG dy{};
-    std::chrono::steady_clock::time_point deadline{};
-  };
 
   static LRESULT CALLBACK keyboard_proc(int code, WPARAM wparam, LPARAM lparam);
   static LRESULT CALLBACK mouse_proc(int code, WPARAM wparam, LPARAM lparam);
@@ -88,7 +81,6 @@ class WindowsInputBackend final : public IInputBackend {
   std::atomic<bool> stop_requested_{false};
   bool raw_input_ready_{false};
   bool cursor_hidden_{false};
-  std::deque<PendingInjectedMove> pending_injected_moves_;
   EventCallback callback_;
   std::unordered_map<SessionId, HeldState> held_;
   POINT last_point_{};

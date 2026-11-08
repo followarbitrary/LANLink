@@ -174,14 +174,7 @@ struct MacOSInputBackend::Impl {
     CGPoint point{};
     std::chrono::steady_clock::time_point deadline{};
   };
-  struct PendingInjectedMove {
-    CGPoint point{};
-    std::int64_t dx{};
-    std::int64_t dy{};
-    std::chrono::steady_clock::time_point deadline{};
-  };
   std::deque<PendingWarp> ignored_warps;
-  std::deque<PendingInjectedMove> pending_injected_moves;
   std::unordered_map<SessionId, HeldState> held;
 };
 
@@ -208,27 +201,6 @@ CGEventRef tap_callback(CGEventTapProxy, CGEventType type, CGEventRef event, voi
         type == kCGEventRightMouseDragged || type == kCGEventOtherMouseDragged) {
       const CGPoint point = CGEventGetLocation(event);
       const auto now = std::chrono::steady_clock::now();
-      for (auto it = impl->pending_injected_moves.begin();
-           it != impl->pending_injected_moves.end();) {
-        if (now >= it->deadline)
-          it = impl->pending_injected_moves.erase(it);
-        else
-          ++it;
-      }
-      const auto event_dx = CGEventGetIntegerValueField(event, kCGMouseEventDeltaX);
-      const auto event_dy = CGEventGetIntegerValueField(event, kCGMouseEventDeltaY);
-      for (auto it = impl->pending_injected_moves.begin();
-           it != impl->pending_injected_moves.end(); ++it) {
-        const bool same_point = std::abs(point.x - it->point.x) <= 1.0 &&
-                                std::abs(point.y - it->point.y) <= 1.0;
-        const bool same_delta = event_dx == it->dx && event_dy == it->dy;
-        if (same_point && same_delta) {
-          impl->pending_injected_moves.erase(it);
-          if (!own_event)
-            debug::log("mac ignored echoed injected move point=", point.x, ",", point.y);
-          return own_event || !impl->suppression ? event : nullptr;
-        }
-      }
       // CGWarpMouseCursorPosition is asynchronous. Keep all recent warp
       // points because an older source-edge warp can arrive after a newer
       // target-entry warp. A single slot would misclassify that stale event
@@ -298,7 +270,6 @@ Result<void> MacOSInputBackend::start(EventCallback callback) {
     impl_->cursor_hidden = false;
     impl_->have_last_point = false;
     impl_->ignored_warps.clear();
-    impl_->pending_injected_moves.clear();
     impl_->thread = std::thread([this] {
       CFMachPortRef tap = CGEventTapCreate(
           kCGHIDEventTap, kCGHeadInsertEventTap, kCGEventTapOptionDefault,
@@ -436,7 +407,6 @@ void MacOSInputBackend::stop() {
   impl_->callback = {};
   impl_->have_last_point = false;
   impl_->ignored_warps.clear();
-  impl_->pending_injected_moves.clear();
   status_.capture = false;
   status_.injection = status_.permission && impl_->held.empty();
   status_.degraded = !status_.permission || !status_.injection;
@@ -566,29 +536,10 @@ Result<void> MacOSInputBackend::inject(const InputEvent& event) {
     point.y += delta->dy;
     pointer_update = point;
     created = CGEventCreateMouseEvent(nullptr, kCGEventMouseMoved, point, kCGMouseButtonLeft);
-    if (created != nullptr) {
-      std::lock_guard lock(impl_->mutex);
-      impl_->pending_injected_moves.push_back(
-          Impl::PendingInjectedMove{point, static_cast<std::int64_t>(std::llround(delta->dx)),
-                                    static_cast<std::int64_t>(std::llround(delta->dy)),
-                                    std::chrono::steady_clock::now() +
-                                        std::chrono::milliseconds{250}});
-      while (impl_->pending_injected_moves.size() > 64)
-        impl_->pending_injected_moves.pop_front();
-    }
   } else if (const auto* move = std::get_if<PointerMove>(&event.payload)) {
     const CGPoint point = CGPointMake(move->x, move->y);
     pointer_update = point;
     created = CGEventCreateMouseEvent(nullptr, kCGEventMouseMoved, point, kCGMouseButtonLeft);
-    if (created != nullptr) {
-      std::lock_guard lock(impl_->mutex);
-      impl_->pending_injected_moves.push_back(
-          Impl::PendingInjectedMove{point, 0, 0,
-                                    std::chrono::steady_clock::now() +
-                                        std::chrono::milliseconds{250}});
-      while (impl_->pending_injected_moves.size() > 64)
-        impl_->pending_injected_moves.pop_front();
-    }
     debug::log("mac pointer move point=", move->x, ",", move->y);
   } else if (const auto* wheel = std::get_if<MouseWheel>(&event.payload)) {
     created = CGEventCreateScrollWheelEvent(nullptr, kCGScrollEventUnitLine, 1,
@@ -645,8 +596,9 @@ Result<void> MacOSInputBackend::inject(const InputEvent& event) {
     CGEventSetIntegerValueField(created, kCGMouseEventDeltaY,
                                 static_cast<int64_t>(std::llround(delta->dy)));
   } else if (std::holds_alternative<PointerMove>(event.payload)) {
-    // Keep the fallback echo signature deterministic if an event tap strips
-    // the user-data marker from an absolute injected move.
+    // Keep the relative fields deterministic for an absolute move. The event
+    // tap uses kCGEventSourceUserData as the authoritative injection marker;
+    // matching a pending point and delta could swallow a real move.
     CGEventSetIntegerValueField(created, kCGMouseEventDeltaX, 0);
     CGEventSetIntegerValueField(created, kCGMouseEventDeltaY, 0);
   }

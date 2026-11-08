@@ -317,6 +317,62 @@ TEST(InputNodeRuntime, RemoteSourceReturnsToLocalAtEdge) {
   EXPECT_FALSE(right->arbiter().has_lease());
 }
 
+TEST(InputNodeRuntime, ReturnWarpFailureRecoversBeforeProcessingQueuedEvents) {
+  FakeInputBackend left_backend;
+  FakeInputBackend right_backend;
+  auto left_result = InputNodeRuntime::create(config(
+      id(351), id(352), AuthenticatedPeer{id(353)}, id(360), Endpoint{"127.0.0.1", 0},
+      &left_backend));
+  auto right_result = InputNodeRuntime::create(config(
+      id(353), id(354), AuthenticatedPeer{id(351)}, id(370), Endpoint{"127.0.0.1", 0},
+      &right_backend));
+  ASSERT_TRUE(left_result.ok()) << left_result.error();
+  ASSERT_TRUE(right_result.ok()) << right_result.error();
+  auto left = std::move(left_result.value());
+  auto right = std::move(right_result.value());
+  right_backend.set_display_bounds(Rect{0.0, 0.0, 200.0, 100.0});
+  ASSERT_TRUE(left->set_topology(topology_for(id(360), id(370), true)).ok());
+  ASSERT_TRUE(right->set_topology(topology_for(id(370), id(360), true)).ok());
+  ASSERT_TRUE(left->start().ok());
+  ASSERT_TRUE(right->start().ok());
+  ASSERT_TRUE(left->connect_peer(right->local_endpoint()).ok());
+
+  IClock::time_point now{};
+  pump_pair(*left, *right, now, 20);
+
+  left_backend.set_pointer_position(Point{100.0, 50.0});
+  left_backend.emit_physical(
+      InputEvent{{}, {}, 0, 0, MouseDelta{4.0, 0.0}, InputOrigin::kPhysical});
+  ASSERT_TRUE(left->poll(now, 0ms).ok());
+  pump_pair(*left, *right, now, 12);
+  ASSERT_EQ(left->router().state(), RouterState::kRemote);
+
+  // Move the target cursor to its entry edge. The next outward delta will
+  // request a source warp back to the local display.
+  left_backend.set_pointer_position(Point{100.0, 50.0});
+  for (int index = 0; index < 2; ++index) {
+    left_backend.emit_physical(
+        InputEvent{{}, {}, 0, 0, MouseDelta{-4.0, 0.0}, InputOrigin::kPhysical});
+    ASSERT_TRUE(left->poll(now, 0ms).ok());
+    pump_pair(*left, *right, now, 2);
+  }
+
+  // Fail only the return warp, then queue another event in the same drained
+  // batch. The second event should still be handled after local recovery and
+  // start a fresh acquire rather than being silently discarded.
+  left_backend.fail_next_warp();
+  left_backend.emit_physical(
+      InputEvent{{}, {}, 0, 0, MouseDelta{-1.0, 0.0}, InputOrigin::kPhysical});
+  left_backend.emit_physical(
+      InputEvent{{}, {}, 0, 0, MouseDelta{4.0, 0.0}, InputOrigin::kPhysical});
+  const auto drained = left->poll(now, 0ms);
+  ASSERT_TRUE(drained.ok()) << drained.error();
+  EXPECT_EQ(left->router().state(), RouterState::kAcquiring);
+  EXPECT_TRUE(left_backend.status().suppression);
+  ASSERT_FALSE(left_backend.suppression_history().empty());
+  EXPECT_TRUE(left_backend.suppression_history().back());
+}
+
 TEST(InputNodeRuntime, RemoteReturnMapsTargetTangentToSourceBounds) {
   FakeInputBackend left_backend;
   FakeInputBackend right_backend;

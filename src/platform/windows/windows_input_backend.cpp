@@ -97,7 +97,6 @@ Result<void> WindowsInputBackend::start(EventCallback callback) {
     have_last_point_ = false;
     pending_move_dx_ = 0.0;
     pending_move_dy_ = 0.0;
-    pending_injected_moves_.clear();
     hook_thread_ = std::thread(&WindowsInputBackend::message_thread, this);
   }
 
@@ -163,7 +162,6 @@ void WindowsInputBackend::stop() {
   have_last_point_ = false;
   pending_move_dx_ = 0.0;
   pending_move_dy_ = 0.0;
-  pending_injected_moves_.clear();
 }
 
 Result<void> WindowsInputBackend::set_suppression(bool enabled) {
@@ -340,24 +338,9 @@ Result<void> WindowsInputBackend::inject(const InputEvent& event) {
       return Result<void>::failure(status_.last_error);
     }
   }
-  const bool relative_move = std::holds_alternative<MouseDelta>(event.payload);
-  const bool track_injected_move =
-      relative_move && (injected_move_dx != 0 || injected_move_dy != 0);
-  if (track_injected_move) {
-    std::lock_guard lock(mutex_);
-    pending_injected_moves_.push_back(PendingInjectedMove{
-        injected_move_dx, injected_move_dy,
-        std::chrono::steady_clock::now() + std::chrono::milliseconds{250}});
-    while (pending_injected_moves_.size() > 64) pending_injected_moves_.pop_front();
-  }
   const bool sent = send_inputs(&input, 1);
   if (!sent) {
     std::lock_guard lock(mutex_);
-    if (track_injected_move && !pending_injected_moves_.empty()) {
-      const auto& pending = pending_injected_moves_.back();
-      if (pending.dx == injected_move_dx && pending.dy == injected_move_dy)
-        pending_injected_moves_.pop_back();
-    }
     status_.injection = false;
     status_.degraded = true;
     status_.last_error = "SendInput failed";
@@ -590,27 +573,11 @@ void WindowsInputBackend::handle_raw_input(HRAWINPUT input) {
   if (mouse.ulExtraInformation == static_cast<ULONG>(own_extra_info())) return;
   if ((mouse.usFlags & MOUSE_MOVE_ABSOLUTE) != 0) return;
   if (mouse.lLastX == 0 && mouse.lLastY == 0) return;
-  {
-    std::lock_guard lock(mutex_);
-    const auto now = std::chrono::steady_clock::now();
-    for (auto it = pending_injected_moves_.begin(); it != pending_injected_moves_.end();) {
-      if (now >= it->deadline)
-        it = pending_injected_moves_.erase(it);
-      else
-        ++it;
-    }
-    const auto injected = std::find_if(
-        pending_injected_moves_.begin(), pending_injected_moves_.end(),
-        [&mouse](const PendingInjectedMove& pending) {
-          return pending.dx == mouse.lLastX && pending.dy == mouse.lLastY;
-        });
-    if (injected != pending_injected_moves_.end()) {
-      pending_injected_moves_.erase(injected);
-      debug::log("windows ignored echoed injected move dx=", mouse.lLastX,
-                 " dy=", mouse.lLastY);
-      return;
-    }
-  }
+  // Raw input does not carry enough information to distinguish a markerless
+  // echoed relative move from a real move with the same delta. Matching a
+  // pending (dx, dy) here can therefore swallow physical input. SendInput
+  // events carry own_extra_info(), which is checked above; all unmarked raw
+  // motion is treated as physical input.
   InputEvent event{};
   event.origin = InputOrigin::kPhysical;
   event.payload = MouseDelta{static_cast<double>(mouse.lLastX),
