@@ -127,6 +127,13 @@ std::optional<MacModifierFlag> mac_modifier_flag_for_hid(std::uint32_t usage) {
   }
 }
 
+MacMouseMotionKind mac_mouse_motion_kind_for_buttons(std::uint32_t buttons) {
+  if ((buttons & 0x1u) != 0) return MacMouseMotionKind::kLeftDragged;
+  if ((buttons & 0x2u) != 0) return MacMouseMotionKind::kRightDragged;
+  if ((buttons & 0x4u) != 0) return MacMouseMotionKind::kOtherDragged;
+  return MacMouseMotionKind::kMoved;
+}
+
 std::optional<std::uint32_t> windows_release_vk_for_hid(std::uint32_t usage) {
   return hid_to_windows_vk(usage);
 }

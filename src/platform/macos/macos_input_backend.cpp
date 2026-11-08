@@ -588,6 +588,39 @@ Result<void> MacOSInputBackend::inject(const InputEvent& event) {
   }
   CGEventRef created = nullptr;
   std::optional<CGPoint> pointer_update;
+  CGEventType motion_type = kCGEventMouseMoved;
+  CGMouseButton motion_button = kCGMouseButtonLeft;
+  if (std::holds_alternative<MouseDelta>(event.payload) ||
+      std::holds_alternative<PointerMove>(event.payload)) {
+    // A plain mouse-moved event does not continue a native text selection.
+    // Keep the event stream in the dragged family while a remote button is held.
+    std::uint32_t held_buttons = 0;
+    {
+      std::lock_guard lock(impl_->mutex);
+      const auto it = impl_->held.find(event.session);
+      if (it != impl_->held.end()) {
+        for (const auto button : it->second.buttons) {
+          if (button >= 1 && button <= 3) held_buttons |= 1u << (button - 1);
+        }
+      }
+    }
+    switch (mac_mouse_motion_kind_for_buttons(held_buttons)) {
+      case MacMouseMotionKind::kLeftDragged:
+        motion_type = kCGEventLeftMouseDragged;
+        motion_button = kCGMouseButtonLeft;
+        break;
+      case MacMouseMotionKind::kRightDragged:
+        motion_type = kCGEventRightMouseDragged;
+        motion_button = kCGMouseButtonRight;
+        break;
+      case MacMouseMotionKind::kOtherDragged:
+        motion_type = kCGEventOtherMouseDragged;
+        motion_button = static_cast<CGMouseButton>(2);
+        break;
+      case MacMouseMotionKind::kMoved:
+        break;
+    }
+  }
   if (const auto* key = std::get_if<Key>(&event.payload)) {
     const auto keycode = hid_to_mac_keycode(key->code);
     if (!keycode.has_value()) {
@@ -627,11 +660,11 @@ Result<void> MacOSInputBackend::inject(const InputEvent& event) {
     point.x += delta->dx;
     point.y += delta->dy;
     pointer_update = point;
-    created = CGEventCreateMouseEvent(nullptr, kCGEventMouseMoved, point, kCGMouseButtonLeft);
+    created = CGEventCreateMouseEvent(nullptr, motion_type, point, motion_button);
   } else if (const auto* move = std::get_if<PointerMove>(&event.payload)) {
     const CGPoint point = CGPointMake(move->x, move->y);
     pointer_update = point;
-    created = CGEventCreateMouseEvent(nullptr, kCGEventMouseMoved, point, kCGMouseButtonLeft);
+    created = CGEventCreateMouseEvent(nullptr, motion_type, point, motion_button);
     debug::log("mac pointer move point=", move->x, ",", move->y);
   } else if (const auto* wheel = std::get_if<MouseWheel>(&event.payload)) {
     created = CGEventCreateScrollWheelEvent(nullptr, kCGScrollEventUnitLine, 1,

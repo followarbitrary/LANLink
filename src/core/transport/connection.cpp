@@ -22,6 +22,7 @@
 #include <cerrno>
 #include <fcntl.h>
 #include <netdb.h>
+#include <netinet/tcp.h>
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -46,6 +47,16 @@ void close_socket(NativeSocket socket) {
     closesocket(socket);
 #else
     close(socket);
+#endif
+}
+
+bool set_tcp_no_delay(NativeSocket socket) {
+    int enabled = 1;
+#if defined(_WIN32)
+    return setsockopt(socket, IPPROTO_TCP, TCP_NODELAY,
+                      reinterpret_cast<const char*>(&enabled), sizeof(enabled)) == 0;
+#else
+    return setsockopt(socket, IPPROTO_TCP, TCP_NODELAY, &enabled, sizeof(enabled)) == 0;
 #endif
 }
 
@@ -320,6 +331,10 @@ Result<Connection> Connection::connect(const Endpoint& endpoint, ConnectionOptio
         if (socket == kInvalidSocket)
             continue;
         if (::connect(socket, address->ai_addr, static_cast<int>(address->ai_addrlen)) == 0) {
+            if (!set_tcp_no_delay(socket)) {
+                close_socket(socket);
+                continue;
+            }
             auto impl = std::make_unique<Impl>();
             impl->socket = socket;
             impl->options = options;
@@ -510,6 +525,10 @@ Result<Connection> Listener::accept(std::chrono::milliseconds timeout) {
     const auto socket = static_cast<NativeSocket>(::accept(impl_->socket, nullptr, nullptr));
     if (socket == kInvalidSocket)
         return Result<Connection>::failure("accept failed");
+    if (!set_tcp_no_delay(socket)) {
+        close_socket(socket);
+        return Result<Connection>::failure("TCP_NODELAY setup failed");
+    }
     auto connection = std::make_unique<Connection::Impl>();
     connection->socket = socket;
     connection->options = impl_->options;
