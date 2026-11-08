@@ -3,8 +3,10 @@
 #include "lanlink/platform/input_backend.hpp"
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <condition_variable>
+#include <deque>
 #include <mutex>
 #include <thread>
 #include <unordered_map>
@@ -52,6 +54,12 @@ class WindowsInputBackend final : public IInputBackend {
     std::unordered_set<std::uint32_t> buttons;
   };
 
+  struct PendingInjectedMotion {
+    std::uint64_t id{};
+    POINT point{};
+    std::chrono::steady_clock::time_point deadline{};
+  };
+
   static LRESULT CALLBACK keyboard_proc(int code, WPARAM wparam, LPARAM lparam);
   static LRESULT CALLBACK mouse_proc(int code, WPARAM wparam, LPARAM lparam);
   static LRESULT CALLBACK raw_input_proc(HWND window, UINT message, WPARAM wparam,
@@ -93,6 +101,11 @@ class WindowsInputBackend final : public IInputBackend {
   bool have_last_point_{false};
   double pending_move_dx_{0.0};
   double pending_move_dy_{0.0};
+  // Some Windows builds mirror SendInput through WM_INPUT without preserving
+  // its injection marker. Keep a short-lived absolute position ledger so
+  // those echoes cannot preempt an active remote lease.
+  std::uint64_t next_injected_motion_id_{0};
+  std::deque<PendingInjectedMotion> pending_injected_motions_;
 #else
   EventCallback callback_;
 #endif

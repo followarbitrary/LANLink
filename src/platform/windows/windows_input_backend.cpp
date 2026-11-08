@@ -19,6 +19,7 @@ std::atomic<WindowsInputBackend*> WindowsInputBackend::active_instance_{nullptr}
 namespace {
 constexpr wchar_t kRawInputWindowClass[] = L"LANLink.RawInputWindow";
 constexpr UINT kCursorVisibilityMessage = WM_APP + 1;
+constexpr auto kInjectedMotionEchoTimeout = std::chrono::milliseconds{25};
 
 // Keep Win32 pointer hooks, cursor APIs, and screen metrics in one coordinate
 // space. Without an explicit process DPI context, user32 virtualizes
@@ -120,6 +121,7 @@ Result<void> WindowsInputBackend::start(EventCallback callback) {
     have_last_point_ = false;
     pending_move_dx_ = 0.0;
     pending_move_dy_ = 0.0;
+    pending_injected_motions_.clear();
     hook_thread_ = std::thread(&WindowsInputBackend::message_thread, this);
   }
 
@@ -189,6 +191,7 @@ void WindowsInputBackend::stop() {
   have_last_point_ = false;
   pending_move_dx_ = 0.0;
   pending_move_dy_ = 0.0;
+  pending_injected_motions_.clear();
 }
 
 Result<void> WindowsInputBackend::set_suppression(bool enabled) {
@@ -279,6 +282,8 @@ Result<void> WindowsInputBackend::inject(const InputEvent& event) {
   double next_pending_move_dy = 0.0;
   LONG injected_move_dx = 0;
   LONG injected_move_dy = 0;
+  std::optional<POINT> expected_absolute_point;
+  std::uint64_t injected_motion_id = 0;
   if (const auto* key = std::get_if<Key>(&event.payload)) {
     const auto vk = hid_to_windows_vk(key->code);
     if (!vk.has_value()) {
@@ -340,6 +345,8 @@ Result<void> WindowsInputBackend::inject(const InputEvent& event) {
     input.mi.dy = static_cast<LONG>(windows_absolute_mouse_coordinate(move->y, origin_y, height));
     input.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
     input.mi.dwExtraInfo = own_extra_info();
+    expected_absolute_point = POINT{static_cast<LONG>(std::llround(move->x)),
+                                    static_cast<LONG>(std::llround(move->y))};
     debug::log("windows pointer move point=", move->x, ",", move->y);
   } else if (const auto* wheel = std::get_if<MouseWheel>(&event.payload)) {
     input.type = INPUT_MOUSE;
@@ -356,6 +363,8 @@ Result<void> WindowsInputBackend::inject(const InputEvent& event) {
     input.mi.dy = static_cast<LONG>(windows_absolute_mouse_coordinate(warp->y, origin_y, height));
     input.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
     input.mi.dwExtraInfo = own_extra_info();
+    expected_absolute_point = POINT{static_cast<LONG>(std::llround(warp->x)),
+                                    static_cast<LONG>(std::llround(warp->y))};
     debug::log("windows pointer warp point=", warp->x, ",", warp->y);
   }
 
@@ -368,9 +377,26 @@ Result<void> WindowsInputBackend::inject(const InputEvent& event) {
       return Result<void>::failure(status_.last_error);
     }
   }
+  if (expected_absolute_point.has_value()) {
+    std::lock_guard lock(mutex_);
+    injected_motion_id = ++next_injected_motion_id_;
+    pending_injected_motions_.push_back(PendingInjectedMotion{
+        injected_motion_id, *expected_absolute_point,
+        std::chrono::steady_clock::now() + kInjectedMotionEchoTimeout});
+    while (pending_injected_motions_.size() > 64)
+      pending_injected_motions_.pop_front();
+  }
   const bool sent = send_inputs(&input, 1);
   if (!sent) {
     std::lock_guard lock(mutex_);
+    if (injected_motion_id != 0) {
+      const auto it = std::find_if(
+          pending_injected_motions_.begin(), pending_injected_motions_.end(),
+          [injected_motion_id](const PendingInjectedMotion& pending) {
+            return pending.id == injected_motion_id;
+          });
+      if (it != pending_injected_motions_.end()) pending_injected_motions_.erase(it);
+    }
     status_.injection = false;
     status_.degraded = true;
     status_.last_error = "SendInput failed";
@@ -600,14 +626,39 @@ void WindowsInputBackend::handle_raw_input(HRAWINPUT input) {
   // Some Windows versions mirror SendInput motion through WM_INPUT. Preserve
   // the backend marker so injected remote movement never re-enters the local
   // physical-input path and preempts the active lease.
-  if (mouse.ulExtraInformation == static_cast<ULONG>(own_extra_info())) return;
+  {
+    std::lock_guard lock(mutex_);
+    const auto now = std::chrono::steady_clock::now();
+    while (!pending_injected_motions_.empty() &&
+           pending_injected_motions_.front().deadline <= now)
+      pending_injected_motions_.pop_front();
+    if (mouse.ulExtraInformation == static_cast<ULONG>(own_extra_info())) {
+      if (!pending_injected_motions_.empty()) pending_injected_motions_.pop_front();
+      return;
+    }
+  }
   if ((mouse.usFlags & MOUSE_MOVE_ABSOLUTE) != 0) return;
   if (mouse.lLastX == 0 && mouse.lLastY == 0) return;
-  // Raw input does not carry enough information to distinguish a markerless
-  // echoed relative move from a real move with the same delta. Matching a
-  // pending (dx, dy) here can therefore swallow physical input. SendInput
-  // events carry own_extra_info(), which is checked above; all unmarked raw
-  // motion is treated as physical input.
+  // A few Windows versions drop dwExtraInfo when mirroring an absolute
+  // SendInput through WM_INPUT and report it as a relative move. Correlate
+  // that echo with the expected absolute screen point for a very short window.
+  // The low-level hook still handles genuine physical motion independently.
+  POINT current{};
+  if (GetCursorPos(&current)) {
+    std::lock_guard lock(mutex_);
+    const auto now = std::chrono::steady_clock::now();
+    for (auto it = pending_injected_motions_.rbegin();
+         it != pending_injected_motions_.rend(); ++it) {
+      if (std::abs(current.x - it->point.x) <= 1 &&
+          std::abs(current.y - it->point.y) <= 1) {
+        debug::log("windows ignored markerless injected mouse echo point=", current.x,
+                   ",", current.y, " delta=", mouse.lLastX, ",", mouse.lLastY);
+        pending_injected_motions_.erase(std::next(it).base());
+        return;
+      }
+      if (it->deadline <= now) break;
+    }
+  }
   InputEvent event{};
   event.origin = InputOrigin::kPhysical;
   event.payload = MouseDelta{static_cast<double>(mouse.lLastX),
@@ -788,6 +839,7 @@ void WindowsInputBackend::message_thread() {
       active_instance_.store(nullptr, std::memory_order_release);
     status_.running = false;
     status_.suppression = false;
+    pending_injected_motions_.clear();
     raw_input_ready_ = false;
     if (unexpected_exit) {
       status_.injection = false;

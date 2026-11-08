@@ -162,6 +162,9 @@ struct MacOSInputBackend::Impl {
   bool stop_requested{false};
   bool tap_disabled{false};
   bool suppression{false};
+  // Reapply the association on the event-tap thread after a handoff. This
+  // keeps the HID tap and the caller thread in the same capture state.
+  bool association_sync_pending{false};
   bool cursor_hidden{false};
   CGPoint last_point{};
   bool have_last_point{false};
@@ -197,6 +200,18 @@ CGEventRef tap_callback(CGEventTapProxy, CGEventType type, CGEventRef event, voi
   bool suppress = false;
   {
     std::lock_guard lock(impl->mutex);
+    if (impl->association_sync_pending) {
+      const bool disconnected = impl->suppression;
+      const auto association_error =
+          CGAssociateMouseAndMouseCursorPosition(disconnected ? false : true);
+      if (association_error == kCGErrorSuccess) {
+        impl->association_sync_pending = false;
+        debug::log("mac cursor association synchronized on event tap connected=", !disconnected);
+      } else {
+        debug::log("mac cursor association retry failed connected=", !disconnected,
+                   " error=", static_cast<int>(association_error));
+      }
+    }
     if (type == kCGEventMouseMoved || type == kCGEventLeftMouseDragged ||
         type == kCGEventRightMouseDragged || type == kCGEventOtherMouseDragged) {
       const CGPoint point = CGEventGetLocation(event);
@@ -267,6 +282,7 @@ Result<void> MacOSInputBackend::start(EventCallback callback) {
     impl_->stop_requested = false;
     impl_->tap_disabled = false;
     impl_->suppression = false;
+    impl_->association_sync_pending = false;
     impl_->cursor_hidden = false;
     impl_->have_last_point = false;
     impl_->ignored_warps.clear();
@@ -382,19 +398,20 @@ void MacOSInputBackend::stop() {
     status_.running = false;
     status_.suppression = false;
     impl_->suppression = false;
+    impl_->association_sync_pending = false;
     impl_->stop_requested = true;
     loop = impl_->run_loop;
     sessions.reserve(impl_->held.size());
     for (const auto& entry : impl_->held) sessions.push_back(entry.first);
   }
   if (restore_cursor) {
+    const auto cursor_error = CGDisplayShowCursor(kCGNullDirectDisplay);
+    if (cursor_error != kCGErrorSuccess)
+      debug::log("mac cursor show failed error=", static_cast<int>(cursor_error));
     const auto association_error = CGAssociateMouseAndMouseCursorPosition(true);
     if (association_error != kCGErrorSuccess)
       debug::log("mac cursor association restore failed error=",
                  static_cast<int>(association_error));
-    const auto cursor_error = CGDisplayShowCursor(kCGNullDirectDisplay);
-    if (cursor_error != kCGErrorSuccess)
-      debug::log("mac cursor show failed error=", static_cast<int>(cursor_error));
   }
   for (const auto& session : sessions) release_injected_state(session);
   if (loop != nullptr) {
@@ -422,13 +439,6 @@ Result<void> MacOSInputBackend::set_suppression(bool enabled) {
     return Result<void>::failure(status_.last_error);
   }
   if (status_.suppression != enabled) {
-    const auto association_error =
-        CGAssociateMouseAndMouseCursorPosition(enabled ? false : true);
-    if (association_error != kCGErrorSuccess)
-      debug::log("mac cursor association failed enabled=", enabled,
-                 " error=", static_cast<int>(association_error));
-    else
-      debug::log("mac cursor association=", enabled ? "disconnected" : "connected");
     if (enabled) {
       const auto cursor_error = CGDisplayHideCursor(kCGNullDirectDisplay);
       if (cursor_error != kCGErrorSuccess)
@@ -446,6 +456,17 @@ Result<void> MacOSInputBackend::set_suppression(bool enabled) {
         debug::log("mac cursor shown");
       }
     }
+    // CGDisplayHideCursor/CGDisplayShowCursor can re-associate the mouse with
+    // the cursor. Apply the association after changing visibility, matching
+    // the native macOS handoff order used by Deskflow.
+    const auto association_error =
+        CGAssociateMouseAndMouseCursorPosition(enabled ? false : true);
+    if (association_error != kCGErrorSuccess)
+      debug::log("mac cursor association failed enabled=", enabled,
+                 " error=", static_cast<int>(association_error));
+    else
+      debug::log("mac cursor association=", enabled ? "disconnected" : "connected");
+    impl_->association_sync_pending = true;
     debug::log("mac suppression=", enabled ? "on" : "off");
   }
   status_.suppression = enabled;
@@ -702,10 +723,6 @@ Result<void> MacOSInputBackend::recover() {
   std::lock_guard operation_lock(impl_->operation_mutex);
   ++status_.recovery_count;
   status_.suppression = false;
-  const auto association_error = CGAssociateMouseAndMouseCursorPosition(true);
-  if (association_error != kCGErrorSuccess)
-    debug::log("mac cursor association restore failed error=",
-               static_cast<int>(association_error));
   if (impl_->cursor_hidden) {
     const auto cursor_error = CGDisplayShowCursor(kCGNullDirectDisplay);
     if (cursor_error != kCGErrorSuccess)
@@ -713,12 +730,17 @@ Result<void> MacOSInputBackend::recover() {
     else
       impl_->cursor_hidden = false;
   }
+  const auto association_error = CGAssociateMouseAndMouseCursorPosition(true);
+  if (association_error != kCGErrorSuccess)
+    debug::log("mac cursor association restore failed error=",
+               static_cast<int>(association_error));
   std::vector<SessionId> sessions;
   {
     std::lock_guard lock(impl_->mutex);
     sessions.reserve(impl_->held.size());
     for (const auto& entry : impl_->held) sessions.push_back(entry.first);
     impl_->suppression = false;
+    impl_->association_sync_pending = false;
     if (impl_->tap != nullptr) CGEventTapEnable(impl_->tap, true);
     impl_->tap_disabled = false;
   }
