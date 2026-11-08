@@ -11,6 +11,7 @@ namespace lanlink::debug {
 // handoff messages.
 bool enabled() noexcept;
 void write(std::string_view message) noexcept;
+void warning(std::string_view message) noexcept;
 
 template <typename... Values>
 void log(const Values&... values) noexcept {
@@ -21,6 +22,16 @@ void log(const Values&... values) noexcept {
     write(stream.str());
   } catch (...) {
     // Logging must never change input routing or take the node down.
+  }
+}
+
+template <typename... Values>
+void warn(const Values&... values) noexcept {
+  try {
+    std::ostringstream stream;
+    (stream << ... << values);
+    warning(stream.str());
+  } catch (...) {
   }
 }
 

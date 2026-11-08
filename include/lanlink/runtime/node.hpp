@@ -63,6 +63,7 @@ class InputNodeRuntime {
     Point position;
     Rect bounds;
     Rect source_bounds;
+    double movement_scale{1.0};
     Edge source_edge{Edge::kRight};
     Edge target_edge{Edge::kLeft};
   };
@@ -79,7 +80,7 @@ class InputNodeRuntime {
   Result<void> drain_events(TimePoint now);
   Result<void> dispatch_actions(const std::vector<RouterAction>& actions, TimePoint now);
   std::optional<CrossingDetection> detect_crossing(const InputEvent& event,
-                                                   const Point& pointer);
+                                                   const Point& pointer, TimePoint now);
   std::optional<Edge> detect_remote_exit(const InputEvent& event);
   void begin_remote_cursor(const Crossing& crossing, Edge source_edge);
   void clear_remote_cursor() noexcept { remote_cursor_.reset(); }
@@ -99,6 +100,9 @@ class InputNodeRuntime {
   double edge_overflow_{0.0};
   std::optional<RemoteCursorState> remote_cursor_;
   bool require_peer_display_info_{false};
+  std::optional<TimePoint> peer_display_wait_started_;
+  bool warned_peer_display_fallback_{false};
+  double local_display_scale_{1.0};
   bool warned_remote_without_suppression_{false};
   bool running_{false};
 };

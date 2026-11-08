@@ -3,6 +3,7 @@
 #include "lanlink/common/config.hpp"
 #include "lanlink/common/debug.hpp"
 
+#include <cmath>
 #include <string>
 #include <utility>
 
@@ -19,24 +20,43 @@ PeerSession::PeerSession(Connection connection, PeerSessionConfig config)
 Result<void> PeerSession::start(IClock::time_point now) {
     if (started_)
         return Result<void>::success();
+    if (config_.router)
+        config_.router->clear_peer_display_info();
+    local_display_info_.reset();
     debug::log("send hello local_device=", config_.local_device.low,
                " protocol=", static_cast<unsigned>(protocol::kProtocolVersion));
     auto sent = connection_.send(protocol::Hello{config_.local_device, protocol::kProtocolVersion});
     if (!sent.ok())
         return fail_and_disconnect("hello send failed", now);
-    if (config_.local_display != DisplayId{} && config_.backend != nullptr) {
-        if (const auto bounds = config_.backend->display_bounds(); bounds.has_value()) {
-            auto display = connection_.send(protocol::DisplayInfo{
-                config_.local_display, *bounds, 1.0});
-            if (!display.ok())
-                return fail_and_disconnect("display info send failed", now);
-            debug::log("send display info display=", config_.local_display.low,
-                       " bounds=", bounds->left, ",", bounds->top, " ", bounds->right,
-                       "x", bounds->bottom);
-        }
-    }
+    auto display = send_display_info_if_changed(true, now);
+    if (!display.ok())
+        return display;
     started_ = true;
     next_heartbeat_ = now + m0::kHeartbeatInterval;
+    next_display_info_check_ = now + m0::kHeartbeatInterval;
+    return Result<void>::success();
+}
+
+Result<void> PeerSession::send_display_info_if_changed(bool force, IClock::time_point now) {
+    if (config_.local_display == DisplayId{} || config_.backend == nullptr)
+        return Result<void>::success();
+    const auto bounds = config_.backend->display_bounds();
+    if (!bounds.has_value())
+        return Result<void>::success();
+    auto scale = config_.backend->display_scale();
+    if (!std::isfinite(scale) || scale <= 0.0 || scale > protocol::kMaxDisplayScale)
+        scale = 1.0;
+    protocol::DisplayInfo info{config_.local_display, *bounds, scale};
+    if (!force && local_display_info_.has_value() && *local_display_info_ == info)
+        return Result<void>::success();
+    auto sent = connection_.send(info);
+    if (!sent.ok())
+        return fail_and_disconnect("display info send failed", now);
+    local_display_info_ = info;
+    debug::log("send display info display=", info.display.low,
+               " bounds=", info.logical_bounds.left, ",", info.logical_bounds.top, " ",
+               info.logical_bounds.right, "x", info.logical_bounds.bottom,
+               " scale=", info.scale);
     return Result<void>::success();
 }
 
@@ -382,6 +402,7 @@ Result<void> PeerSession::disconnect(IClock::time_point now) {
     disconnected_ = true;
     connection_.close();
     if (config_.router) {
+        config_.router->clear_peer_display_info();
         auto actions = config_.router->on_disconnect(now);
         auto local = apply_local_actions(actions);
         if (!local.ok())
@@ -409,6 +430,12 @@ Result<void> PeerSession::tick(IClock::time_point now) {
         return Result<void>::failure("session is closed");
     if (hello_received_ && liveness_.expired(now))
         return fail_and_disconnect("connection timeout", now);
+    if (now >= next_display_info_check_) {
+        auto display = send_display_info_if_changed(false, now);
+        if (!display.ok())
+            return display;
+        next_display_info_check_ = now + m0::kHeartbeatInterval;
+    }
     if (now >= next_heartbeat_) {
         auto result = connection_.send(protocol::Heartbeat{++heartbeat_counter_});
         if (!result.ok())

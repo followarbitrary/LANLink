@@ -34,6 +34,7 @@ struct Rect {
   double bottom{};
   double width() const noexcept { return right - left; }
   double height() const noexcept { return bottom - top; }
+  friend bool operator==(const Rect&, const Rect&) = default;
 };
 
 struct Display {

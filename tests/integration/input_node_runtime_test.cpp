@@ -163,6 +163,53 @@ TEST(InputNodeRuntime, CrossesAtExactThresholdAndForwardsSuppressedInput) {
   EXPECT_EQ(left->router().state(), RouterState::kLocal);
 }
 
+TEST(InputNodeRuntime, FallsBackToTopologyAfterPeerDisplayInfoTimeout) {
+  FakeInputBackend left_backend;
+  FakeInputBackend right_backend;
+  left_backend.set_display_bounds(Rect{0.0, 0.0, 100.0, 100.0});
+  auto left_result = InputNodeRuntime::create(config(
+      id(1), id(2), AuthenticatedPeer{id(3)}, id(10), Endpoint{"127.0.0.1", 0}, &left_backend));
+  auto right_result = InputNodeRuntime::create(config(
+      id(3), id(4), AuthenticatedPeer{id(1)}, id(20), Endpoint{"127.0.0.1", 0},
+      &right_backend));
+  ASSERT_TRUE(left_result.ok()) << left_result.error();
+  ASSERT_TRUE(right_result.ok()) << right_result.error();
+  auto left = std::move(left_result.value());
+  auto right = std::move(right_result.value());
+  ASSERT_TRUE(left->set_topology(topology_for(id(10), id(20), true)).ok());
+  ASSERT_TRUE(right->set_topology(topology_for(id(20), id(10), false)).ok());
+  ASSERT_TRUE(left->start().ok());
+  ASSERT_TRUE(right->start().ok());
+  ASSERT_TRUE(left->connect_peer(right->local_endpoint()).ok());
+
+  IClock::time_point now{};
+  pump_pair(*left, *right, now, 20);
+  ASSERT_TRUE(left->connected());
+  ASSERT_TRUE(right->connected());
+
+  left_backend.set_pointer_position(Point{100.0, 50.0});
+  left_backend.emit_physical(
+      InputEvent{{}, {}, 0, 0, MouseDelta{4.0, 0.0}, InputOrigin::kPhysical});
+  ASSERT_TRUE(left->poll(now, 0ms).ok());
+  EXPECT_EQ(left->router().state(), RouterState::kLocal);
+
+  now += 1s;
+  pump_pair(*left, *right, now, 4);
+  now += 1s;
+  pump_pair(*left, *right, now, 4);
+  now += 1s;
+  left_backend.set_pointer_position(Point{100.0, 50.0});
+  left_backend.emit_physical(
+      InputEvent{{}, {}, 0, 0, MouseDelta{4.0, 0.0}, InputOrigin::kPhysical});
+  ASSERT_TRUE(left->poll(now, 0ms).ok());
+  EXPECT_EQ(left->router().state(), RouterState::kAcquiring);
+
+  pump_pair(*left, *right, now, 12);
+  EXPECT_EQ(left->router().state(), RouterState::kRemote);
+  ASSERT_EQ(right_backend.injected_events().size(), 1u);
+  EXPECT_TRUE(std::holds_alternative<PointerWarp>(right_backend.injected_events().front().payload));
+}
+
 TEST(InputNodeRuntime, AccumulatesOutwardDeltaWhenPointerIsClampedAtEdge) {
   FakeInputBackend left_backend;
   FakeInputBackend right_backend;

@@ -282,8 +282,13 @@ Result<std::vector<std::uint8_t>> encode(const Message& message) {
                 const auto& bounds = value.logical_bounds;
                 if (zero(value.display) || !finite(bounds.left) || !finite(bounds.top) ||
                     !finite(bounds.right) || !finite(bounds.bottom) ||
+                    std::abs(bounds.left) > kMaxDisplayCoordinate ||
+                    std::abs(bounds.top) > kMaxDisplayCoordinate ||
+                    std::abs(bounds.right) > kMaxDisplayCoordinate ||
+                    std::abs(bounds.bottom) > kMaxDisplayCoordinate ||
                     !(bounds.left < bounds.right) || !(bounds.top < bounds.bottom) ||
-                    !finite(value.scale) || value.scale <= 0.0)
+                    !finite(value.scale) || value.scale <= 0.0 ||
+                    value.scale > kMaxDisplayScale)
                     return Result<std::vector<std::uint8_t>>::failure("invalid display info");
                 w.id(value.display);
                 w.f64(bounds.left);
@@ -428,9 +433,13 @@ Result<Message> decode(std::span<const std::uint8_t> frame) {
             zero(value.display) || !finite(value.logical_bounds.left) ||
             !finite(value.logical_bounds.top) || !finite(value.logical_bounds.right) ||
             !finite(value.logical_bounds.bottom) ||
+            std::abs(value.logical_bounds.left) > kMaxDisplayCoordinate ||
+            std::abs(value.logical_bounds.top) > kMaxDisplayCoordinate ||
+            std::abs(value.logical_bounds.right) > kMaxDisplayCoordinate ||
+            std::abs(value.logical_bounds.bottom) > kMaxDisplayCoordinate ||
             !(value.logical_bounds.left < value.logical_bounds.right) ||
             !(value.logical_bounds.top < value.logical_bounds.bottom) || !finite(value.scale) ||
-            value.scale <= 0.0)
+            value.scale <= 0.0 || value.scale > kMaxDisplayScale)
             return fail("invalid display info");
         message = value;
         break;

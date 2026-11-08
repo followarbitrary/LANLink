@@ -16,6 +16,7 @@ class FakeInputBackend final : public IInputBackend {
   Result<void> set_suppression(bool enabled) override;
   Result<void> inject(const InputEvent& event) override;
   std::optional<Rect> display_bounds() const noexcept override { return display_bounds_; }
+  double display_scale() const noexcept override { return display_scale_; }
   Result<void> warp_pointer(Point point) override;
   std::optional<Point> pointer_position() const noexcept override;
   void release_injected_state(const SessionId& session) override;
@@ -24,6 +25,7 @@ class FakeInputBackend final : public IInputBackend {
 
   void set_permission(bool available);
   void set_display_bounds(Rect bounds) noexcept { display_bounds_ = bounds; }
+  void set_display_scale(double scale) noexcept { display_scale_ = scale; }
   void set_pointer_position(Point position);
   void set_permission_available(bool available) { set_permission(available); }
   void set_capture_available(bool available);
@@ -61,6 +63,7 @@ class FakeInputBackend final : public IInputBackend {
   // Tests opt into a concrete desktop shape when they need normalized
   // handoff mapping; a missing shape exercises the legacy absolute fallback.
   std::optional<Rect> display_bounds_{};
+  double display_scale_{1.0};
 };
 
 }  // namespace lanlink::platform

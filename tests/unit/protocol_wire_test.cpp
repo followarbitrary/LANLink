@@ -109,6 +109,13 @@ TEST(ProtocolWire, RejectsInvalidValuesAndSizeLimits) {
     EXPECT_FALSE(encode(DisplayInfo{{}, Rect{0.0, 0.0, 1920.0, 1080.0}, 1.0}).ok());
     EXPECT_FALSE(encode(DisplayInfo{id(1, 1), Rect{0.0, 0.0, 0.0, 1080.0}, 1.0}).ok());
     EXPECT_FALSE(encode(DisplayInfo{id(1, 1), Rect{0.0, 0.0, 1920.0, 1080.0}, 0.0}).ok());
+    EXPECT_FALSE(encode(DisplayInfo{id(1, 1),
+                                    Rect{0.0, 0.0, kMaxDisplayCoordinate + 1.0, 1080.0},
+                                    1.0})
+                     .ok());
+    EXPECT_FALSE(encode(DisplayInfo{id(1, 1), Rect{0.0, 0.0, 1920.0, 1080.0},
+                                    kMaxDisplayScale + 1.0})
+                     .ok());
     EXPECT_FALSE(encode(AcquireRequest{{}, id(1, 1), id(2, 2), Point{0, 0}}).ok());
     EXPECT_FALSE(encode(Revoke{{}, 1, RevokeReason::kProtocolError}).ok());
     EXPECT_FALSE(encode(AcquireResponse{id(1, 1), true, {}, 0, ""}).ok());

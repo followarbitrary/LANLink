@@ -40,6 +40,7 @@ class WindowsInputBackend final : public IInputBackend {
   Result<void> set_suppression(bool enabled) override;
   Result<void> inject(const InputEvent& event) override;
   std::optional<Rect> display_bounds() const noexcept override;
+  double display_scale() const noexcept override;
   Result<void> warp_pointer(Point point) override;
   std::optional<Point> pointer_position() const noexcept override;
   void release_injected_state(const SessionId& session) override;

@@ -53,6 +53,11 @@ Result<void> InputNodeRuntime::start() {
   edge_overflow_ = 0.0;
   remote_cursor_.reset();
   require_peer_display_info_ = config_.backend->display_bounds().has_value();
+  peer_display_wait_started_.reset();
+  warned_peer_display_fallback_ = false;
+  local_display_scale_ = config_.backend->display_scale();
+  if (!std::isfinite(local_display_scale_) || local_display_scale_ <= 0.0)
+    local_display_scale_ = 1.0;
   warned_remote_without_suppression_ = false;
   auto listener = transport::Listener::bind(config_.listen_endpoint, config_.connection);
   if (!listener.ok()) return Result<void>::failure(listener.error());
@@ -131,14 +136,24 @@ Result<void> InputNodeRuntime::dispatch_actions(const std::vector<RouterAction>&
 }
 
 std::optional<InputNodeRuntime::CrossingDetection> InputNodeRuntime::detect_crossing(
-    const InputEvent& event, const Point& pointer) {
+    const InputEvent& event, const Point& pointer, TimePoint now) {
   // Native backends advertise their own bounds during the handshake. Do not
   // initialize the virtual remote cursor from the synthetic topology size
   // until the peer has sent its real logical bounds; otherwise the first
   // handoff on a scaled display would use a permanently wrong return edge.
   if (require_peer_display_info_ && !router_.peer_display_bounds()) {
-    debug::log("edge crossing deferred until peer display info arrives");
-    return std::nullopt;
+    if (!peer_display_wait_started_.has_value()) peer_display_wait_started_ = now;
+    if (now - *peer_display_wait_started_ < m0::kDisplayInfoWaitTimeout) {
+      debug::log("edge crossing deferred until peer display info arrives");
+      return std::nullopt;
+    }
+    if (!warned_peer_display_fallback_) {
+      debug::warn("peer display info unavailable; falling back to topology bounds");
+      warned_peer_display_fallback_ = true;
+    }
+  } else {
+    peer_display_wait_started_.reset();
+    warned_peer_display_fallback_ = false;
   }
   const auto display_it = std::find_if(
       topology_.displays().begin(), topology_.displays().end(),
@@ -276,12 +291,18 @@ void InputNodeRuntime::begin_remote_cursor(const Crossing& crossing, Edge source
     position.x = std::clamp(position.x, bounds.left, std::nextafter(bounds.right, bounds.left));
     position.y = std::clamp(position.y, bounds.top, std::nextafter(bounds.bottom, bounds.top));
   }
-  remote_cursor_ = RemoteCursorState{position, bounds, source_bounds, source_edge,
-                                     crossing.target_edge};
+  double target_scale = router_.peer_display_scale();
+  if (!router_.peer_display_bounds() && target_it != topology_.displays().end())
+    target_scale = target_it->scale;
+  double movement_scale = local_display_scale_ / target_scale;
+  if (!std::isfinite(movement_scale) || movement_scale <= 0.0) movement_scale = 1.0;
+  remote_cursor_ = RemoteCursorState{position, bounds, source_bounds, movement_scale,
+                                     source_edge, crossing.target_edge};
   debug::log("remote cursor initialized position=", position.x, ",", position.y,
              " bounds=", bounds.left, ",", bounds.top, " ", bounds.right, "x", bounds.bottom,
              " source_bounds=", source_bounds.left, ",", source_bounds.top, " ",
              source_bounds.right, "x", source_bounds.bottom,
+             " movement_scale=", movement_scale,
              " source_edge=", static_cast<unsigned>(source_edge),
              " target_edge=", static_cast<unsigned>(crossing.target_edge));
 }
@@ -292,7 +313,34 @@ std::optional<Edge> InputNodeRuntime::detect_remote_exit(const InputEvent& event
   if (delta == nullptr || delta->zero()) return std::nullopt;
 
   auto& cursor = *remote_cursor_;
-  const Point next{cursor.position.x + delta->dx, cursor.position.y + delta->dy};
+  if (const auto peer_bounds = router_.peer_display_bounds(); peer_bounds.has_value()) {
+    const auto old_bounds = cursor.bounds;
+    if (old_bounds.left != peer_bounds->left || old_bounds.top != peer_bounds->top ||
+        old_bounds.right != peer_bounds->right || old_bounds.bottom != peer_bounds->bottom) {
+      const double x_ratio = old_bounds.width() > 0.0
+                                 ? std::clamp((cursor.position.x - old_bounds.left) /
+                                                  old_bounds.width(),
+                                              0.0, 1.0)
+                                 : 0.5;
+      const double y_ratio = old_bounds.height() > 0.0
+                                 ? std::clamp((cursor.position.y - old_bounds.top) /
+                                                  old_bounds.height(),
+                                              0.0, 1.0)
+                                 : 0.5;
+      cursor.bounds = *peer_bounds;
+      cursor.position.x = cursor.bounds.left + x_ratio * cursor.bounds.width();
+      cursor.position.y = cursor.bounds.top + y_ratio * cursor.bounds.height();
+      debug::log("remote cursor bounds refreshed bounds=", cursor.bounds.left, ",",
+                 cursor.bounds.top, " ", cursor.bounds.right, "x", cursor.bounds.bottom);
+    }
+    double target_scale = router_.peer_display_scale();
+    if (!std::isfinite(target_scale) || target_scale <= 0.0) target_scale = 1.0;
+    cursor.movement_scale = local_display_scale_ / target_scale;
+    if (!std::isfinite(cursor.movement_scale) || cursor.movement_scale <= 0.0)
+      cursor.movement_scale = 1.0;
+  }
+  const Point next{cursor.position.x + delta->dx * cursor.movement_scale,
+                   cursor.position.y + delta->dy * cursor.movement_scale};
   bool exits = false;
   switch (cursor.target_edge) {
     case Edge::kLeft:
@@ -317,6 +365,10 @@ std::optional<Edge> InputNodeRuntime::detect_remote_exit(const InputEvent& event
 }
 
 Result<void> InputNodeRuntime::drain_events(TimePoint now) {
+  if (!connected()) {
+    peer_display_wait_started_.reset();
+    warned_peer_display_fallback_ = false;
+  }
   bool overflowed = false;
   std::deque<QueuedEvent> events;
   {
@@ -427,7 +479,7 @@ Result<void> InputNodeRuntime::drain_events(TimePoint now) {
     if (actions.empty() && queued.pointer.has_value() &&
         std::holds_alternative<MouseDelta>(event.payload) &&
         (router_.state() == RouterState::kLocal || router_.state() == RouterState::kHandoff)) {
-      if (const auto crossing = detect_crossing(event, pointer)) {
+      if (const auto crossing = detect_crossing(event, pointer, now)) {
         debug::log("edge crossing target_display=", crossing->crossing.target.low,
                    " entry=", crossing->crossing.entry_point.x, ",",
                    crossing->crossing.entry_point.y,
@@ -568,6 +620,8 @@ Result<void> InputNodeRuntime::stop(TimePoint now) {
   edge_overflow_edge_.reset();
   edge_overflow_ = 0.0;
   remote_cursor_.reset();
+  peer_display_wait_started_.reset();
+  warned_peer_display_fallback_ = false;
   warned_remote_without_suppression_ = false;
   {
     std::lock_guard lock(queue_mutex_);

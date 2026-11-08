@@ -22,6 +22,11 @@ constexpr std::uint8_t kProtocolVersion = 4;
 constexpr std::size_t kHeaderSize = 12;
 constexpr std::size_t kMaxFrameSize = 64 * 1024;
 constexpr std::size_t kMaxErrorText = 4 * 1024;
+// Keep untrusted display metadata inside a desktop-sized coordinate range.
+// This is generous enough for large multi-monitor walls while preventing
+// overflow-prone values from entering cursor tracking and coordinate mapping.
+constexpr double kMaxDisplayCoordinate = 1.0e7;
+constexpr double kMaxDisplayScale = 16.0;
 
 enum class MessageType : std::uint8_t {
     kHello = 1,

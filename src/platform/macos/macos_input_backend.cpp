@@ -131,6 +131,20 @@ std::optional<Rect> query_display_bounds() noexcept {
   }
 }
 
+double query_display_scale() noexcept {
+  try {
+    const auto display = CGMainDisplayID();
+    const auto bounds = CGDisplayBounds(display);
+    const auto pixel_width = CGDisplayPixelsWide(display);
+    if (bounds.size.width > 0.0 && pixel_width > 0) {
+      const double scale = static_cast<double>(pixel_width) / bounds.size.width;
+      if (std::isfinite(scale) && scale > 0.0) return scale;
+    }
+  } catch (...) {
+  }
+  return 1.0;
+}
+
 }  // namespace
 
 struct MacOSInputBackend::Impl {
@@ -480,6 +494,12 @@ std::optional<Rect> MacOSInputBackend::display_bounds() const noexcept {
   return bounds;
 }
 
+double MacOSInputBackend::display_scale() const noexcept {
+  const double scale = query_display_scale();
+  debug::log("mac display_scale=", scale);
+  return scale;
+}
+
 Result<void> MacOSInputBackend::warp_pointer(Point point) {
   return inject(InputEvent{{}, {}, 0, 0, PointerWarp{point.x, point.y},
                            InputOrigin::kSynthetic});
@@ -820,6 +840,7 @@ std::optional<Point> MacOSInputBackend::pointer_position() const noexcept {
 std::optional<Rect> MacOSInputBackend::display_bounds() const noexcept {
   return std::nullopt;
 }
+double MacOSInputBackend::display_scale() const noexcept { return 1.0; }
 void MacOSInputBackend::release_injected_state(const SessionId&) {}
 Result<void> MacOSInputBackend::recover() {
   ++status_.recovery_count;

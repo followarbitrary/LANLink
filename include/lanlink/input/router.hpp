@@ -133,6 +133,11 @@ class InputRouter {
     void set_peer(AuthenticatedPeer peer) { peer_ = peer; }
     void set_local_display(DisplayId display) { local_display_ = display; }
     void set_peer_display_info(DisplayId display, Rect bounds, double scale);
+    void clear_peer_display_info() noexcept {
+        peer_display_ = {};
+        peer_display_bounds_.reset();
+        peer_display_scale_ = 1.0;
+    }
     void set_request(RequestId request) { request_ = request; }
     void set_queue_capacity(std::size_t capacity) { queue_capacity_ = capacity; }
 
@@ -140,6 +145,7 @@ class InputRouter {
         return peer_display_bounds_;
     }
     DisplayId peer_display() const noexcept { return peer_display_; }
+    double peer_display_scale() const noexcept { return peer_display_scale_; }
 
   private:
     std::vector<RouterAction> begin_acquire(TimePoint now);

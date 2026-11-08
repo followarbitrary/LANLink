@@ -36,6 +36,9 @@ class IInputBackend {
   // points on macOS, DPI-aware Win32 pixels on Windows). Backends that cannot
   // query a desktop, such as an unsupported platform build, return nullopt.
   virtual std::optional<Rect> display_bounds() const noexcept { return std::nullopt; }
+  // Return the native backing scale for the same coordinate space. A scale of
+  // 1.0 is the safe fallback when the platform cannot report one.
+  virtual double display_scale() const noexcept { return 1.0; }
   // Move the local cursor without treating the move as a remote input event.
   // Runtime handoff uses this to return the source cursor to its edge while
   // the control lease is being negotiated.

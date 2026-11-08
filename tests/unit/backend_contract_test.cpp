@@ -157,5 +157,12 @@ TEST(BackendContract, ReportsConfiguredDisplayBounds) {
   EXPECT_DOUBLE_EQ(configured.bottom, 900.0);
 }
 
+TEST(BackendContract, ReportsConfiguredDisplayScale) {
+  FakeInputBackend backend;
+  EXPECT_DOUBLE_EQ(backend.display_scale(), 1.0);
+  backend.set_display_scale(1.5);
+  EXPECT_DOUBLE_EQ(backend.display_scale(), 1.5);
+}
+
 }  // namespace
 }  // namespace lanlink::platform

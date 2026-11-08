@@ -25,4 +25,12 @@ void write(std::string_view message) noexcept {
   }
 }
 
+void warning(std::string_view message) noexcept {
+  try {
+    std::lock_guard lock(output_mutex());
+    std::cerr << "[LANLink warning] " << message << '\n';
+  } catch (...) {
+  }
+}
+
 }  // namespace lanlink::debug

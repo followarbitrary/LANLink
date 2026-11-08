@@ -41,6 +41,7 @@ class PeerSession {
 
   private:
     Result<void> dispatch_actions(const std::vector<RouterAction>& actions, IClock::time_point now);
+    Result<void> send_display_info_if_changed(bool force, IClock::time_point now);
     Result<void> dispatch_message(const protocol::Message& message, IClock::time_point now);
     Result<void> apply_local_actions(const std::vector<RouterAction>& actions);
     Result<void> fail_and_disconnect(const char* error, IClock::time_point now);
@@ -50,8 +51,10 @@ class PeerSession {
     ConnectionLiveness liveness_;
     std::optional<RouterAction> pending_acquire_;
     std::optional<protocol::AcquireRequest> pending_target_acquire_;
+    std::optional<protocol::DisplayInfo> local_display_info_;
     std::uint64_t heartbeat_counter_{0};
     IClock::time_point next_heartbeat_{};
+    IClock::time_point next_display_info_check_{};
     bool started_{false};
     bool hello_received_{false};
     bool disconnected_{false};

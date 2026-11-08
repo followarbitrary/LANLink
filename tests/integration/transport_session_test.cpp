@@ -78,6 +78,58 @@ TEST(PeerSession, CompletesAcquireActivateInputAndReleaseOverTcp) {
     EXPECT_TRUE(arbiter.ledger_empty());
 }
 
+TEST(PeerSession, RefreshesDisplayInfoWhenBoundsOrScaleChange) {
+    auto listener_result = Listener::bind(Endpoint{"127.0.0.1", 0});
+    ASSERT_TRUE(listener_result.ok()) << listener_result.error();
+    auto listener = std::move(listener_result.value());
+    auto client_result = Connection::connect(Endpoint{"127.0.0.1", listener.local_endpoint().port});
+    ASSERT_TRUE(client_result.ok()) << client_result.error();
+    auto accepted = listener.accept(2s);
+    ASSERT_TRUE(accepted.ok()) << accepted.error();
+
+    InputRouter source_router{id(50), AuthenticatedPeer{id(52)}, id(60), id(61)};
+    InputRouter target_router{id(52), AuthenticatedPeer{id(50)}, id(62), id(63)};
+    FakeInputBackend source_backend;
+    FakeInputBackend target_backend;
+    source_backend.set_display_bounds(Rect{0.0, 0.0, 1512.0, 982.0});
+    source_backend.set_display_scale(2.0);
+    target_backend.set_display_bounds(Rect{0.0, 0.0, 1920.0, 1080.0});
+    target_backend.set_display_scale(1.25);
+    ASSERT_TRUE(source_backend.start({}).ok());
+    ASSERT_TRUE(target_backend.start({}).ok());
+
+    PeerSession source(
+        std::move(client_result.value()),
+        PeerSessionConfig{id(51), AuthenticatedPeer{id(52)}, &source_router, nullptr,
+                          &source_backend, id(60)});
+    PeerSession target(
+        std::move(accepted.value()),
+        PeerSessionConfig{id(52), AuthenticatedPeer{id(51)}, &target_router, nullptr,
+                          &target_backend, id(62)});
+
+    ASSERT_TRUE(source.start({}).ok());
+    ASSERT_TRUE(target.start({}).ok());
+    ASSERT_TRUE(source.pump({}).ok());
+    ASSERT_TRUE(target.pump({}).ok());
+    ASSERT_TRUE(source.pump({}).ok());
+    ASSERT_TRUE(source_router.peer_display_bounds().has_value());
+    EXPECT_EQ(source_router.peer_display(), id(62));
+    EXPECT_DOUBLE_EQ(source_router.peer_display_scale(), 1.25);
+    EXPECT_EQ(*source_router.peer_display_bounds(), (Rect{0.0, 0.0, 1920.0, 1080.0}));
+
+    target_backend.set_display_bounds(Rect{-1440.0, 0.0, 0.0, 900.0});
+    target_backend.set_display_scale(2.0);
+    ASSERT_TRUE(target.tick(IClock::time_point{} + 1s).ok());
+    ASSERT_TRUE(source.pump(IClock::time_point{} + 1s).ok());
+    ASSERT_TRUE(source_router.peer_display_bounds().has_value());
+    EXPECT_DOUBLE_EQ(source_router.peer_display_scale(), 2.0);
+    EXPECT_EQ(*source_router.peer_display_bounds(), (Rect{-1440.0, 0.0, 0.0, 900.0}));
+
+    ASSERT_TRUE(source.disconnect(IClock::time_point{} + 1s).ok());
+    EXPECT_FALSE(source_router.peer_display_bounds().has_value());
+    EXPECT_EQ(source_router.peer_display(), DisplayId{});
+}
+
 TEST(PeerSession, ActivationFailsWhenPointerWarpCannotBeInjected) {
     auto listener_result = Listener::bind(Endpoint{"127.0.0.1", 0});
     ASSERT_TRUE(listener_result.ok());

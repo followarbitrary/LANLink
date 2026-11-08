@@ -213,6 +213,21 @@ std::optional<Rect> WindowsInputBackend::display_bounds() const noexcept {
   return bounds;
 }
 
+double WindowsInputBackend::display_scale() const noexcept {
+  enable_process_dpi_awareness();
+  UINT dpi = 96;
+  HMODULE user32 = GetModuleHandleW(L"user32.dll");
+  if (user32 != nullptr) {
+    using GetDpiForSystemFn = UINT(WINAPI*)();
+    const auto get_dpi = reinterpret_cast<GetDpiForSystemFn>(
+        GetProcAddress(user32, "GetDpiForSystem"));
+    if (get_dpi != nullptr && get_dpi() > 0) dpi = get_dpi();
+  }
+  const double scale = static_cast<double>(dpi) / 96.0;
+  debug::log("windows display_scale=", scale);
+  return scale;
+}
+
 Result<void> WindowsInputBackend::warp_pointer(Point point) {
   return inject(InputEvent{{}, {}, 0, 0, PointerWarp{point.x, point.y},
                            InputOrigin::kSynthetic});
@@ -796,6 +811,7 @@ std::optional<Point> WindowsInputBackend::pointer_position() const noexcept {
 std::optional<Rect> WindowsInputBackend::display_bounds() const noexcept {
   return std::nullopt;
 }
+double WindowsInputBackend::display_scale() const noexcept { return 1.0; }
 
 void WindowsInputBackend::release_injected_state(const SessionId&) {}
 
