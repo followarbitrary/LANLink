@@ -103,6 +103,19 @@ TEST(KeyMapping, MacNavigationFunctionAndModifierKeysMapToCanonicalHidUsages) {
     EXPECT_EQ(mac_keycode_to_hid(keycodes[index]).value(), 0x3Au + index);
 }
 
+TEST(KeyMapping, MacModifierUsagesIdentifyQuartzFlagGroups) {
+  EXPECT_EQ(mac_modifier_flag_for_hid(0x39u).value(), MacModifierFlag::kAlphaShift);
+  EXPECT_EQ(mac_modifier_flag_for_hid(0xE1u).value(), MacModifierFlag::kShift);
+  EXPECT_EQ(mac_modifier_flag_for_hid(0xE5u).value(), MacModifierFlag::kShift);
+  EXPECT_EQ(mac_modifier_flag_for_hid(0xE0u).value(), MacModifierFlag::kControl);
+  EXPECT_EQ(mac_modifier_flag_for_hid(0xE4u).value(), MacModifierFlag::kControl);
+  EXPECT_EQ(mac_modifier_flag_for_hid(0xE2u).value(), MacModifierFlag::kAlternate);
+  EXPECT_EQ(mac_modifier_flag_for_hid(0xE6u).value(), MacModifierFlag::kAlternate);
+  EXPECT_EQ(mac_modifier_flag_for_hid(0xE3u).value(), MacModifierFlag::kCommand);
+  EXPECT_EQ(mac_modifier_flag_for_hid(0xE7u).value(), MacModifierFlag::kCommand);
+  EXPECT_FALSE(mac_modifier_flag_for_hid(0x04u).has_value());
+}
+
 TEST(KeyMapping, InverseMappingsRoundTripCommonUsages) {
   constexpr std::uint32_t usages[] = {0x04u, 0x1Du, 0x1Eu, 0x27u, 0x28u, 0x29u,
                                       0x2Au, 0x2Bu, 0x2Cu, 0x3Au, 0x45u, 0xE0u, 0xE1u,

@@ -54,8 +54,20 @@ CGEventType button_type(std::uint32_t button, bool pressed) {
   return pressed ? kCGEventOtherMouseDown : kCGEventOtherMouseUp;
 }
 
+std::optional<std::uint64_t> mac_modifier_mask(MacModifierFlag modifier) {
+  switch (modifier) {
+    case MacModifierFlag::kAlphaShift: return kCGEventFlagMaskAlphaShift;
+    case MacModifierFlag::kShift: return kCGEventFlagMaskShift;
+    case MacModifierFlag::kControl: return kCGEventFlagMaskControl;
+    case MacModifierFlag::kAlternate: return kCGEventFlagMaskAlternate;
+    case MacModifierFlag::kCommand: return kCGEventFlagMaskCommand;
+    default: return std::nullopt;
+  }
+}
+
 std::optional<InputEvent> convert_event(CGEventType type, CGEventRef event, CGPoint& last,
-                                         bool& have_last) {
+                                         bool& have_last,
+                                         std::unordered_set<std::uint32_t>& held_modifiers) {
   InputEvent converted{};
   converted.origin = InputOrigin::kPhysical;
   switch (type) {
@@ -66,6 +78,30 @@ std::optional<InputEvent> convert_event(CGEventType type, CGEventRef event, CGPo
       const auto hid = mac_keycode_to_hid(keycode);
       if (!hid.has_value()) return std::nullopt;
       converted.payload = Key{*hid, type == kCGEventKeyDown};
+      return converted;
+    }
+    case kCGEventFlagsChanged: {
+      const auto keycode = static_cast<std::uint32_t>(
+          CGEventGetIntegerValueField(event, kCGKeyboardEventKeycode));
+      const auto hid = mac_keycode_to_hid(keycode);
+      if (!hid.has_value()) return std::nullopt;
+      const auto modifier = mac_modifier_flag_for_hid(*hid);
+      if (!modifier.has_value()) return std::nullopt;
+      const auto mask = mac_modifier_mask(*modifier);
+      if (!mask.has_value()) return std::nullopt;
+
+      const bool flags_pressed =
+          (static_cast<std::uint64_t>(CGEventGetFlags(event)) & *mask) != 0;
+      const bool was_pressed = held_modifiers.contains(*hid);
+      // Quartz exposes aggregate flags, so releasing one of two Shift/Ctrl/etc.
+      // keys leaves the group bit set. Use the per-key ledger to preserve that
+      // release while still recovering the initial state from the aggregate bit.
+      const bool pressed = was_pressed == flags_pressed ? !was_pressed : flags_pressed;
+      if (pressed)
+        held_modifiers.insert(*hid);
+      else
+        held_modifiers.erase(*hid);
+      converted.payload = Key{*hid, pressed};
       return converted;
     }
     case kCGEventMouseMoved:
@@ -185,6 +221,7 @@ struct MacOSInputBackend::Impl {
   bool cursor_hidden{false};
   CGPoint last_point{};
   bool have_last_point{false};
+  std::unordered_set<std::uint32_t> held_modifiers;
   // CGWarpMouseCursorPosition emits a normal mouse-moved event without the
   // user-data marker used by CGEventPost. Consume that event at the exact
   // warp point so a remote handoff is not mistaken for local input and
@@ -257,7 +294,8 @@ CGEventRef tap_callback(CGEventTapProxy, CGEventType type, CGEventRef event, voi
       }
     }
     if (own_event) return event;
-    converted = convert_event(type, event, impl->last_point, impl->have_last_point);
+    converted = convert_event(type, event, impl->last_point, impl->have_last_point,
+                              impl->held_modifiers);
     callback = impl->callback;
     suppress = impl->suppression;
   }
@@ -303,11 +341,13 @@ Result<void> MacOSInputBackend::start(EventCallback callback) {
     impl_->association_sync_pending = false;
     impl_->cursor_hidden = false;
     impl_->have_last_point = false;
+    impl_->held_modifiers.clear();
     impl_->ignored_warps.clear();
     impl_->thread = std::thread([this] {
       CFMachPortRef tap = CGEventTapCreate(
           kCGHIDEventTap, kCGHeadInsertEventTap, kCGEventTapOptionDefault,
           CGEventMaskBit(kCGEventKeyDown) | CGEventMaskBit(kCGEventKeyUp) |
+              CGEventMaskBit(kCGEventFlagsChanged) |
               CGEventMaskBit(kCGEventMouseMoved) | CGEventMaskBit(kCGEventLeftMouseDown) |
               CGEventMaskBit(kCGEventLeftMouseUp) | CGEventMaskBit(kCGEventRightMouseDown) |
               CGEventMaskBit(kCGEventRightMouseUp) | CGEventMaskBit(kCGEventOtherMouseDown) |
@@ -446,6 +486,7 @@ void MacOSInputBackend::stop() {
   std::lock_guard lock(impl_->mutex);
   impl_->callback = {};
   impl_->have_last_point = false;
+  impl_->held_modifiers.clear();
   impl_->ignored_warps.clear();
   status_.capture = false;
   status_.injection = status_.permission && impl_->held.empty();

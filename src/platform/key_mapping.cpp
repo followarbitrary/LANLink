@@ -112,6 +112,21 @@ std::optional<std::uint32_t> hid_to_mac_keycode(std::uint32_t usage) {
   return inverse(kMacMappings, usage);
 }
 
+std::optional<MacModifierFlag> mac_modifier_flag_for_hid(std::uint32_t usage) {
+  switch (usage) {
+    case 0x39: return MacModifierFlag::kAlphaShift;
+    case 0xE1:
+    case 0xE5: return MacModifierFlag::kShift;
+    case 0xE0:
+    case 0xE4: return MacModifierFlag::kControl;
+    case 0xE2:
+    case 0xE6: return MacModifierFlag::kAlternate;
+    case 0xE3:
+    case 0xE7: return MacModifierFlag::kCommand;
+    default: return std::nullopt;
+  }
+}
+
 std::optional<std::uint32_t> windows_release_vk_for_hid(std::uint32_t usage) {
   return hid_to_windows_vk(usage);
 }
