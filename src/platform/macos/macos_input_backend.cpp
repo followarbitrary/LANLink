@@ -476,6 +476,13 @@ Result<void> MacOSInputBackend::warp_pointer(Point point) {
 }
 
 std::optional<Point> MacOSInputBackend::pointer_position() const noexcept {
+  CGEventRef current = CGEventCreate(nullptr);
+  if (current != nullptr) {
+    const CGPoint point = CGEventGetLocation(current);
+    CFRelease(current);
+    if (std::isfinite(point.x) && std::isfinite(point.y))
+      return Point{point.x, point.y};
+  }
   std::lock_guard lock(impl_->mutex);
   if (!impl_->have_last_point) return std::nullopt;
   return Point{impl_->last_point.x, impl_->last_point.y};

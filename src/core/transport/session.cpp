@@ -34,6 +34,7 @@ Result<void> PeerSession::start(IClock::time_point now) {
     started_ = true;
     next_heartbeat_ = now + m0::kHeartbeatInterval;
     next_display_info_check_ = now + m0::kHeartbeatInterval;
+    next_pointer_position_ = now;
     return Result<void>::success();
 }
 
@@ -57,6 +58,29 @@ Result<void> PeerSession::send_display_info_if_changed(bool force, IClock::time_
                " bounds=", info.logical_bounds.left, ",", info.logical_bounds.top, " ",
                info.logical_bounds.right, "x", info.logical_bounds.bottom,
                " scale=", info.scale);
+    return Result<void>::success();
+}
+
+Result<void> PeerSession::send_pointer_position_if_due(IClock::time_point now) {
+    if (now < next_pointer_position_)
+        return Result<void>::success();
+    next_pointer_position_ = now + m0::kPointerPositionInterval;
+    if (config_.arbiter == nullptr || config_.backend == nullptr ||
+        !config_.arbiter->has_active_lease())
+        return Result<void>::success();
+    const auto lease = config_.arbiter->lease();
+    if (!lease.has_value() || now >= lease->expires_at)
+        return Result<void>::success();
+    const auto position = config_.backend->pointer_position();
+    if (!position.has_value() || !std::isfinite(position->x) ||
+        !std::isfinite(position->y))
+        return Result<void>::success();
+    debug::log("send pointer position session=", lease->session.low,
+               " generation=", lease->generation, " point=", position->x, ",", position->y);
+    auto sent = connection_.send(
+        protocol::PointerPosition{lease->session, lease->generation, *position});
+    if (!sent.ok())
+        return fail_and_disconnect("pointer position send failed", now);
     return Result<void>::success();
 }
 
@@ -169,6 +193,18 @@ Result<void> PeerSession::dispatch_message(const protocol::Message& message,
         if (config_.router)
             config_.router->set_peer_display_info(display->display, display->logical_bounds,
                                                   display->scale);
+        return Result<void>::success();
+    }
+    if (const auto* position = std::get_if<protocol::PointerPosition>(&message)) {
+        if (!hello_received_)
+            return fail_and_disconnect("hello required", now);
+        liveness_.mark_alive(now);
+        debug::log("receive pointer position session=", position->session.low,
+                   " generation=", position->generation, " point=", position->position.x, ",",
+                   position->position.y);
+        if (config_.pointer_position_callback)
+            config_.pointer_position_callback(position->session, position->generation,
+                                              position->position);
         return Result<void>::success();
     }
     if (const auto* heartbeat = std::get_if<protocol::Heartbeat>(&message)) {
@@ -436,6 +472,9 @@ Result<void> PeerSession::tick(IClock::time_point now) {
             return display;
         next_display_info_check_ = now + m0::kHeartbeatInterval;
     }
+    auto pointer = send_pointer_position_if_due(now);
+    if (!pointer.ok())
+        return pointer;
     if (now >= next_heartbeat_) {
         auto result = connection_.send(protocol::Heartbeat{++heartbeat_counter_});
         if (!result.ok())

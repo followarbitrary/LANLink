@@ -1,3 +1,4 @@
+#include "lanlink/common/config.hpp"
 #include "lanlink/platform/fake_input_backend.hpp"
 #include "lanlink/runtime/node.hpp"
 
@@ -308,8 +309,25 @@ TEST(InputNodeRuntime, RemoteSourceReturnsToLocalAtEdge) {
     pump_pair(*left, *right, now, 2);
     EXPECT_EQ(left->router().state(), RouterState::kRemote);
   }
+
+  // Simulate target-side drift: the backend reports a position different from
+  // the source's accumulated estimate. The periodic position report must
+  // correct the virtual cursor before return-edge detection continues.
+  right_backend.set_pointer_position(Point{10.0, 50.0});
+  now += m0::kPointerPositionInterval;
+  pump_pair(*left, *right, now, 2);
   left_backend.emit_physical(
       InputEvent{{}, {}, 0, 0, MouseDelta{-1.0, 0.0}, InputOrigin::kPhysical});
+  ASSERT_TRUE(left->poll(now, 0ms).ok());
+  pump_pair(*left, *right, now, 2);
+  EXPECT_EQ(left->router().state(), RouterState::kRemote);
+  ASSERT_GE(right_backend.injected_events().size(), 4u);
+  const auto& corrected_move = right_backend.injected_events().back();
+  ASSERT_TRUE(std::holds_alternative<PointerMove>(corrected_move.payload));
+  EXPECT_DOUBLE_EQ(std::get<PointerMove>(corrected_move.payload).x, 9.0);
+
+  left_backend.emit_physical(
+      InputEvent{{}, {}, 0, 0, MouseDelta{-10.0, 0.0}, InputOrigin::kPhysical});
   ASSERT_TRUE(left->poll(now, 0ms).ok());
   pump_pair(*left, *right, now, 4);
   EXPECT_EQ(left->router().state(), RouterState::kLocal);
@@ -371,6 +389,55 @@ TEST(InputNodeRuntime, ReturnWarpFailureRecoversBeforeProcessingQueuedEvents) {
   EXPECT_TRUE(left_backend.status().suppression);
   ASSERT_FALSE(left_backend.suppression_history().empty());
   EXPECT_TRUE(left_backend.suppression_history().back());
+}
+
+TEST(InputNodeRuntime, CorrectsRemoteCursorFromTargetPositionReport) {
+  FakeInputBackend left_backend;
+  FakeInputBackend right_backend;
+  auto left_result = InputNodeRuntime::create(config(
+      id(501), id(502), AuthenticatedPeer{id(503)}, id(510), Endpoint{"127.0.0.1", 0},
+      &left_backend));
+  auto right_result = InputNodeRuntime::create(config(
+      id(503), id(504), AuthenticatedPeer{id(501)}, id(520), Endpoint{"127.0.0.1", 0},
+      &right_backend));
+  ASSERT_TRUE(left_result.ok()) << left_result.error();
+  ASSERT_TRUE(right_result.ok()) << right_result.error();
+  auto left = std::move(left_result.value());
+  auto right = std::move(right_result.value());
+  right_backend.set_display_bounds(Rect{0.0, 0.0, 200.0, 100.0});
+  ASSERT_TRUE(left->set_topology(topology_for(id(510), id(520), true)).ok());
+  ASSERT_TRUE(right->set_topology(topology_for(id(520), id(510), true)).ok());
+  ASSERT_TRUE(left->start().ok());
+  ASSERT_TRUE(right->start().ok());
+  ASSERT_TRUE(left->connect_peer(right->local_endpoint()).ok());
+
+  IClock::time_point now{};
+  pump_pair(*left, *right, now, 20);
+
+  left_backend.set_pointer_position(Point{100.0, 50.0});
+  left_backend.emit_physical(
+      InputEvent{{}, {}, 0, 0, MouseDelta{4.0, 0.0}, InputOrigin::kPhysical});
+  ASSERT_TRUE(left->poll(now, 0ms).ok());
+  pump_pair(*left, *right, now, 12);
+  ASSERT_EQ(left->router().state(), RouterState::kRemote);
+  ASSERT_TRUE(right->arbiter().has_active_lease());
+
+  // Simulate the target cursor drifting to the exact return edge. A periodic
+  // target report must correct the source's virtual cursor before this small
+  // outward delta is evaluated.
+  right_backend.set_pointer_position(Point{0.0, 50.0});
+  now += m0::kPointerPositionInterval;
+  ASSERT_TRUE(right->tick(now).ok());
+  ASSERT_TRUE(left->poll(now, 0ms).ok());
+
+  left_backend.set_pointer_position(Point{100.0, 50.0});
+  left_backend.emit_physical(
+      InputEvent{{}, {}, 0, 0, MouseDelta{-1.0, 0.0}, InputOrigin::kPhysical});
+  ASSERT_TRUE(left->poll(now, 0ms).ok());
+  EXPECT_EQ(left->router().state(), RouterState::kRecovering);
+  pump_pair(*left, *right, now, 4);
+  EXPECT_EQ(left->router().state(), RouterState::kLocal);
+  EXPECT_FALSE(right->arbiter().has_lease());
 }
 
 TEST(InputNodeRuntime, RemoteReturnMapsTargetTangentToSourceBounds) {

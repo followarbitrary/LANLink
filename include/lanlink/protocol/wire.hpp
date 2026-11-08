@@ -15,10 +15,11 @@
 
 namespace lanlink::protocol {
 
-// Version 4 adds absolute PointerMove input payloads. Each peer advertises
-// the same version during Hello so an older executable rejects the connection
-// before trying to decode a newer payload.
-constexpr std::uint8_t kProtocolVersion = 4;
+// Version 5 adds periodic target cursor position corrections. Version 4 added
+// absolute PointerMove input payloads. Each peer advertises the same version
+// during Hello so an older executable rejects the connection before decoding
+// newer messages.
+constexpr std::uint8_t kProtocolVersion = 5;
 constexpr std::size_t kHeaderSize = 12;
 constexpr std::size_t kMaxFrameSize = 64 * 1024;
 constexpr std::size_t kMaxErrorText = 4 * 1024;
@@ -42,6 +43,7 @@ enum class MessageType : std::uint8_t {
     kRevoke,
     kError,
     kDisplayInfo,
+    kPointerPosition,
 };
 
 struct Hello {
@@ -59,6 +61,12 @@ struct DisplayInfo {
                a.logical_bounds.right == b.logical_bounds.right &&
                a.logical_bounds.bottom == b.logical_bounds.bottom && a.scale == b.scale;
     }
+};
+struct PointerPosition {
+    SessionId session;
+    std::uint64_t generation{};
+    Point position;
+    friend bool operator==(const PointerPosition&, const PointerPosition&) = default;
 };
 struct Heartbeat {
     std::uint64_t counter{};
@@ -128,8 +136,9 @@ struct ErrorMessage {
 };
 
 using Message =
-    std::variant<Hello, DisplayInfo, Heartbeat, AcquireRequest, AcquireResponse, ActivateRequest,
-                 ActivateAck, RenewRequest, RenewAck, InputMessage, Release, Revoke, ErrorMessage>;
+    std::variant<Hello, DisplayInfo, PointerPosition, Heartbeat, AcquireRequest, AcquireResponse,
+                 ActivateRequest, ActivateAck, RenewRequest, RenewAck, InputMessage, Release,
+                 Revoke, ErrorMessage>;
 
 Result<std::vector<std::uint8_t>> encode(const Message& message);
 Result<Message> decode(std::span<const std::uint8_t> frame);

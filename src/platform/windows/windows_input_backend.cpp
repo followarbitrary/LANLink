@@ -232,6 +232,9 @@ Result<void> WindowsInputBackend::warp_pointer(Point point) {
 }
 
 std::optional<Point> WindowsInputBackend::pointer_position() const noexcept {
+  POINT current{};
+  if (GetCursorPos(&current))
+    return Point{static_cast<double>(current.x), static_cast<double>(current.y)};
   std::lock_guard lock(mutex_);
   if (!have_last_point_) return std::nullopt;
   return Point{static_cast<double>(last_point_.x), static_cast<double>(last_point_.y)};

@@ -37,9 +37,13 @@ Result<void> InputNodeRuntime::set_topology(ScreenTopology topology) {
   return Result<void>::success();
 }
 
-transport::PeerSessionConfig InputNodeRuntime::session_config() noexcept {
+transport::PeerSessionConfig InputNodeRuntime::session_config() {
   return transport::PeerSessionConfig{config_.local_device, config_.peer, &router_, &arbiter_,
-                                      config_.backend, config_.local_display};
+                                      config_.backend, config_.local_display,
+                                      [this](SessionId session, std::uint64_t generation,
+                                             Point position) {
+                                        update_remote_cursor_position(session, generation, position);
+                                      }};
 }
 
 Result<void> InputNodeRuntime::start() {
@@ -305,6 +309,23 @@ void InputNodeRuntime::begin_remote_cursor(const Crossing& crossing, Edge source
              " movement_scale=", movement_scale,
              " source_edge=", static_cast<unsigned>(source_edge),
              " target_edge=", static_cast<unsigned>(crossing.target_edge));
+}
+
+void InputNodeRuntime::update_remote_cursor_position(SessionId session,
+                                                      std::uint64_t generation,
+                                                      Point position) noexcept {
+  if (!remote_cursor_.has_value() || router_.state() != RouterState::kRemote ||
+      !router_.lease().has_value() || router_.lease()->session != session ||
+      router_.lease()->generation != generation || !std::isfinite(position.x) ||
+      !std::isfinite(position.y))
+    return;
+  auto& cursor = *remote_cursor_;
+  cursor.position.x = std::clamp(position.x, cursor.bounds.left,
+                                 std::nextafter(cursor.bounds.right, cursor.bounds.left));
+  cursor.position.y = std::clamp(position.y, cursor.bounds.top,
+                                 std::nextafter(cursor.bounds.bottom, cursor.bounds.top));
+  debug::log("remote cursor position corrected session=", session.low,
+             " generation=", generation, " point=", cursor.position.x, ",", cursor.position.y);
 }
 
 std::optional<Edge> InputNodeRuntime::detect_remote_exit(const InputEvent& event) {

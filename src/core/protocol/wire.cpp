@@ -13,7 +13,7 @@ namespace {
 constexpr std::uint8_t to_u8(MessageType type) { return static_cast<std::uint8_t>(type); }
 
 bool valid_type(std::uint8_t value) {
-    return value >= to_u8(MessageType::kHello) && value <= to_u8(MessageType::kDisplayInfo);
+    return value >= to_u8(MessageType::kHello) && value <= to_u8(MessageType::kPointerPosition);
 }
 bool valid_reason(std::uint8_t value) {
     return value <= static_cast<std::uint8_t>(RevokeReason::kProtocolError);
@@ -297,6 +297,17 @@ Result<std::vector<std::uint8_t>> encode(const Message& message) {
                 w.f64(bounds.bottom);
                 w.f64(value.scale);
                 return make_frame(MessageType::kDisplayInfo, std::move(w));
+            } else if constexpr (std::is_same_v<T, PointerPosition>) {
+                if (zero(value.session) || value.generation == 0 || !finite(value.position.x) ||
+                    !finite(value.position.y) ||
+                    std::abs(value.position.x) > kMaxDisplayCoordinate ||
+                    std::abs(value.position.y) > kMaxDisplayCoordinate)
+                    return Result<std::vector<std::uint8_t>>::failure("invalid pointer position");
+                w.id(value.session);
+                w.u64(value.generation);
+                w.f64(value.position.x);
+                w.f64(value.position.y);
+                return make_frame(MessageType::kPointerPosition, std::move(w));
             } else if constexpr (std::is_same_v<T, Heartbeat>) {
                 w.u64(value.counter);
                 return make_frame(MessageType::kHeartbeat, std::move(w));
@@ -441,6 +452,17 @@ Result<Message> decode(std::span<const std::uint8_t> frame) {
             !(value.logical_bounds.top < value.logical_bounds.bottom) || !finite(value.scale) ||
             value.scale <= 0.0 || value.scale > kMaxDisplayScale)
             return fail("invalid display info");
+        message = value;
+        break;
+    }
+    case MessageType::kPointerPosition: {
+        PointerPosition value;
+        if (!r.id(value.session) || !r.u64(value.generation) || !r.f64(value.position.x) ||
+            !r.f64(value.position.y) || zero(value.session) || value.generation == 0 ||
+            !finite(value.position.x) || !finite(value.position.y) ||
+            std::abs(value.position.x) > kMaxDisplayCoordinate ||
+            std::abs(value.position.y) > kMaxDisplayCoordinate)
+            return fail("invalid pointer position");
         message = value;
         break;
     }

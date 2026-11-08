@@ -130,6 +130,57 @@ TEST(PeerSession, RefreshesDisplayInfoWhenBoundsOrScaleChange) {
     EXPECT_EQ(source_router.peer_display(), DisplayId{});
 }
 
+TEST(PeerSession, ReportsActiveTargetPointerPosition) {
+    auto listener_result = Listener::bind(Endpoint{"127.0.0.1", 0});
+    ASSERT_TRUE(listener_result.ok()) << listener_result.error();
+    auto listener = std::move(listener_result.value());
+    auto client_result = Connection::connect(Endpoint{"127.0.0.1", listener.local_endpoint().port});
+    ASSERT_TRUE(client_result.ok()) << client_result.error();
+    auto accepted = listener.accept(2s);
+    ASSERT_TRUE(accepted.ok()) << accepted.error();
+
+    InputRouter router{id(70), AuthenticatedPeer{id(72)}, id(80), id(81)};
+    InputArbiter arbiter;
+    FakeInputBackend source_backend;
+    FakeInputBackend target_backend;
+    ASSERT_TRUE(source_backend.start({}).ok());
+    ASSERT_TRUE(target_backend.start({}).ok());
+    target_backend.set_display_bounds(Rect{0.0, 0.0, 1920.0, 1080.0});
+    std::optional<PointerPosition> reported;
+    PeerSession source(
+        std::move(client_result.value()),
+        PeerSessionConfig{id(71), AuthenticatedPeer{id(72)}, &router, nullptr, &source_backend,
+                          {}, [&reported](SessionId session, std::uint64_t generation,
+                                          Point position) {
+                              reported = PointerPosition{session, generation, position};
+                          }});
+    PeerSession target(
+        std::move(accepted.value()),
+        PeerSessionConfig{id(72), AuthenticatedPeer{id(71)}, nullptr, &arbiter, &target_backend});
+
+    ASSERT_TRUE(source.start({}).ok());
+    ASSERT_TRUE(target.start({}).ok());
+    ASSERT_TRUE(source.pump({}).ok());
+    ASSERT_TRUE(target.pump({}).ok());
+
+    auto actions = router.on_crossing(
+        Crossing{id(82), Edge::kLeft, 0.5, {20, 10}, 0.5, true}, {});
+    ASSERT_TRUE(source.send_actions(actions).ok());
+    ASSERT_TRUE(target.pump({}).ok());
+    ASSERT_TRUE(source.pump({}).ok());
+    ASSERT_TRUE(target.pump({}).ok());
+    ASSERT_TRUE(source.pump({}).ok());
+    ASSERT_TRUE(arbiter.has_active_lease());
+
+    target_backend.set_pointer_position(Point{123.0, 456.0});
+    ASSERT_TRUE(target.tick(IClock::time_point{} + m0::kPointerPositionInterval).ok());
+    ASSERT_TRUE(source.pump(IClock::time_point{} + m0::kPointerPositionInterval).ok());
+    ASSERT_TRUE(reported.has_value());
+    EXPECT_EQ(reported->session, arbiter.lease()->session);
+    EXPECT_EQ(reported->generation, arbiter.lease()->generation);
+    EXPECT_EQ(reported->position, (Point{123.0, 456.0}));
+}
+
 TEST(PeerSession, ActivationFailsWhenPointerWarpCannotBeInjected) {
     auto listener_result = Listener::bind(Endpoint{"127.0.0.1", 0});
     ASSERT_TRUE(listener_result.ok());

@@ -75,7 +75,7 @@ class InputNodeRuntime {
 
   explicit InputNodeRuntime(InputRuntimeConfig config);
 
-  transport::PeerSessionConfig session_config() noexcept;
+  transport::PeerSessionConfig session_config();
   Result<void> accept_incoming(TimePoint now);
   Result<void> drain_events(TimePoint now);
   Result<void> dispatch_actions(const std::vector<RouterAction>& actions, TimePoint now);
@@ -83,6 +83,8 @@ class InputNodeRuntime {
                                                    const Point& pointer, TimePoint now);
   std::optional<Edge> detect_remote_exit(const InputEvent& event);
   void begin_remote_cursor(const Crossing& crossing, Edge source_edge);
+  void update_remote_cursor_position(SessionId session, std::uint64_t generation,
+                                     Point position) noexcept;
   void clear_remote_cursor() noexcept { remote_cursor_.reset(); }
   Result<void> queue_event(const InputEvent& event);
 

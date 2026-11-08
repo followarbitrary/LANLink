@@ -31,6 +31,7 @@ template <typename T> void expect_round_trip(const T& message) {
 TEST(ProtocolWire, RoundTripsEveryMessageAndInputPayload) {
     expect_round_trip(Hello{id(1, 2), kProtocolVersion});
     expect_round_trip(DisplayInfo{id(15, 16), Rect{-1920.0, 0.0, 0.0, 1080.0}, 2.0});
+    expect_round_trip(PointerPosition{id(17, 18), 9, Point{-123.5, 456.25}});
     expect_round_trip(Heartbeat{0x0102030405060708ULL});
     expect_round_trip(AcquireRequest{id(3, 4), id(5, 6), id(7, 8), Point{1.25, -2.5}});
     expect_round_trip(AcquireResponse{id(7, 8), true, id(9, 10), 42, ""});
@@ -118,6 +119,11 @@ TEST(ProtocolWire, RejectsInvalidValuesAndSizeLimits) {
                      .ok());
     EXPECT_FALSE(encode(AcquireRequest{{}, id(1, 1), id(2, 2), Point{0, 0}}).ok());
     EXPECT_FALSE(encode(Revoke{{}, 1, RevokeReason::kProtocolError}).ok());
+    EXPECT_FALSE(encode(PointerPosition{{}, 1, Point{0, 0}}).ok());
+    EXPECT_FALSE(encode(PointerPosition{id(1, 1), 0, Point{0, 0}}).ok());
+    EXPECT_FALSE(encode(PointerPosition{id(1, 1), 1,
+                                        Point{kMaxDisplayCoordinate + 1.0, 0}})
+                     .ok());
     EXPECT_FALSE(encode(AcquireResponse{id(1, 1), true, {}, 0, ""}).ok());
     EXPECT_FALSE(encode(InputMessage{InputEvent{
                             {}, id(1, 1), 1, 1, MouseDelta{0, 0}, InputOrigin::kPhysical}})

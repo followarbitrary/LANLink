@@ -11,6 +11,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <vector>
 
@@ -23,6 +24,7 @@ struct PeerSessionConfig {
     InputArbiter* arbiter{nullptr};
     platform::IInputBackend* backend{nullptr};
     DisplayId local_display{};
+    std::function<void(SessionId, std::uint64_t, Point)> pointer_position_callback;
 };
 
 class PeerSession {
@@ -42,6 +44,7 @@ class PeerSession {
   private:
     Result<void> dispatch_actions(const std::vector<RouterAction>& actions, IClock::time_point now);
     Result<void> send_display_info_if_changed(bool force, IClock::time_point now);
+    Result<void> send_pointer_position_if_due(IClock::time_point now);
     Result<void> dispatch_message(const protocol::Message& message, IClock::time_point now);
     Result<void> apply_local_actions(const std::vector<RouterAction>& actions);
     Result<void> fail_and_disconnect(const char* error, IClock::time_point now);
@@ -55,6 +58,7 @@ class PeerSession {
     std::uint64_t heartbeat_counter_{0};
     IClock::time_point next_heartbeat_{};
     IClock::time_point next_display_info_check_{};
+    IClock::time_point next_pointer_position_{};
     bool started_{false};
     bool hello_received_{false};
     bool disconnected_{false};
