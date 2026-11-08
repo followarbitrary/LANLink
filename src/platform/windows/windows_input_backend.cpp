@@ -245,8 +245,14 @@ Result<void> WindowsInputBackend::inject(const InputEvent& event) {
       return Result<void>::failure(status_.last_error);
     }
     input.type = INPUT_KEYBOARD;
-    input.ki.wVk = static_cast<WORD>(*vk & 0xFFFFU);
+    const auto stroke = windows_key_stroke_for_hid(key->code);
+    input.ki.wVk = stroke.has_value() ? 0 : static_cast<WORD>(*vk & 0xFFFFU);
+    input.ki.wScan = stroke.has_value() ? stroke->scan_code : 0;
     input.ki.dwFlags = key->pressed ? 0 : KEYEVENTF_KEYUP;
+    if (stroke.has_value()) {
+      input.ki.dwFlags |= KEYEVENTF_SCANCODE;
+      if (stroke->extended) input.ki.dwFlags |= KEYEVENTF_EXTENDEDKEY;
+    }
     input.ki.dwExtraInfo = own_extra_info();
     track_key = true;
     code = key->code;
@@ -396,8 +402,14 @@ bool WindowsInputBackend::release_session_locked(const SessionId& session) {
     input.type = INPUT_KEYBOARD;
     const auto vk = windows_release_vk_for_hid(code);
     if (!vk.has_value()) continue;
-    input.ki.wVk = static_cast<WORD>(*vk & 0xFFFFU);
+    const auto stroke = windows_key_stroke_for_hid(code);
+    input.ki.wVk = stroke.has_value() ? 0 : static_cast<WORD>(*vk & 0xFFFFU);
+    input.ki.wScan = stroke.has_value() ? stroke->scan_code : 0;
     input.ki.dwFlags = KEYEVENTF_KEYUP;
+    if (stroke.has_value()) {
+      input.ki.dwFlags |= KEYEVENTF_SCANCODE;
+      if (stroke->extended) input.ki.dwFlags |= KEYEVENTF_EXTENDEDKEY;
+    }
     input.ki.dwExtraInfo = own_extra_info();
     inputs.push_back(input);
     released.emplace_back(true, code);
@@ -504,6 +516,8 @@ void WindowsInputBackend::handle_keyboard(const KBDLLHOOKSTRUCT& info, WPARAM me
     hid = (info.flags & LLKHF_EXTENDED) != 0 ? 0xE4u : 0xE0u;
   } else if (info.vkCode == VK_MENU) {
     hid = (info.flags & LLKHF_EXTENDED) != 0 ? 0xE6u : 0xE2u;
+  } else if (info.vkCode == VK_RETURN && (info.flags & LLKHF_EXTENDED) != 0) {
+    hid = 0x58u;
   } else {
     hid = windows_vk_to_hid(info.vkCode);
   }

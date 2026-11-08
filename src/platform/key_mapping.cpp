@@ -41,7 +41,7 @@ constexpr std::array<Mapping, 115> kWindowsMappings{{
     {0x6A, 0x55}, {0x6B, 0x57}, {0x6D, 0x56}, {0x6E, 0x63}, {0x6F, 0x54},
 }};
 
-constexpr std::array<Mapping, 108> kMacMappings{{
+constexpr std::array<Mapping, 109> kMacMappings{{
     {36, 0x28}, {53, 0x29}, {51, 0x2A}, {48, 0x2B}, {49, 0x2C},
     {56, 0xE1}, {60, 0xE5}, {59, 0xE0}, {62, 0xE4}, {58, 0xE2},
     {61, 0xE6}, {55, 0xE3}, {54, 0xE7}, {57, 0x39}, {115, 0x4A},
@@ -62,7 +62,7 @@ constexpr std::array<Mapping, 108> kMacMappings{{
     {105, 0x68}, {107, 0x69}, {113, 0x6A}, {106, 0x6B}, {64, 0x6C},
     {79, 0x6D}, {80, 0x6E}, {90, 0x6F},
     {71, 0x53}, {75, 0x54}, {67, 0x55}, {78, 0x56}, {69, 0x57}, {76, 0x58},
-    {83, 0x59}, {84, 0x5A}, {85, 0x5B}, {86, 0x5C}, {87, 0x5D}, {88, 0x5E},
+    {76, 0x58}, {83, 0x59}, {84, 0x5A}, {85, 0x5B}, {86, 0x5C}, {87, 0x5D}, {88, 0x5E},
     {89, 0x5F}, {91, 0x60}, {92, 0x61}, {82, 0x62}, {65, 0x63}, {81, 0x67},
 }};
 
@@ -100,6 +100,7 @@ std::optional<std::uint32_t> hid_to_windows_vk(std::uint32_t usage) {
   if (usage >= 0x04 && usage <= 0x1D) return 0x41u + (usage - 0x04u);
   if (usage == 0x27u) return 0x30u;
   if (usage >= 0x1Eu && usage <= 0x26u) return 0x31u + (usage - 0x1Eu);
+  if (usage == 0x58u) return 0x0Du;  // Keypad Enter shares VK_RETURN.
   return inverse(kWindowsMappings, usage);
 }
 
@@ -117,6 +118,45 @@ std::optional<std::uint32_t> windows_release_vk_for_hid(std::uint32_t usage) {
 
 std::optional<std::uint32_t> mac_release_keycode_for_hid(std::uint32_t usage) {
   return hid_to_mac_keycode(usage);
+}
+
+std::optional<WindowsKeyStroke> windows_key_stroke_for_hid(std::uint32_t usage) {
+  switch (usage) {
+    case 0x28: return WindowsKeyStroke{0x1C, false};  // Enter
+    case 0x2A: return WindowsKeyStroke{0x0E, false};  // Backspace
+    case 0x39: return WindowsKeyStroke{0x3A, false};  // Caps Lock
+    case 0x4F: return WindowsKeyStroke{0x4D, true};   // Right
+    case 0x50: return WindowsKeyStroke{0x4B, true};   // Left
+    case 0x51: return WindowsKeyStroke{0x50, true};   // Down
+    case 0x52: return WindowsKeyStroke{0x48, true};   // Up
+    case 0xE0: return WindowsKeyStroke{0x1D, false};  // Left Control
+    case 0xE1: return WindowsKeyStroke{0x2A, false};  // Left Shift
+    case 0xE2: return WindowsKeyStroke{0x38, false};  // Left Option/Alt
+    case 0xE3: return WindowsKeyStroke{0x5B, true};   // Left Command/GUI
+    case 0xE4: return WindowsKeyStroke{0x1D, true};   // Right Control
+    case 0xE5: return WindowsKeyStroke{0x36, false};  // Right Shift
+    case 0xE6: return WindowsKeyStroke{0x38, true};   // Right Option/Alt
+    case 0xE7: return WindowsKeyStroke{0x5C, true};   // Right Command/GUI
+    case 0x29: return WindowsKeyStroke{0x01, false};  // Escape
+    case 0x2B: return WindowsKeyStroke{0x0F, false};  // Tab
+    case 0x2C: return WindowsKeyStroke{0x39, false};  // Space
+    case 0x46: return WindowsKeyStroke{0x37, true};   // Print Screen
+    case 0x47: return WindowsKeyStroke{0x46, false};  // Scroll Lock
+    case 0x49: return WindowsKeyStroke{0x52, true};   // Insert
+    case 0x4A: return WindowsKeyStroke{0x47, true};   // Home
+    case 0x4B: return WindowsKeyStroke{0x49, true};   // Page Up
+    case 0x4C: return WindowsKeyStroke{0x53, true};   // Delete
+    case 0x4D: return WindowsKeyStroke{0x4F, true};   // End
+    case 0x4E: return WindowsKeyStroke{0x51, true};   // Page Down
+    case 0x53: return WindowsKeyStroke{0x45, false};  // Num Lock
+    case 0x58: return WindowsKeyStroke{0x1C, true};   // Keypad Enter
+    default: break;
+  }
+  if (usage >= 0x3A && usage <= 0x43)
+    return WindowsKeyStroke{static_cast<std::uint16_t>(0x3B + usage - 0x3A), false};
+  if (usage == 0x44) return WindowsKeyStroke{0x57, false};  // F11
+  if (usage == 0x45) return WindowsKeyStroke{0x58, false};  // F12
+  return std::nullopt;
 }
 
 std::int32_t windows_absolute_mouse_coordinate(double coordinate, std::int32_t origin,
