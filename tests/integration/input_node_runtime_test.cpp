@@ -427,8 +427,7 @@ TEST(InputNodeRuntime, CorrectsRemoteCursorFromTargetPositionReport) {
   // outward delta is evaluated.
   right_backend.set_pointer_position(Point{0.0, 50.0});
   now += m0::kPointerPositionInterval;
-  ASSERT_TRUE(right->tick(now).ok());
-  ASSERT_TRUE(left->poll(now, 0ms).ok());
+  pump_pair(*left, *right, now, 4);
 
   left_backend.set_pointer_position(Point{100.0, 50.0});
   left_backend.emit_physical(

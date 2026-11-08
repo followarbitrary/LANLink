@@ -60,12 +60,14 @@ class WindowsInputBackend final : public IInputBackend {
   void handle_keyboard(const KBDLLHOOKSTRUCT& info, WPARAM message);
   void handle_mouse(const MSLLHOOKSTRUCT& info, WPARAM message);
   void handle_raw_input(HRAWINPUT input);
+  void handle_cursor_visibility_message(WPARAM wparam, LPARAM lparam);
   void dispatch(InputEvent event);
   bool send_inputs(INPUT* inputs, UINT count);
   bool release_session_locked(const SessionId& session);
   void release_all_locked();
   void set_hook_error(const char* operation);
   void join_thread();
+  bool request_cursor_visibility(bool hidden);
 
   ULONG_PTR own_extra_info() const noexcept { return reinterpret_cast<ULONG_PTR>(this); }
   static std::atomic<WindowsInputBackend*> active_instance_;
@@ -77,10 +79,14 @@ class WindowsInputBackend final : public IInputBackend {
   mutable std::mutex mutex_;
   std::recursive_mutex operation_mutex_;
   std::condition_variable hook_ready_cv_;
+  std::condition_variable cursor_visibility_cv_;
   bool hook_ready_{false};
   std::atomic<bool> stop_requested_{false};
   bool raw_input_ready_{false};
   bool cursor_hidden_{false};
+  std::uint32_t cursor_visibility_request_id_{0};
+  std::uint32_t cursor_visibility_completed_id_{0};
+  int cursor_visibility_adjustment_{0};
   EventCallback callback_;
   std::unordered_map<SessionId, HeldState> held_;
   POINT last_point_{};

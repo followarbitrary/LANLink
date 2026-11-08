@@ -18,6 +18,7 @@ std::atomic<WindowsInputBackend*> WindowsInputBackend::active_instance_{nullptr}
 
 namespace {
 constexpr wchar_t kRawInputWindowClass[] = L"LANLink.RawInputWindow";
+constexpr UINT kCursorVisibilityMessage = WM_APP + 1;
 
 // Keep Win32 pointer hooks, cursor APIs, and screen metrics in one coordinate
 // space. Without an explicit process DPI context, user32 virtualizes
@@ -61,6 +62,28 @@ std::uint32_t mouse_button_for_message(WPARAM message, DWORD mouse_data) {
     default:
       return 0;
   }
+}
+
+// ShowCursor's display count belongs to the calling thread's input queue.
+// Keep every call on the hook/message thread and remember the exact number of
+// decrements so restoring visibility returns that thread to its prior count.
+bool hide_cursor_on_current_thread(int& adjustment) {
+  if (adjustment != 0) return true;
+  int count = 0;
+  constexpr int kMaxAdjustments = 128;
+  do {
+    count = ShowCursor(FALSE);
+    ++adjustment;
+  } while (count >= 0 && adjustment < kMaxAdjustments);
+  return count < 0;
+}
+
+bool show_cursor_on_current_thread(int& adjustment) {
+  while (adjustment > 0) {
+    (void)ShowCursor(TRUE);
+    --adjustment;
+  }
+  return true;
 }
 }  // namespace
 
@@ -140,14 +163,18 @@ void WindowsInputBackend::stop() {
   bool restore_cursor = false;
   {
     std::lock_guard lock(mutex_);
+    restore_cursor = cursor_hidden_;
+  }
+  if (restore_cursor && !request_cursor_visibility(false)) {
+    debug::log("windows cursor restore request failed during stop");
+  }
+  {
+    std::lock_guard lock(mutex_);
     status_.running = false;
     status_.suppression = false;
-    restore_cursor = cursor_hidden_;
-    cursor_hidden_ = false;
     stop_requested_.store(true, std::memory_order_release);
     thread_id = hook_thread_id_;
   }
-  if (restore_cursor) (void)ShowCursor(TRUE);
   if (thread_id != 0) PostThreadMessageW(thread_id, WM_QUIT, 0, 0);
   join_thread();
   std::lock_guard lock(mutex_);
@@ -166,31 +193,31 @@ void WindowsInputBackend::stop() {
 
 Result<void> WindowsInputBackend::set_suppression(bool enabled) {
   std::lock_guard operation_lock(operation_mutex_);
-  bool update_cursor = false;
-  std::lock_guard lock(mutex_);
-  if (enabled && !status_.running) {
-    status_.last_error = "capture unavailable";
+  bool changed = false;
+  bool previous = false;
+  {
+    std::lock_guard lock(mutex_);
+    if (enabled && !status_.running) {
+      status_.last_error = "capture unavailable";
+      status_.degraded = true;
+      debug::log("windows suppression failed enabled=", enabled,
+                 " reason=capture unavailable");
+      return Result<void>::failure(status_.last_error);
+    }
+    previous = status_.suppression;
+    changed = previous != enabled;
+    status_.suppression = enabled;
+  }
+  if (!changed) return Result<void>::success();
+  debug::log("windows suppression=", enabled ? "on" : "off");
+  if (!request_cursor_visibility(enabled)) {
+    std::lock_guard lock(mutex_);
+    status_.suppression = previous;
+    status_.last_error = "cursor visibility request failed";
     status_.degraded = true;
-    debug::log("windows suppression failed enabled=", enabled,
-               " reason=capture unavailable");
     return Result<void>::failure(status_.last_error);
   }
-  if (status_.suppression != enabled) {
-    debug::log("windows suppression=", enabled ? "on" : "off");
-    update_cursor = true;
-  }
-  status_.suppression = enabled;
-  if (update_cursor) {
-    if (enabled) {
-      (void)ShowCursor(FALSE);
-      cursor_hidden_ = true;
-      debug::log("windows cursor hidden");
-    } else if (cursor_hidden_) {
-      (void)ShowCursor(TRUE);
-      cursor_hidden_ = false;
-      debug::log("windows cursor shown");
-    }
-  }
+  debug::log("windows cursor ", enabled ? "hidden" : "shown");
   return Result<void>::success();
 }
 
@@ -601,6 +628,61 @@ bool WindowsInputBackend::send_inputs(INPUT* inputs, UINT count) {
   return SendInput(count, inputs, sizeof(INPUT)) == count;
 }
 
+bool WindowsInputBackend::request_cursor_visibility(bool hidden) {
+  // set_suppression and stop can run on a different thread from the Win32
+  // message loop. Marshal the operation to the hook thread instead of calling
+  // ShowCursor from the caller's input queue.
+  DWORD thread_id = 0;
+  std::uint32_t request_id = 0;
+  {
+    std::lock_guard lock(mutex_);
+    if (cursor_hidden_ == hidden) return true;
+    if (!status_.running || hook_thread_id_ == 0) return false;
+    thread_id = hook_thread_id_;
+    request_id = ++cursor_visibility_request_id_;
+  }
+  if (thread_id == GetCurrentThreadId()) {
+    handle_cursor_visibility_message(static_cast<WPARAM>(hidden),
+                                     static_cast<LPARAM>(request_id));
+    std::lock_guard lock(mutex_);
+    return cursor_visibility_completed_id_ >= request_id && cursor_hidden_ == hidden;
+  }
+  if (!PostThreadMessageW(thread_id, kCursorVisibilityMessage,
+                          static_cast<WPARAM>(hidden),
+                          static_cast<LPARAM>(request_id))) {
+    return false;
+  }
+  std::unique_lock lock(mutex_);
+  const bool completed = cursor_visibility_cv_.wait_for(
+      lock, std::chrono::seconds(1), [this, request_id] {
+        return cursor_visibility_completed_id_ >= request_id || !status_.running;
+      });
+  return completed && cursor_visibility_completed_id_ >= request_id &&
+         cursor_hidden_ == hidden;
+}
+
+void WindowsInputBackend::handle_cursor_visibility_message(WPARAM wparam, LPARAM lparam) {
+  const bool hidden = wparam != 0;
+  bool was_hidden = false;
+  {
+    std::lock_guard lock(mutex_);
+    was_hidden = cursor_hidden_;
+  }
+  bool applied = true;
+  if (hidden && !was_hidden)
+    applied = hide_cursor_on_current_thread(cursor_visibility_adjustment_);
+  else if (!hidden && was_hidden)
+    applied = show_cursor_on_current_thread(cursor_visibility_adjustment_);
+  if (!applied) show_cursor_on_current_thread(cursor_visibility_adjustment_);
+  {
+    std::lock_guard lock(mutex_);
+    cursor_hidden_ = applied && hidden;
+    cursor_visibility_completed_id_ =
+        std::max(cursor_visibility_completed_id_, static_cast<std::uint32_t>(lparam));
+  }
+  cursor_visibility_cv_.notify_all();
+}
+
 void WindowsInputBackend::release_all_locked() {
   std::vector<SessionId> sessions;
   sessions.reserve(held_.size());
@@ -684,10 +766,18 @@ void WindowsInputBackend::message_thread() {
     return;
   }
   MSG message;
-  while (GetMessageW(&message, nullptr, 0, 0) > 0) DispatchMessageW(&message);
+  while (GetMessageW(&message, nullptr, 0, 0) > 0) {
+    if (message.message == kCursorVisibilityMessage)
+      handle_cursor_visibility_message(message.wParam, message.lParam);
+    else
+      DispatchMessageW(&message);
+  }
   bool unexpected_exit = false;
+  bool restore_cursor = false;
   {
     std::lock_guard lock(mutex_);
+    restore_cursor = cursor_hidden_;
+    cursor_hidden_ = false;
     if (keyboard_hook_) UnhookWindowsHookEx(keyboard_hook_);
     if (mouse_hook_) UnhookWindowsHookEx(mouse_hook_);
     unexpected_exit = !stop_requested_.load(std::memory_order_acquire);
@@ -706,6 +796,8 @@ void WindowsInputBackend::message_thread() {
       debug::log("windows hook thread exited unexpectedly");
     }
   }
+  if (restore_cursor) show_cursor_on_current_thread(cursor_visibility_adjustment_);
+  cursor_visibility_cv_.notify_all();
   if (raw_input_window_ != nullptr) {
     DestroyWindow(raw_input_window_);
     raw_input_window_ = nullptr;
