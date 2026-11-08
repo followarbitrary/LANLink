@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <iterator>
 #include <string>
 #include <utility>
 #include <vector>
@@ -19,7 +20,10 @@ std::atomic<WindowsInputBackend*> WindowsInputBackend::active_instance_{nullptr}
 namespace {
 constexpr wchar_t kRawInputWindowClass[] = L"LANLink.RawInputWindow";
 constexpr UINT kCursorVisibilityMessage = WM_APP + 1;
-constexpr auto kInjectedMotionEchoTimeout = std::chrono::milliseconds{25};
+constexpr auto kInjectedMotionEchoTimeout = std::chrono::milliseconds{250};
+constexpr std::uint8_t kInjectedEchoFromHook = 1U;
+constexpr std::uint8_t kInjectedEchoFromRawInput = 2U;
+constexpr std::uint8_t kInjectedEchoSources = kInjectedEchoFromHook | kInjectedEchoFromRawInput;
 
 // Keep Win32 pointer hooks, cursor APIs, and screen metrics in one coordinate
 // space. Without an explicit process DPI context, user32 virtualizes
@@ -379,10 +383,17 @@ Result<void> WindowsInputBackend::inject(const InputEvent& event) {
   }
   if (expected_absolute_point.has_value()) {
     std::lock_guard lock(mutex_);
-    injected_motion_id = ++next_injected_motion_id_;
-    pending_injected_motions_.push_back(PendingInjectedMotion{
-        injected_motion_id, *expected_absolute_point,
-        std::chrono::steady_clock::now() + kInjectedMotionEchoTimeout});
+    PendingInjectedMotion pending{};
+    pending.id = ++next_injected_motion_id_;
+    pending.point = *expected_absolute_point;
+    if (have_last_point_) {
+      pending.delta_x = pending.point.x - last_point_.x;
+      pending.delta_y = pending.point.y - last_point_.y;
+      pending.has_delta = true;
+    }
+    pending.deadline = std::chrono::steady_clock::now() + kInjectedMotionEchoTimeout;
+    injected_motion_id = pending.id;
+    pending_injected_motions_.push_back(pending);
     while (pending_injected_motions_.size() > 64)
       pending_injected_motions_.pop_front();
   }
@@ -585,6 +596,11 @@ void WindowsInputBackend::handle_mouse(const MSLLHOOKSTRUCT& info, WPARAM messag
   InputEvent event{};
   event.origin = InputOrigin::kPhysical;
   if (message == WM_MOUSEMOVE) {
+    if (consume_markerless_injected_point(info.pt, kInjectedEchoFromHook)) {
+      debug::log("windows ignored markerless injected hook echo point=", info.pt.x,
+                 ",", info.pt.y);
+      return;
+    }
     std::lock_guard lock(mutex_);
     if (!have_last_point_) {
       last_point_ = info.pt;
@@ -608,6 +624,38 @@ void WindowsInputBackend::handle_mouse(const MSLLHOOKSTRUCT& info, WPARAM messag
     event.payload = MouseButton{button, message == WM_LBUTTONDOWN || message == WM_RBUTTONDOWN || message == WM_MBUTTONDOWN || message == WM_XBUTTONDOWN};
   }
   dispatch(std::move(event));
+}
+
+bool WindowsInputBackend::consume_markerless_injected_point(POINT point,
+                                                            std::uint8_t source,
+                                                            LONG delta_x,
+                                                            LONG delta_y,
+                                                            bool has_delta,
+                                                            bool has_point) {
+  std::lock_guard lock(mutex_);
+  const auto now = std::chrono::steady_clock::now();
+  while (!pending_injected_motions_.empty() &&
+         pending_injected_motions_.front().deadline <= now)
+    pending_injected_motions_.pop_front();
+  for (auto it = pending_injected_motions_.rbegin();
+       it != pending_injected_motions_.rend(); ++it) {
+    const bool point_match = has_point && std::abs(point.x - it->point.x) <= 4 &&
+                             std::abs(point.y - it->point.y) <= 4;
+    const bool delta_match = has_delta && it->has_delta &&
+                             std::abs(delta_x - it->delta_x) <= 4 &&
+                             std::abs(delta_y - it->delta_y) <= 4;
+    if (!point_match && !delta_match) {
+      if (it->deadline <= now) break;
+      continue;
+    }
+    if ((it->seen_sources & source) != 0) continue;
+    it->seen_sources = static_cast<std::uint8_t>(it->seen_sources | source);
+    const bool seen_all_sources =
+        (it->seen_sources & kInjectedEchoSources) == kInjectedEchoSources;
+    if (seen_all_sources) pending_injected_motions_.erase(std::next(it).base());
+    return true;
+  }
+  return false;
 }
 
 void WindowsInputBackend::handle_raw_input(HRAWINPUT input) {
@@ -636,28 +684,32 @@ void WindowsInputBackend::handle_raw_input(HRAWINPUT input) {
       if (!pending_injected_motions_.empty()) pending_injected_motions_.pop_front();
       return;
     }
+    // Real HID mouse reports normally carry a device handle. If an injected
+    // report is mirrored without its marker, Windows may expose a null handle;
+    // only discard that form while an injection is still pending.
+    if (raw->header.hDevice == nullptr && !pending_injected_motions_.empty()) {
+      debug::log("windows ignored unmarked raw mouse echo hDevice=null flags=",
+                 mouse.usFlags, " delta=", mouse.lLastX, ",", mouse.lLastY,
+                 " extra=", mouse.ulExtraInformation);
+      return;
+    }
   }
   if ((mouse.usFlags & MOUSE_MOVE_ABSOLUTE) != 0) return;
   if (mouse.lLastX == 0 && mouse.lLastY == 0) return;
   // A few Windows versions drop dwExtraInfo when mirroring an absolute
   // SendInput through WM_INPUT and report it as a relative move. Correlate
   // that echo with the expected absolute screen point for a very short window.
-  // The low-level hook still handles genuine physical motion independently.
+  // The low-level hook uses the same ledger, so a mirrored event delivered to
+  // both paths is consumed once by each path instead of becoming physical
+  // input after the first callback removes the record.
   POINT current{};
-  if (GetCursorPos(&current)) {
-    std::lock_guard lock(mutex_);
-    const auto now = std::chrono::steady_clock::now();
-    for (auto it = pending_injected_motions_.rbegin();
-         it != pending_injected_motions_.rend(); ++it) {
-      if (std::abs(current.x - it->point.x) <= 1 &&
-          std::abs(current.y - it->point.y) <= 1) {
-        debug::log("windows ignored markerless injected mouse echo point=", current.x,
-                   ",", current.y, " delta=", mouse.lLastX, ",", mouse.lLastY);
-        pending_injected_motions_.erase(std::next(it).base());
-        return;
-      }
-      if (it->deadline <= now) break;
-    }
+  const bool have_current = GetCursorPos(&current);
+  if (consume_markerless_injected_point(current, kInjectedEchoFromRawInput, mouse.lLastX,
+                                        mouse.lLastY, true, have_current)) {
+    debug::log("windows ignored markerless injected mouse echo point=", current.x,
+               ",", current.y, " delta=", mouse.lLastX, ",", mouse.lLastY,
+               " point_valid=", have_current);
+    return;
   }
   InputEvent event{};
   event.origin = InputOrigin::kPhysical;

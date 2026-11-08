@@ -57,7 +57,11 @@ class WindowsInputBackend final : public IInputBackend {
   struct PendingInjectedMotion {
     std::uint64_t id{};
     POINT point{};
+    LONG delta_x{};
+    LONG delta_y{};
+    bool has_delta{};
     std::chrono::steady_clock::time_point deadline{};
+    std::uint8_t seen_sources{};
   };
 
   static LRESULT CALLBACK keyboard_proc(int code, WPARAM wparam, LPARAM lparam);
@@ -68,6 +72,9 @@ class WindowsInputBackend final : public IInputBackend {
   void handle_keyboard(const KBDLLHOOKSTRUCT& info, WPARAM message);
   void handle_mouse(const MSLLHOOKSTRUCT& info, WPARAM message);
   void handle_raw_input(HRAWINPUT input);
+  bool consume_markerless_injected_point(POINT point, std::uint8_t source,
+                                         LONG delta_x = 0, LONG delta_y = 0,
+                                         bool has_delta = false, bool has_point = true);
   void handle_cursor_visibility_message(WPARAM wparam, LPARAM lparam);
   void dispatch(InputEvent event);
   bool send_inputs(INPUT* inputs, UINT count);
