@@ -22,9 +22,26 @@
 #include <ApplicationServices/ApplicationServices.h>
 #include <CoreFoundation/CoreFoundation.h>
 
+extern "C" {
+typedef int CGSConnectionID;
+CGSConnectionID _CGSDefaultConnection(void);
+CGError CGSSetConnectionProperty(CGSConnectionID cid, CGSConnectionID target,
+                                  CFStringRef key, CFTypeRef value);
+}
+
 namespace lanlink::platform {
 namespace {
 constexpr std::int64_t kOwnEventUserData = 0x4c4c4e4bLL;
+
+void enable_cursor_control_in_background() {
+  static std::once_flag once;
+  std::call_once(once, [] {
+    const CGSConnectionID cid = _CGSDefaultConnection();
+    const CGError error = CGSSetConnectionProperty(
+        cid, cid, CFSTR("SetsCursorInBackground"), kCFBooleanTrue);
+    debug::log("mac SetsCursorInBackground error=", static_cast<int>(error));
+  });
+}
 
 struct HeldState {
   std::unordered_set<std::uint32_t> keys;
@@ -258,6 +275,7 @@ MacOSInputBackend::MacOSInputBackend() : impl_(std::make_unique<Impl>(this)) {
 MacOSInputBackend::~MacOSInputBackend() { stop(); }
 
 Result<void> MacOSInputBackend::start(EventCallback callback) {
+  enable_cursor_control_in_background();
   std::lock_guard operation_lock(impl_->operation_mutex);
   if (impl_->thread.joinable() && impl_->thread.get_id() != std::this_thread::get_id())
     impl_->thread.join();
