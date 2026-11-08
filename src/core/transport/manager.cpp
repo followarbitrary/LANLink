@@ -224,6 +224,12 @@ std::optional<PeerState> ConnectionManager::state(PeerHandle handle) const {
     return slot->state;
 }
 
+bool ConnectionManager::ready(PeerHandle handle) const noexcept {
+    const auto* slot = find(handle);
+    return slot != nullptr && slot->state == PeerState::kConnected && slot->session &&
+           slot->session->ready();
+}
+
 std::size_t ConnectionManager::size() const noexcept {
     std::size_t count = 0;
     for (const auto& slot : slots_) {

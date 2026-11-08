@@ -109,7 +109,8 @@ Result<void> InputNodeRuntime::dispatch_actions(const std::vector<RouterAction>&
   bool has_connected = false;
   for (const auto handle : peer_handles_) {
     const auto state = manager_.state(handle);
-    if (state.has_value() && *state == transport::PeerState::kConnected) {
+    if (state.has_value() && *state == transport::PeerState::kConnected &&
+        manager_.ready(handle)) {
       connected_handle = handle;
       has_connected = true;
       break;
@@ -141,6 +142,7 @@ Result<void> InputNodeRuntime::dispatch_actions(const std::vector<RouterAction>&
 
 std::optional<InputNodeRuntime::CrossingDetection> InputNodeRuntime::detect_crossing(
     const InputEvent& event, const Point& pointer, TimePoint now) {
+  if (!connected()) return std::nullopt;
   // Native backends advertise their own bounds during the handshake. Do not
   // initialize the virtual remote cursor from the synthetic topology size
   // until the peer has sent its real logical bounds; otherwise the first
@@ -659,7 +661,9 @@ Result<void> InputNodeRuntime::stop(TimePoint now) {
 bool InputNodeRuntime::connected() const noexcept {
   for (const auto handle : peer_handles_) {
     const auto state = manager_.state(handle);
-    if (state.has_value() && *state == transport::PeerState::kConnected) return true;
+    if (state.has_value() && *state == transport::PeerState::kConnected &&
+        manager_.ready(handle))
+      return true;
   }
   return false;
 }

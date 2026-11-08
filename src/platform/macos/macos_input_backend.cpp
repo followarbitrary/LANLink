@@ -426,6 +426,11 @@ void MacOSInputBackend::stop() {
     const auto cursor_error = CGDisplayShowCursor(kCGNullDirectDisplay);
     if (cursor_error != kCGErrorSuccess)
       debug::log("mac cursor show failed error=", static_cast<int>(cursor_error));
+    else {
+      std::lock_guard lock(impl_->mutex);
+      impl_->cursor_hidden = false;
+      debug::log("mac cursor shown during stop");
+    }
     const auto association_error = CGAssociateMouseAndMouseCursorPosition(true);
     if (association_error != kCGErrorSuccess)
       debug::log("mac cursor association restore failed error=",
@@ -465,7 +470,7 @@ Result<void> MacOSInputBackend::set_suppression(bool enabled) {
         impl_->cursor_hidden = true;
         debug::log("mac cursor hidden");
       }
-    } else if (impl_->cursor_hidden) {
+    } else if (impl_->cursor_hidden || status_.suppression || impl_->suppression) {
       const auto cursor_error = CGDisplayShowCursor(kCGNullDirectDisplay);
       if (cursor_error != kCGErrorSuccess)
         debug::log("mac cursor show failed error=", static_cast<int>(cursor_error));
@@ -740,13 +745,23 @@ void MacOSInputBackend::release_injected_state(const SessionId& session) {
 Result<void> MacOSInputBackend::recover() {
   std::lock_guard operation_lock(impl_->operation_mutex);
   ++status_.recovery_count;
-  status_.suppression = false;
-  if (impl_->cursor_hidden) {
+  bool restore_cursor = false;
+  {
+    std::lock_guard lock(impl_->mutex);
+    restore_cursor = impl_->cursor_hidden || status_.suppression || impl_->suppression;
+    status_.suppression = false;
+    impl_->association_sync_pending = false;
+  }
+  debug::log("mac recover restore_cursor=", restore_cursor);
+  if (restore_cursor) {
     const auto cursor_error = CGDisplayShowCursor(kCGNullDirectDisplay);
     if (cursor_error != kCGErrorSuccess)
       debug::log("mac cursor show failed error=", static_cast<int>(cursor_error));
-    else
+    else {
+      std::lock_guard lock(impl_->mutex);
       impl_->cursor_hidden = false;
+      debug::log("mac cursor shown during recover");
+    }
   }
   const auto association_error = CGAssociateMouseAndMouseCursorPosition(true);
   if (association_error != kCGErrorSuccess)
@@ -755,9 +770,9 @@ Result<void> MacOSInputBackend::recover() {
   std::vector<SessionId> sessions;
   {
     std::lock_guard lock(impl_->mutex);
+    impl_->suppression = false;
     sessions.reserve(impl_->held.size());
     for (const auto& entry : impl_->held) sessions.push_back(entry.first);
-    impl_->suppression = false;
     impl_->association_sync_pending = false;
     if (impl_->tap != nullptr) CGEventTapEnable(impl_->tap, true);
     impl_->tap_disabled = false;

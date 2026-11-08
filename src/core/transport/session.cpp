@@ -35,6 +35,7 @@ Result<void> PeerSession::start(IClock::time_point now) {
     next_heartbeat_ = now + m0::kHeartbeatInterval;
     next_display_info_check_ = now + m0::kHeartbeatInterval;
     next_pointer_position_ = now;
+    handshake_deadline_ = now + m0::kConnectionTimeout;
     return Result<void>::success();
 }
 
@@ -111,6 +112,11 @@ Result<void> PeerSession::dispatch_actions(const std::vector<RouterAction>& acti
                 result = config_.backend->recover();
             break;
         case RouterActionKind::kAcquire:
+            if (!hello_received_) {
+                debug::log("acquire deferred: peer hello not received request=",
+                           action.request.low);
+                return fail_and_disconnect("peer handshake incomplete", now);
+            }
             debug::log("send acquire target_display=", action.target_display.low,
                        " request=", action.request.low, " entry=", action.entry.x, ",",
                        action.entry.y, " target_edge=", static_cast<unsigned>(action.target_edge),
@@ -423,6 +429,7 @@ Result<void> PeerSession::apply_local_actions(const std::vector<RouterAction>& a
             if (config_.backend)
                 config_.backend->release_injected_state(action.session);
         } else if (action.kind == RouterActionKind::kRestoreLocal && config_.backend) {
+            debug::log("suppression off/recover (session cleanup)");
             auto result = config_.backend->recover();
             if (!result.ok())
                 return result;
@@ -464,6 +471,8 @@ Result<void> PeerSession::fail_and_disconnect(const char* error, IClock::time_po
 Result<void> PeerSession::tick(IClock::time_point now) {
     if (!started_ || disconnected_)
         return Result<void>::failure("session is closed");
+    if (!hello_received_ && now >= handshake_deadline_)
+        return fail_and_disconnect("hello timeout", now);
     if (hello_received_ && liveness_.expired(now))
         return fail_and_disconnect("connection timeout", now);
     if (now >= next_display_info_check_) {

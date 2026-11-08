@@ -64,6 +64,7 @@ class ConnectionManager {
     Result<void> remove(PeerHandle handle, IClock::time_point now);
 
     std::optional<PeerState> state(PeerHandle handle) const;
+    bool ready(PeerHandle handle) const noexcept;
     std::size_t size() const noexcept;
 
   private:

@@ -45,12 +45,14 @@ TEST(ConnectionManager, DrivesOutgoingHelloAndIncomingControlSession) {
     ASSERT_TRUE(manager.poll({}, 10ms).ok());
     auto accepted = listener.accept(2s);
     ASSERT_TRUE(accepted.ok()) << accepted.error();
+    EXPECT_FALSE(manager.ready(handle));
     PeerSession target(
         std::move(accepted.value()),
         PeerSessionConfig{id(3), AuthenticatedPeer{id(2)}, nullptr, &arbiter, &target_backend});
     ASSERT_TRUE(target.start({}).ok());
     ASSERT_TRUE(target.pump({}).ok());
     ASSERT_TRUE(manager.poll({}, 10ms).ok());
+    EXPECT_TRUE(manager.ready(handle));
 
     auto actions = router.on_crossing(Crossing{id(5), Edge::kLeft, 0.5, {20, 10}}, {});
     ASSERT_TRUE(manager.send_actions(handle, actions).ok());

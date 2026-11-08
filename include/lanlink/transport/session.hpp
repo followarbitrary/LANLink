@@ -40,6 +40,9 @@ class PeerSession {
 
     bool connected() const noexcept { return connection_.connected() && !disconnected_; }
     bool hello_received() const noexcept { return hello_received_; }
+    // A TCP connection can be established while the peer is still
+    // reconnecting. Handoffs are safe only after the hello exchange.
+    bool ready() const noexcept { return connected() && hello_received_; }
 
   private:
     Result<void> dispatch_actions(const std::vector<RouterAction>& actions, IClock::time_point now);
@@ -59,6 +62,7 @@ class PeerSession {
     IClock::time_point next_heartbeat_{};
     IClock::time_point next_display_info_check_{};
     IClock::time_point next_pointer_position_{};
+    IClock::time_point handshake_deadline_{};
     bool started_{false};
     bool hello_received_{false};
     bool disconnected_{false};
