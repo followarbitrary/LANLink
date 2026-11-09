@@ -9,6 +9,36 @@
 
 namespace lanlink {
 namespace {
+enum class InputModality : std::uint8_t {
+    kKeyboard = 1u,
+    kPointer = 2u,
+};
+
+constexpr std::uint8_t modality_bit(InputModality modality) {
+    return static_cast<std::uint8_t>(modality);
+}
+
+constexpr std::uint8_t input_modality_mask(const Payload& payload) {
+    return std::visit(
+        [](const auto& value) -> std::uint8_t {
+            using T = std::decay_t<decltype(value)>;
+            if constexpr (std::is_same_v<T, Key>) {
+                return value.code == 0 ? 0 : modality_bit(InputModality::kKeyboard);
+            } else if constexpr (std::is_same_v<T, MouseDelta>) {
+                return value.zero() ? 0 : modality_bit(InputModality::kPointer);
+            } else if constexpr (std::is_same_v<T, MouseButton>) {
+                return value.button == 0 ? 0 : modality_bit(InputModality::kPointer);
+            } else if constexpr (std::is_same_v<T, MouseWheel>) {
+                return value.zero() ? 0 : modality_bit(InputModality::kPointer);
+            } else if constexpr (std::is_same_v<T, PointerMove>) {
+                return modality_bit(InputModality::kPointer);
+            } else {
+                return 0;
+            }
+        },
+        payload);
+}
+
 constexpr bool is_zero(const Payload& payload) {
     return std::visit(
         [](const auto& value) {
@@ -57,6 +87,7 @@ AcquireResult InputArbiter::acquire(const AuthenticatedPeer& peer, const SourceI
     lease.active = false;
     lease_ = lease;
     last_seq_ = 0;
+    remote_input_mask_ = 0;
     released_keys_.clear();
     released_buttons_.clear();
     debug::log("lease acquired session=", lease.session.low,
@@ -151,6 +182,7 @@ ValidationResult InputArbiter::validate(const AuthenticatedPeer& peer, const Inp
             }
         },
         event.payload);
+    remote_input_mask_ |= input_modality_mask(event.payload);
     return ValidationResult{true, false, RevokeReason::kProtocolError, {}};
 }
 
@@ -163,6 +195,7 @@ void InputArbiter::release(const SessionId& session, TimePoint now) {
     clear_ledger();
     lease_.reset();
     last_seq_ = 0;
+    remote_input_mask_ = 0;
     last_revoke_reason_ = RevokeReason::kExplicitRelease;
 }
 
@@ -176,6 +209,7 @@ void InputArbiter::revoke_current(RevokeReason reason, TimePoint now) {
     clear_ledger();
     lease_.reset();
     last_seq_ = 0;
+    remote_input_mask_ = 0;
     last_revoke_reason_ = reason;
 }
 
@@ -183,6 +217,9 @@ void InputArbiter::on_local_input(const InputEvent& event, TimePoint now) {
     if (!lease_.has_value() || !lease_->active)
         return;
     if (event.origin != InputOrigin::kPhysical || is_zero(event.payload))
+        return;
+    const auto local_modality = input_modality_mask(event.payload);
+    if (remote_input_mask_ != 0 && (remote_input_mask_ & local_modality) == 0)
         return;
     revoke_current(RevokeReason::kLocalPreempt, now);
 }
@@ -192,6 +229,7 @@ void InputArbiter::clear_ledger() {
     released_buttons_.assign(pressed_buttons_.begin(), pressed_buttons_.end());
     pressed_keys_.clear();
     pressed_buttons_.clear();
+    remote_input_mask_ = 0;
 }
 
 void InputArbiter::expire_if_needed(TimePoint now) {

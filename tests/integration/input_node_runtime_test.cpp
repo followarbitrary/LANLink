@@ -115,6 +115,15 @@ TEST(InputNodeRuntime, CrossesAtExactThresholdAndForwardsSuppressedInput) {
   EXPECT_DOUBLE_EQ(remote_move.x, 28.0);
   EXPECT_DOUBLE_EQ(remote_move.y, 50.0);
 
+  // A local keyboard event on the target is independent from the remote
+  // pointer lease and must not interrupt the source mouse.
+  right_backend.emit_physical(
+      InputEvent{{}, {}, 0, 0, Key{0x04, true}, InputOrigin::kPhysical});
+  ASSERT_TRUE(right->poll(now, 0ms).ok());
+  EXPECT_TRUE(right->arbiter().has_active_lease());
+  EXPECT_EQ(left->router().state(), RouterState::kRemote);
+  EXPECT_EQ(right_backend.injected_events().size(), 2u);
+
   left_backend.emit_physical(
       InputEvent{{}, {}, 0, 0, Key{0x04, true}, InputOrigin::kPhysical});
   left_backend.emit_physical(

@@ -21,6 +21,11 @@ InputEvent button_event(const SourceId& source, const SessionId& session, std::u
                         InputOrigin origin = InputOrigin::RemoteInjected) {
     return InputEvent{source, session, generation, seq, MouseButton{button, pressed}, origin};
 }
+InputEvent mouse_delta_event(const SourceId& source, const SessionId& session,
+                             std::uint64_t generation, std::uint64_t seq, double dx, double dy,
+                             InputOrigin origin = InputOrigin::RemoteInjected) {
+    return InputEvent{source, session, generation, seq, MouseDelta{dx, dy}, origin};
+}
 } // namespace
 
 TEST(InputArbiter, GrantsOneLeaseAndAdvancesGenerationAfterRelease) {
@@ -154,10 +159,79 @@ TEST(InputArbiter, LocalPhysicalNonZeroInputPreemptsRemoteLease) {
     arbiter.on_local_input(key_event({}, {}, 0, 0, 0, false, InputOrigin::Physical),
                            IClock::time_point{} + 1ms);
     EXPECT_TRUE(arbiter.has_lease());
-    arbiter.on_local_input(key_event({}, {}, 0, 0, 65, true, InputOrigin::Physical),
+    arbiter.on_local_input(button_event({}, {}, 0, 0, 1, true, InputOrigin::Physical),
                            IClock::time_point{} + 2ms);
     EXPECT_FALSE(arbiter.has_lease());
     EXPECT_TRUE(arbiter.pressed_buttons().empty());
+}
+
+TEST(InputArbiter, LocalKeyboardDoesNotPreemptRemoteMouseButSameClassStillDoes) {
+    InputArbiter arbiter;
+    AuthenticatedPeer peer{id(1)};
+    const SourceId source = id(2);
+    auto grant = arbiter.acquire(peer, source, id(3), id(4), IClock::time_point{});
+    ASSERT_TRUE(grant.granted());
+    ASSERT_TRUE(
+        arbiter.activate(grant.lease.session, grant.lease.generation, IClock::time_point{}));
+    ASSERT_TRUE(arbiter.validate(
+        peer, mouse_delta_event(source, grant.lease.session, grant.lease.generation, 1, 1.0, 0.0),
+        IClock::time_point{}));
+
+    arbiter.on_local_input(
+        key_event({}, {}, 0, 0, 0x04, true, InputOrigin::kPhysical),
+        IClock::time_point{} + 1ms);
+    EXPECT_TRUE(arbiter.has_active_lease());
+
+    arbiter.on_local_input(
+        mouse_delta_event({}, {}, 0, 0, 1.0, 0.0, InputOrigin::kPhysical),
+        IClock::time_point{} + 2ms);
+    EXPECT_FALSE(arbiter.has_lease());
+}
+
+TEST(InputArbiter, LocalMouseDoesNotPreemptRemoteKeyboardButSameClassStillDoes) {
+    InputArbiter arbiter;
+    AuthenticatedPeer peer{id(1)};
+    const SourceId source = id(2);
+    auto grant = arbiter.acquire(peer, source, id(3), id(4), IClock::time_point{});
+    ASSERT_TRUE(grant.granted());
+    ASSERT_TRUE(
+        arbiter.activate(grant.lease.session, grant.lease.generation, IClock::time_point{}));
+    ASSERT_TRUE(arbiter.validate(
+        peer, key_event(source, grant.lease.session, grant.lease.generation, 1, 0x04, true),
+        IClock::time_point{}));
+
+    arbiter.on_local_input(
+        mouse_delta_event({}, {}, 0, 0, 1.0, 0.0, InputOrigin::kPhysical),
+        IClock::time_point{} + 1ms);
+    EXPECT_TRUE(arbiter.has_active_lease());
+
+    arbiter.on_local_input(
+        key_event({}, {}, 0, 0, 0x04, true, InputOrigin::kPhysical),
+        IClock::time_point{} + 2ms);
+    EXPECT_FALSE(arbiter.has_lease());
+}
+
+TEST(InputArbiter, RemotePointerMoveCountsAsMouseInputForIsolation) {
+    InputArbiter arbiter;
+    AuthenticatedPeer peer{id(1)};
+    const SourceId source = id(2);
+    auto grant = arbiter.acquire(peer, source, id(3), id(4), IClock::time_point{});
+    ASSERT_TRUE(grant.granted());
+    ASSERT_TRUE(
+        arbiter.activate(grant.lease.session, grant.lease.generation, IClock::time_point{}));
+    InputEvent move{source, grant.lease.session, grant.lease.generation, 1,
+                    PointerMove{10.0, 20.0}, InputOrigin::kRemoteInjected};
+    ASSERT_TRUE(arbiter.validate(peer, move, IClock::time_point{}));
+
+    arbiter.on_local_input(
+        key_event({}, {}, 0, 0, 0x04, true, InputOrigin::kPhysical),
+        IClock::time_point{} + 1ms);
+    EXPECT_TRUE(arbiter.has_active_lease());
+
+    arbiter.on_local_input(
+        mouse_delta_event({}, {}, 0, 0, 1.0, 0.0, InputOrigin::kPhysical),
+        IClock::time_point{} + 2ms);
+    EXPECT_FALSE(arbiter.has_lease());
 }
 
 TEST(InputArbiter, RemoteInjectedAndSyntheticEventsDoNotPreempt) {
