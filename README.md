@@ -42,11 +42,11 @@ The help output lists these flags: `--device-id`, `--peer-id`, `--listen-port`, 
 
 ### Qt6 desktop control panel
 
-When Qt 6 is installed, the Debug preset also builds the optional `lanlink_desktop` Qt Widgets control panel. It provides the overview, screen-layout canvas, device list, transfer workspace, preferences, and tray controls in a dark native desktop window:
+When Qt 6 is installed, the Debug preset also builds the optional `lanlink_desktop` Qt Widgets desktop UI preview. It provides the overview, screen-layout canvas, device list, transfer workspace, preferences, and tray controls in a dark native desktop window. The preview keeps deterministic sample state; live discovery, transport, and input forwarding continue to run through `lanlink_app`.
 
 ```sh
 cmake --build cmake-build-debug --target lanlink_desktop
-QT_QPA_PLATFORM=offscreen ./cmake-build-debug/lanlink_desktop # headless smoke test
+QT_QPA_PLATFORM=offscreen ./cmake-build-debug/lanlink_desktop >/tmp/lanlink-desktop.log 2>&1 & pid=$!; sleep 2; kill "$pid"; wait "$pid" || true # headless smoke test
 ```
 
 Set `-DLANLINK_BUILD_DESKTOP=OFF` to skip the desktop target on machines without Qt 6; the CLI and core targets remain available.
