@@ -139,6 +139,34 @@ int discovery_flow_case() {
     return 1;
   }
 
+  // An explicitly requested peer may announce after startup's first poll.
+  // The next nonblocking poll must expose its endpoint and display before
+  // topology selection proceeds.
+  auto delayed = first;
+  delayed.discovery_port = static_cast<std::uint16_t>(port + 2);
+  auto delayed_service = lanlink::discovery::DiscoveryService::bind(delayed);
+  if (!delayed_service.ok()) {
+    std::cerr << "delayed service bind failed\n";
+    return 1;
+  }
+  auto delayed_empty = delayed_service.value().poll(lanlink::IClock::time_point{});
+  if (!delayed_empty.ok() || !delayed_empty.value().empty()) {
+    std::cerr << "delayed service was not initially empty\n";
+    return 1;
+  }
+  inject(delayed.discovery_port, second_packet.value());
+  std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  auto delayed_peers = delayed_service.value().poll(lanlink::IClock::time_point{} +
+                                                     std::chrono::milliseconds(1));
+  if (!delayed_peers.ok() || delayed_peers.value().size() != 1 ||
+      delayed_peers.value()[0].device != id(2) ||
+      delayed_peers.value()[0].display != id(22) ||
+      delayed_peers.value()[0].endpoint.port != 44002) {
+    std::cerr << "delayed peer selection failed\n";
+    return 1;
+  }
+  if (!delayed_service.value().stop().ok()) return 1;
+
   // DiscoveryService filters by group. The app's deterministic choice is the
   // first visible peer because the service returns peers sorted by device ID.
   auto wrong_group = second;

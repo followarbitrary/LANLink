@@ -117,7 +117,7 @@ int main(int argc, char** argv) {
 
   // A missing peer ID is resolved before constructing the runtime so the
   // discovered display and ID can participate in the initial topology.
-  const bool discover_peer_before_start = !options.peer_id.has_value();
+  const bool discover_peer_before_start = !options.connect.has_value();
   const auto poll_discovery = [&]() -> std::optional<lanlink::discovery::DiscoveryPeer> {
     auto peers = discovery.poll(lanlink::IClock::Clock::now());
     if (!peers.ok()) {
