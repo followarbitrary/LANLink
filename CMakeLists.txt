@@ -51,6 +51,7 @@ if(LANLINK_BUILD_DESKTOP)
   set(LANLINK_QT6_WIDGETS_FOUND ${Qt6_FOUND})
   if(LANLINK_QT6_WIDGETS_FOUND)
     find_package(Qt6 COMPONENTS Test QUIET)
+    find_package(Qt6 COMPONENTS Svg QUIET)
   endif()
   if(LANLINK_QT6_WIDGETS_FOUND)
     add_executable(lanlink_desktop
@@ -67,8 +68,19 @@ if(LANLINK_BUILD_DESKTOP)
       src/desktop/pages.hpp
     )
     set_target_properties(lanlink_desktop PROPERTIES AUTOMOC ON AUTOUIC ON AUTORCC ON)
+    if(APPLE)
+      set_target_properties(lanlink_desktop PROPERTIES
+        MACOSX_BUNDLE ON
+        MACOSX_BUNDLE_GUI_IDENTIFIER "com.aeg.lanlink"
+        MACOSX_BUNDLE_BUNDLE_NAME "LANLink"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "0.1"
+        MACOSX_BUNDLE_BUNDLE_VERSION "0.1")
+    endif()
     target_compile_features(lanlink_desktop PRIVATE cxx_std_20)
     target_link_libraries(lanlink_desktop PRIVATE Qt6::Widgets)
+    if(TARGET Qt6::Svg)
+      target_link_libraries(lanlink_desktop PRIVATE Qt6::Svg)
+    endif()
     target_include_directories(lanlink_desktop PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
     if(MSVC)
       target_compile_options(lanlink_desktop PRIVATE /W4)

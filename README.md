@@ -53,7 +53,7 @@ Set `-DLANLINK_BUILD_DESKTOP=OFF` to skip the desktop target on machines without
 
 ## Packaging
 
-The packaging scripts create a clean Release build, run the complete CTest suite (retrying a failed test up to ten times for timing-sensitive tests), and place the executable and this README in a platform-specific archive. A test that remains failing still stops packaging. The release build disables the optional OpenSSL TLS backend so the archive does not depend on a separately installed OpenSSL runtime; the regular Debug build keeps its existing default. The scripts resolve the repository from their own location, so they can be invoked from any working directory.
+The packaging scripts create a clean Release build, run the complete CTest suite (retrying a failed test up to ten times for timing-sensitive tests), and place the runnable artifacts and this README in a platform-specific archive. A test that remains failing still stops packaging. The release build disables the optional OpenSSL TLS backend so the archive does not depend on a separately installed OpenSSL runtime; the regular Debug build keeps its existing default. The scripts resolve the repository from their own location, so they can be invoked from any working directory.
 
 ### macOS
 
@@ -62,7 +62,19 @@ chmod +x scripts/package-macos.sh
 ./scripts/package-macos.sh
 ```
 
-The script uses the host architecture reported by `uname -m` and writes `dist/lanlink-macos-<architecture>.tar.gz`. Extract the archive, then run `./lanlink_app --help` from the extracted directory. The packaged binary still needs Accessibility permission under **System Settings → Privacy & Security → Accessibility**.
+The script uses the host architecture reported by `uname -m` and writes `dist/lanlink-macos-<architecture>.tar.gz`. The archive always contains the CLI runtime (`lanlink_app`). When Qt6 and `macdeployqt` are available, it also contains a self-contained `lanlink_desktop.app` bundle with the Qt6 control panel. Extract the archive, then run `./lanlink_app --help` or open `lanlink_desktop.app`. Both entry points still need Accessibility permission under **System Settings → Privacy & Security → Accessibility**.
+
+The macOS archive uses local ad-hoc signatures only; it is not Developer ID signed or notarized. Verify the package before copying it to another Mac:
+
+```sh
+tar -tzf dist/lanlink-macos-$(uname -m).tar.gz
+tar -xzf dist/lanlink-macos-$(uname -m).tar.gz
+file lanlink-macos-$(uname -m)/lanlink_app
+test ! -e lanlink-macos-$(uname -m)/lanlink_desktop.app || file lanlink-macos-$(uname -m)/lanlink_desktop.app/Contents/MacOS/lanlink_desktop
+shasum -a 256 dist/lanlink-macos-$(uname -m).tar.gz
+```
+
+The `file` output should report the same architecture as the machine that ran the packaging script (`arm64` or `x86_64`). For distribution outside a trusted development environment, sign and notarize the binary with an Apple Developer ID before sharing it.
 
 ### Windows
 
