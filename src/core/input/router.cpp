@@ -33,6 +33,28 @@ bool InputRouter::is_button(const Payload& payload) {
     return std::holds_alternative<MouseButton>(payload);
 }
 
+bool InputRouter::is_modifier_key(std::uint32_t code) noexcept {
+    return code >= 0xE0u && code <= 0xE7u;
+}
+
+void InputRouter::track_physical_state(const Payload& payload) {
+    if (const auto* key = std::get_if<Key>(&payload)) {
+        if (key->code == 0) return;
+        if (key->pressed)
+            held_keys_.insert(key->code);
+        else
+            held_keys_.erase(key->code);
+        return;
+    }
+    if (const auto* button = std::get_if<MouseButton>(&payload)) {
+        if (button->button == 0) return;
+        if (button->pressed)
+            held_buttons_.insert(button->button);
+        else
+            held_buttons_.erase(button->button);
+    }
+}
+
 bool InputRouter::is_nonzero_physical(const Payload& payload) {
     return std::visit(
         [](const auto& value) {
@@ -112,15 +134,20 @@ std::vector<RouterAction> InputRouter::make_input(InputEvent event) {
     return actions;
 }
 
+std::vector<RouterAction> InputRouter::replay_held_modifiers() {
+    std::vector<RouterAction> actions;
+    for (const auto code : held_keys_) {
+        if (!is_modifier_key(code)) continue;
+        auto replay = make_input(InputEvent{{}, {}, 0, 0, Key{code, true},
+                                            InputOrigin::kSynthetic});
+        actions.insert(actions.end(), replay.begin(), replay.end());
+    }
+    return actions;
+}
+
 std::vector<RouterAction> InputRouter::on_local_event(InputEvent event, Point, TimePoint now) {
     std::vector<RouterAction> actions;
-    if (event.origin == InputOrigin::kPhysical && is_button(event.payload)) {
-        const auto& button = std::get<MouseButton>(event.payload);
-        if (button.button != 0) {
-            if (button.pressed) held_buttons_.insert(button.button);
-            else held_buttons_.erase(button.button);
-        }
-    }
+    if (event.origin == InputOrigin::kPhysical) track_physical_state(event.payload);
 
     if (state_ == RouterState::kHandoff) {
         if (held_buttons_.empty() && event.origin == InputOrigin::kPhysical) {
@@ -144,15 +171,7 @@ std::vector<RouterAction> InputRouter::on_suppressed_event(InputEvent event, Poi
                                                            TimePoint now) {
     if (state_ != RouterState::kRemote || event.origin != InputOrigin::kPhysical)
         return on_local_event(std::move(event), point, now);
-    if (is_button(event.payload)) {
-        const auto& button = std::get<MouseButton>(event.payload);
-        if (button.button != 0) {
-            if (button.pressed)
-                held_buttons_.insert(button.button);
-            else
-                held_buttons_.erase(button.button);
-        }
-    }
+    track_physical_state(event.payload);
     return make_input(std::move(event));
 }
 
@@ -231,7 +250,7 @@ std::vector<RouterAction> InputRouter::on_activation_ack(bool success, TimePoint
     next_renew_ = now + m0::kLeaseRenewInterval;
     debug::log("router entered remote session=", lease_->session.low,
                " generation=", lease_->generation);
-    return {};
+    return replay_held_modifiers();
 }
 
 std::vector<RouterAction> InputRouter::on_activation_ack(const SessionId& session,

@@ -155,7 +155,10 @@ class InputRouter {
   private:
     std::vector<RouterAction> begin_acquire(TimePoint now);
     std::vector<RouterAction> recover(TimePoint now);
+    std::vector<RouterAction> replay_held_modifiers();
     std::vector<RouterAction> make_input(InputEvent event);
+    void track_physical_state(const Payload& payload);
+    static bool is_modifier_key(std::uint32_t code) noexcept;
     static bool is_nonzero_physical(const Payload& payload);
     static bool is_button(const Payload& payload);
 
@@ -177,6 +180,7 @@ class InputRouter {
     DisplayId pending_target_{};
     bool acquire_started_{false};
     std::set<std::uint32_t> held_buttons_;
+    std::set<std::uint32_t> held_keys_;
     std::uint64_t next_seq_{1};
     TimePoint next_renew_{};
     TimePoint recovering_until_{};

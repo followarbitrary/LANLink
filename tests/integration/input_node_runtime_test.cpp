@@ -178,6 +178,61 @@ TEST(InputNodeRuntime, CrossesAtExactThresholdAndForwardsSuppressedInput) {
   EXPECT_EQ(left->router().state(), RouterState::kLocal);
 }
 
+TEST(InputNodeRuntime, ReplaysHeldModifierAcrossHandoffBeforeShortcutKey) {
+  FakeInputBackend left_backend;
+  FakeInputBackend right_backend;
+  auto left_result = InputNodeRuntime::create(config(
+      id(101), id(102), AuthenticatedPeer{id(103)}, id(110), Endpoint{"127.0.0.1", 0},
+      &left_backend));
+  auto right_result = InputNodeRuntime::create(config(
+      id(103), id(104), AuthenticatedPeer{id(101)}, id(120), Endpoint{"127.0.0.1", 0},
+      &right_backend));
+  ASSERT_TRUE(left_result.ok()) << left_result.error();
+  ASSERT_TRUE(right_result.ok()) << right_result.error();
+  auto left = std::move(left_result.value());
+  auto right = std::move(right_result.value());
+  ASSERT_TRUE(left->set_topology(topology_for(id(110), id(120), true)).ok());
+  ASSERT_TRUE(right->set_topology(topology_for(id(120), id(110), false)).ok());
+  ASSERT_TRUE(left->start().ok());
+  ASSERT_TRUE(right->start().ok());
+  ASSERT_TRUE(left->connect_peer(right->local_endpoint()).ok());
+
+  IClock::time_point now{};
+  pump_pair(*left, *right, now, 20);
+
+  left_backend.emit_physical(
+      InputEvent{{}, {}, 0, 0, Key{0xE3, true}, InputOrigin::kPhysical});
+  ASSERT_TRUE(left->poll(now, 0ms).ok());
+  left_backend.set_pointer_position(Point{100.0, 50.0});
+  left_backend.emit_physical(
+      InputEvent{{}, {}, 0, 0, MouseDelta{4.0, 0.0}, InputOrigin::kPhysical});
+  ASSERT_TRUE(left->poll(now, 0ms).ok());
+  pump_pair(*left, *right, now, 12);
+
+  ASSERT_EQ(left->router().state(), RouterState::kRemote);
+  ASSERT_GE(right_backend.injected_events().size(), 2u);
+  EXPECT_TRUE(std::holds_alternative<PointerWarp>(right_backend.injected_events()[0].payload));
+  ASSERT_TRUE(std::holds_alternative<Key>(right_backend.injected_events()[1].payload));
+  EXPECT_EQ(std::get<Key>(right_backend.injected_events()[1].payload).code, 0xE3u);
+  EXPECT_TRUE(std::get<Key>(right_backend.injected_events()[1].payload).pressed);
+
+  left_backend.emit_physical(
+      InputEvent{{}, {}, 0, 0, Key{0x2B, true}, InputOrigin::kPhysical});
+  ASSERT_TRUE(left->poll(now, 0ms).ok());
+  pump_pair(*left, *right, now, 4);
+  ASSERT_GE(right_backend.injected_events().size(), 3u);
+  ASSERT_TRUE(std::holds_alternative<Key>(right_backend.injected_events()[2].payload));
+  EXPECT_EQ(std::get<Key>(right_backend.injected_events()[2].payload).code, 0x2Bu);
+
+  left_backend.emit_physical(
+      InputEvent{{}, {}, 0, 0, Key{0x2B, false}, InputOrigin::kPhysical});
+  left_backend.emit_physical(
+      InputEvent{{}, {}, 0, 0, Key{0xE3, false}, InputOrigin::kPhysical});
+  ASSERT_TRUE(left->poll(now, 0ms).ok());
+  pump_pair(*left, *right, now, 4);
+  EXPECT_EQ(right_backend.held_count(), 0u);
+}
+
 TEST(InputNodeRuntime, FallsBackToTopologyAfterPeerDisplayInfoTimeout) {
   FakeInputBackend left_backend;
   FakeInputBackend right_backend;

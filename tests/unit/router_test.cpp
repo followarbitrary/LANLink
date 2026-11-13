@@ -11,6 +11,34 @@ TEST(InputRouter, LocalAcquireGrantActivateRemote) {
   InputArbiter arb; MockTransport t; t.connect(&arb,AuthenticatedPeer{id(2)}); for(auto& x:a)t.send(x); auto generated=t.pump(r,{}); ASSERT_EQ(generated.size(),2u);
   for(auto& x:generated)t.send(x); t.pump(r,{}); EXPECT_EQ(r.state(),RouterState::kRemote);
 }
+
+TEST(InputRouter, ReplaysHeldModifierWhenHandoffActivates) {
+  InputRouter r(id(5), AuthenticatedPeer{id(6)}, id(7), id(8));
+  ASSERT_TRUE(r.on_local_event(
+                  InputEvent{{}, {}, 0, 0, Key{0xE3, true}, InputOrigin::kPhysical}, {}, {})
+                  .empty());
+  ASSERT_TRUE(r.on_local_event(
+                  InputEvent{{}, {}, 0, 0, Key{0xE0, true}, InputOrigin::kPhysical}, {}, {})
+                  .empty());
+
+  ASSERT_EQ(r.on_crossing(Crossing{id(9), Edge::kRight, 0.5, {10, 20}}, {}).size(), 1u);
+  InputArbiter arbiter;
+  auto grant = arbiter.acquire(AuthenticatedPeer{id(6)}, id(5), id(9), id(8), {});
+  ASSERT_TRUE(grant.granted());
+  ASSERT_EQ(r.on_grant(grant, {}).size(), 2u);
+
+  const auto sync = r.on_activation_ack(true, {});
+  ASSERT_EQ(sync.size(), 2u);
+  ASSERT_TRUE(std::holds_alternative<Key>(sync[0].event.payload));
+  ASSERT_TRUE(std::holds_alternative<Key>(sync[1].event.payload));
+  EXPECT_EQ(std::get<Key>(sync[0].event.payload).code, 0xE0u);
+  EXPECT_EQ(std::get<Key>(sync[1].event.payload).code, 0xE3u);
+  EXPECT_TRUE(std::get<Key>(sync[0].event.payload).pressed);
+  EXPECT_TRUE(std::get<Key>(sync[1].event.payload).pressed);
+  EXPECT_EQ(sync[0].event.seq, 1u);
+  EXPECT_EQ(sync[1].event.seq, 2u);
+}
+
 TEST(MockTransport, CoalescesOnlyAdjacentDeltas) {
   MockTransport t; RouterAction a; a.kind=RouterActionKind::kSendInput; a.source=id(1); a.session=id(2); a.generation=1; a.event={id(1),id(2),1,1,MouseDelta{1,2},InputOrigin::kPhysical};
   auto b=a; b.seq=2;b.event.seq=2;b.event.payload=MouseDelta{3,4}; EXPECT_TRUE(t.send(a)); EXPECT_TRUE(t.send(b)); EXPECT_EQ(t.queue_size(),1u); auto out=t.deliver(); ASSERT_EQ(out.size(),1u); auto d=std::get<MouseDelta>(out[0].event.payload); EXPECT_DOUBLE_EQ(d.dx,4); EXPECT_DOUBLE_EQ(d.dy,6);
