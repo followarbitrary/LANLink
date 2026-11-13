@@ -402,7 +402,7 @@ Result<void> WindowsInputBackend::inject(const InputEvent& event) {
     while (pending_injected_motions_.size() > 64)
       pending_injected_motions_.pop_front();
   }
-  const bool sent = send_inputs(&input, 1);
+  const bool sent = send_inputs(&input, 1) == 1;
   if (!sent) {
     std::lock_guard lock(mutex_);
     if (injected_motion_id != 0) {
@@ -490,9 +490,8 @@ bool WindowsInputBackend::release_session_locked(const SessionId& session) {
     released.emplace_back(false, button);
   }
 
-  const UINT sent = inputs.empty()
-                        ? 0
-                        : SendInput(static_cast<UINT>(inputs.size()), inputs.data(), sizeof(INPUT));
+  const auto input_count = static_cast<UINT>(inputs.size());
+  const UINT sent = inputs.empty() ? 0 : send_inputs(inputs.data(), input_count);
   const auto released_count = std::min<std::size_t>(sent, released.size());
   for (std::size_t index = 0; index < released_count; ++index) {
     const auto [key, code] = released[index];
@@ -550,8 +549,12 @@ LRESULT CALLBACK WindowsInputBackend::keyboard_proc(int code, WPARAM wparam, LPA
   const auto& info = *reinterpret_cast<const KBDLLHOOKSTRUCT*>(lparam);
   if ((info.flags & LLKHF_INJECTED) != 0 || info.dwExtraInfo == reinterpret_cast<ULONG_PTR>(backend)) return CallNextHookEx(nullptr, code, wparam, lparam);
   backend->handle_keyboard(info, wparam);
-  std::lock_guard lock(backend->mutex_);
-  return backend->status_.suppression ? 1 : CallNextHookEx(nullptr, code, wparam, lparam);
+  return detail::dispatch_hook(
+      [backend] {
+        std::lock_guard lock(backend->mutex_);
+        return backend->status_.suppression;
+      },
+      [=] { return CallNextHookEx(nullptr, code, wparam, lparam); });
 }
 
 LRESULT CALLBACK WindowsInputBackend::mouse_proc(int code, WPARAM wparam, LPARAM lparam) {
@@ -560,8 +563,12 @@ LRESULT CALLBACK WindowsInputBackend::mouse_proc(int code, WPARAM wparam, LPARAM
   const auto& info = *reinterpret_cast<const MSLLHOOKSTRUCT*>(lparam);
   if ((info.flags & LLMHF_INJECTED) != 0 || info.dwExtraInfo == reinterpret_cast<ULONG_PTR>(backend)) return CallNextHookEx(nullptr, code, wparam, lparam);
   backend->handle_mouse(info, wparam);
-  std::lock_guard lock(backend->mutex_);
-  return backend->status_.suppression ? 1 : CallNextHookEx(nullptr, code, wparam, lparam);
+  return detail::dispatch_hook(
+      [backend] {
+        std::lock_guard lock(backend->mutex_);
+        return backend->status_.suppression;
+      },
+      [=] { return CallNextHookEx(nullptr, code, wparam, lparam); });
 }
 
 LRESULT CALLBACK WindowsInputBackend::raw_input_proc(HWND window, UINT message, WPARAM wparam,
@@ -729,8 +736,11 @@ void WindowsInputBackend::dispatch(InputEvent event) {
   if (callback) callback(event);
 }
 
-bool WindowsInputBackend::send_inputs(INPUT* inputs, UINT count) {
-  return SendInput(count, inputs, sizeof(INPUT)) == count;
+UINT WindowsInputBackend::send_inputs(INPUT* inputs, UINT count) {
+  debug::log("windows SendInput begin count=", count);
+  const UINT sent = SendInput(count, inputs, sizeof(INPUT));
+  debug::log("windows SendInput end count=", count, " sent=", sent);
+  return sent;
 }
 
 bool WindowsInputBackend::request_cursor_visibility(bool hidden) {

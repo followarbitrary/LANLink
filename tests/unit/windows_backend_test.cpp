@@ -2,6 +2,8 @@
 
 #include <gtest/gtest.h>
 
+#include <mutex>
+
 namespace lanlink::platform {
 namespace {
 
@@ -27,6 +29,39 @@ TEST(WindowsInputBackend, StopAndReleaseAreIdempotent) {
   backend.release_injected_state(SessionId{1, 2});
   EXPECT_FALSE(backend.status().running);
   EXPECT_FALSE(backend.status().suppression);
+}
+
+TEST(WindowsInputBackend, HookForwardingReleasesStateLockBeforeCallingNextHook) {
+  std::timed_mutex state_mutex;
+  bool next_hook_called = false;
+
+  const auto result = detail::dispatch_hook(
+      [&] {
+        std::lock_guard lock(state_mutex);
+        return false;
+      },
+      [&] {
+        next_hook_called = state_mutex.try_lock();
+        if (next_hook_called) state_mutex.unlock();
+        return 17L;
+      });
+
+  EXPECT_EQ(result, 17L);
+  EXPECT_TRUE(next_hook_called);
+}
+
+TEST(WindowsInputBackend, HookForwardingSuppressesWithoutCallingNextHook) {
+  bool next_hook_called = false;
+
+  const auto result = detail::dispatch_hook(
+      [] { return true; },
+      [&] {
+        next_hook_called = true;
+        return 17L;
+      });
+
+  EXPECT_EQ(result, 1L);
+  EXPECT_FALSE(next_hook_called);
 }
 
 }  // namespace

@@ -7,10 +7,12 @@
 #include <cstdint>
 #include <condition_variable>
 #include <deque>
+#include <functional>
 #include <mutex>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 
 #if defined(_WIN32)
 #ifndef NOMINMAX
@@ -26,6 +28,21 @@
 #endif
 
 namespace lanlink::platform {
+
+namespace detail {
+
+// Read hook state while holding the backend lock, then invoke the next hook
+// only after that read has returned. Low-level hook callbacks must not keep
+// backend state locked while entering the system hook chain.
+template <typename Snapshot, typename Next>
+auto dispatch_hook(Snapshot&& snapshot, Next&& next) {
+  const bool suppressed = std::invoke(std::forward<Snapshot>(snapshot));
+  using Result = std::invoke_result_t<Next&>;
+  if (suppressed) return static_cast<Result>(1);
+  return std::invoke(std::forward<Next>(next));
+}
+
+}  // namespace detail
 
 // Win32 low-level hook and SendInput implementation. On non-Windows platforms
 // this type is an explicit unsupported backend so callers can select a native
@@ -78,7 +95,7 @@ class WindowsInputBackend final : public IInputBackend {
                                          bool has_delta = false, bool has_point = true);
   void handle_cursor_visibility_message(WPARAM wparam, LPARAM lparam);
   void dispatch(InputEvent event);
-  bool send_inputs(INPUT* inputs, UINT count);
+  UINT send_inputs(INPUT* inputs, UINT count);
   bool release_session_locked(const SessionId& session);
   void release_all_locked();
   void set_hook_error(const char* operation);
