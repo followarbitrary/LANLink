@@ -9,7 +9,9 @@
 #include <QCheckBox>
 #include <QAbstractButton>
 #include <QButtonGroup>
+#include <QComboBox>
 #include <QDragEnterEvent>
+#include <QFormLayout>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMimeData>
@@ -125,11 +127,12 @@ QFrame* deviceCard(const DeviceState& device, bool selected) {
                           .arg(device.accent.name()));
   top->addWidget(icon);
   top->addStretch();
-  auto* check = label(QStringLiteral("✓"));
+  auto* check = label(device.online ? QStringLiteral("✓") : QStringLiteral("–"));
   check->setFixedSize(28, 28);
   check->setAlignment(Qt::AlignCenter);
   check->setStyleSheet(QStringLiteral(
-      "color: #63d7a5; border: 1.5px solid #63d7a5; border-radius: 14px; font-size: 15px;"));
+      "color: %1; border: 1.5px solid %1; border-radius: 14px; font-size: 15px;")
+                          .arg(device.online ? QStringLiteral("#63d7a5") : QStringLiteral("#7c8da2")));
   top->addWidget(check);
   layout->addLayout(top);
   auto* name = label(device.name);
@@ -163,25 +166,36 @@ QWidget* activeDevicePanel(const DesktopState& state) {
   auto* title = label(device.name);
   title->setStyleSheet(QStringLiteral("font-size: 21px; font-weight: 600;"));
   layout->addWidget(title);
-  auto* meta = label(device.platform + QStringLiteral(" · 已配对"), QStringLiteral("muted"));
+  auto* meta = label(device.platform + QStringLiteral(" · ") +
+                        (device.online ? QStringLiteral("已连接") : QStringLiteral("等待连接")),
+                    QStringLiteral("muted"));
   meta->setStyleSheet(QStringLiteral("font-size: 16px;"));
   layout->addWidget(meta);
 
   auto* actions = new QHBoxLayout;
-  auto* control = new QPushButton(QStringLiteral("模拟切换控制"));
+  auto* control = new QPushButton(QStringLiteral("输入转发由运行时控制"));
   control->setObjectName(QStringLiteral("primary"));
+  control->setEnabled(false);
   control->setIcon(icon(IconKind::Pointer, QColor(QStringLiteral("#172330"))));
   control->setIconSize(QSize(18, 18));
-  auto* send = new QPushButton(QStringLiteral("发送文件"));
+  auto* send = new QPushButton(QStringLiteral("文件传输未接入"));
   send->setObjectName(QStringLiteral("secondary"));
+  send->setEnabled(false);
   send->setIcon(icon(IconKind::Upload, QColor(QStringLiteral("#dce6f2"))));
   send->setIconSize(QSize(18, 18));
   actions->addWidget(control);
   actions->addWidget(send);
   actions->addStretch();
-  actions->addWidget(onlineBadge());
+  if (device.online) {
+    actions->addWidget(onlineBadge());
+  } else {
+    auto* offline = label(QStringLiteral("未运行"));
+    offline->setStyleSheet(QStringLiteral(
+        "color: #f2c77d; background: #5a4321; border-radius: 16px; padding: 7px 12px; font-size: 15px;"));
+    actions->addWidget(offline);
+  }
   layout->addLayout(actions);
-  layout->addWidget(label(QStringLiteral("模拟输入目标：本机。实际控制仍需目标授权。"), QStringLiteral("muted")));
+  layout->addWidget(label(QStringLiteral("运行后，指针越过配置边缘即可触发跨屏输入转发。"), QStringLiteral("muted")));
   return frame;
 }
 
@@ -208,7 +222,9 @@ QWidget* topologySection(DesktopState* state, bool layoutMode) {
   layout->addLayout(header);
   auto* canvas = new TopologyCanvas;
   canvas->setState(state);
-  canvas->setProperty("layoutMode", layoutMode);
+  canvas->setLayoutMode(layoutMode);
+  horizontal->setChecked(layoutMode);
+  lShape->setChecked(!layoutMode);
   QObject::connect(horizontal, &QPushButton::clicked, canvas, [canvas, horizontal, lShape]() {
     horizontal->setChecked(true);
     lShape->setChecked(false);
@@ -339,7 +355,14 @@ QWidget* buildDevicesPage(const DesktopState& state, QWidget* parent) {
     details->addWidget(label(device.platform + QStringLiteral(" · ") + device.address, QStringLiteral("muted")));
     rowLayout->addLayout(details);
     rowLayout->addStretch();
-    rowLayout->addWidget(onlineBadge());
+    if (device.online) {
+      rowLayout->addWidget(onlineBadge());
+    } else {
+      auto* offline = label(QStringLiteral("离线"));
+      offline->setStyleSheet(QStringLiteral(
+          "color: #f2c77d; background: #5a4321; border-radius: 16px; padding: 7px 12px; font-size: 15px;"));
+      rowLayout->addWidget(offline);
+    }
     layout->addWidget(row);
   }
   layout->addStretch();
@@ -347,9 +370,11 @@ QWidget* buildDevicesPage(const DesktopState& state, QWidget* parent) {
 }
 
 QWidget* buildTransferPage(DesktopState* state, QWidget* parent) {
-  auto* page = pageBase(QStringLiteral("文件传输"), QStringLiteral("向已配对设备直接发送文件，无需切换键鼠控制权。"), parent);
+  auto* page = pageBase(QStringLiteral("文件传输（未接入）"),
+                        QStringLiteral("当前 LANLink 核心只提供键鼠跨屏转发，文件协议尚未实现。"), parent);
   auto* layout = pageLayout(page);
   auto* zone = new DropZone;
+  zone->setEnabled(false);
   layout->addWidget(zone);
   layout->addWidget(label(QStringLiteral("目标设备"), QStringLiteral("section")));
   auto* targetBox = new QVBoxLayout;
@@ -379,6 +404,7 @@ QWidget* buildTransferPage(DesktopState* state, QWidget* parent) {
   layout->addLayout(targetBox);
 
   auto* browse = new QPushButton(QStringLiteral("选择文件"));
+  browse->setEnabled(false);
   auto* status = label(QStringLiteral("传输进度、暂停、续传和接收记录将在这里显示。"), QStringLiteral("muted"));
   layout->addWidget(browse, 0, Qt::AlignLeft);
   layout->addWidget(status);
@@ -398,13 +424,154 @@ QWidget* buildTransferPage(DesktopState* state, QWidget* parent) {
   return page;
 }
 
-QWidget* buildSettingsPage(DesktopState* state, QWidget* parent) {
-  auto* page = pageBase(QStringLiteral("偏好设置"), QStringLiteral("自定义你的多设备协同体验。"), parent);
+QWidget* buildSettingsPage(DesktopState* state, QWidget* parent,
+                           StartRuntimeCallback startRuntime,
+                           StopRuntimeCallback stopRuntime) {
+  auto* page = pageBase(QStringLiteral("连接设置"),
+                        QStringLiteral("配置本机身份、发现参数和对端连接方式。"), parent);
   auto* layout = pageLayout(page);
+
+  auto* connection = panel(QStringLiteral("subpanel"));
+  auto* form = new QFormLayout(connection);
+  form->setContentsMargins(18, 16, 18, 16);
+  form->setHorizontalSpacing(18);
+  form->setVerticalSpacing(10);
+  const auto addField = [form](const QString& title, const QString& value,
+                               const QString& objectName) {
+    auto* edit = new QLineEdit(value);
+    edit->setObjectName(objectName);
+    edit->setClearButtonEnabled(true);
+    form->addRow(label(title), edit);
+    return edit;
+  };
+  auto* deviceId = addField(QStringLiteral("设备 ID"), QString::number(state->options.device_id),
+                             QStringLiteral("deviceIdEdit"));
+  auto* peerId = addField(QStringLiteral("对端 ID（可选）"),
+                          state->options.peer_id.has_value()
+                              ? QString::number(*state->options.peer_id)
+                              : QString(),
+                          QStringLiteral("peerIdEdit"));
+  auto* listenPort = addField(QStringLiteral("监听端口"), QString::number(state->options.listen_port),
+                              QStringLiteral("listenPortEdit"));
+  auto* group = addField(QStringLiteral("发现组"), QString::fromStdString(state->options.group),
+                         QStringLiteral("groupEdit"));
+  auto* discoveryPort = addField(QStringLiteral("发现端口"),
+                                 QString::number(state->options.discovery_port),
+                                 QStringLiteral("discoveryPortEdit"));
+  auto* connectHost = addField(QStringLiteral("手动连接主机（可选）"),
+                               state->options.connect.has_value()
+                                   ? QString::fromStdString(state->options.connect->host)
+                                   : QString(),
+                               QStringLiteral("connectHostEdit"));
+  auto* connectPort = addField(QStringLiteral("手动连接端口"),
+                               state->options.connect.has_value()
+                                   ? QString::number(state->options.connect->port)
+                                   : QStringLiteral("41000"),
+                               QStringLiteral("connectPortEdit"));
+  auto* displayId = addField(QStringLiteral("本机显示器 ID"),
+                             QString::number(state->options.display_id),
+                             QStringLiteral("displayIdEdit"));
+  auto* peerDisplayId = addField(QStringLiteral("对端显示器 ID"),
+                                 QString::number(state->options.peer_display_id),
+                                 QStringLiteral("peerDisplayIdEdit"));
+  auto* remoteSide = new QComboBox;
+  remoteSide->setObjectName(QStringLiteral("remoteSideCombo"));
+  remoteSide->addItem(QStringLiteral("对端在右侧"), QStringLiteral("right"));
+  remoteSide->addItem(QStringLiteral("对端在左侧"), QStringLiteral("left"));
+  remoteSide->setCurrentIndex(state->options.remote_side == app::RemoteSide::kLeft ? 1 : 0);
+  form->addRow(label(QStringLiteral("对端方向")), remoteSide);
+  auto* autoTopology = new QCheckBox(QStringLiteral("自动使用发现的显示器和方向"));
+  autoTopology->setObjectName(QStringLiteral("autoTopologyCheck"));
+  autoTopology->setChecked(!state->options.peer_display_id_explicit &&
+                           !state->options.remote_side_explicit);
+  form->addRow(QString(), autoTopology);
+  layout->addWidget(connection);
+
+  auto* actionRow = new QHBoxLayout;
+  auto* toggle = new QPushButton;
+  toggle->setObjectName(QStringLiteral("runtimeToggle"));
+  toggle->setProperty("class", QStringLiteral("primary"));
+  toggle->setText(state->running ? QStringLiteral("停止服务") : QStringLiteral("启动服务"));
+  auto* status = label(state->status, QStringLiteral("muted"));
+  status->setObjectName(QStringLiteral("runtimeFormStatus"));
+  actionRow->addWidget(toggle);
+  actionRow->addWidget(status);
+  actionRow->addStretch();
+  layout->addLayout(actionRow);
+
+  QObject::connect(toggle, &QPushButton::clicked, page,
+                   [state, startRuntime, stopRuntime, deviceId, peerId, listenPort, group,
+                    discoveryPort, connectHost, connectPort, displayId, peerDisplayId,
+                    remoteSide, autoTopology, status]() {
+    if (state->running) {
+      if (stopRuntime) stopRuntime();
+      return;
+    }
+    app::AppOptions options = state->options;
+    auto parse = [status](QLineEdit* edit, const QString& name, std::uint64_t& target) {
+      bool ok = false;
+      const auto value = edit->text().trimmed().toULongLong(&ok);
+      if (!ok || value == 0) {
+        status->setText(QStringLiteral("%1 必须是正整数").arg(name));
+        return false;
+      }
+      target = value;
+      return true;
+    };
+    if (!parse(deviceId, QStringLiteral("设备 ID"), options.device_id)) return;
+    std::uint64_t listen = 0;
+    if (!parse(listenPort, QStringLiteral("监听端口"), listen) || listen > 65535) {
+      status->setText(QStringLiteral("监听端口必须在 1..65535"));
+      return;
+    }
+    options.listen_port = static_cast<std::uint16_t>(listen);
+    std::uint64_t discovery = 0;
+    if (!parse(discoveryPort, QStringLiteral("发现端口"), discovery) || discovery > 65535) {
+      status->setText(QStringLiteral("发现端口必须在 1..65535"));
+      return;
+    }
+    options.discovery_port = static_cast<std::uint16_t>(discovery);
+    if (!parse(displayId, QStringLiteral("本机显示器 ID"), options.display_id)) return;
+    if (!parse(peerDisplayId, QStringLiteral("对端显示器 ID"), options.peer_display_id)) return;
+    options.group = group->text().trimmed().toStdString();
+    if (options.group.empty()) {
+      status->setText(QStringLiteral("发现组不能为空"));
+      return;
+    }
+    const auto peerText = peerId->text().trimmed();
+    if (peerText.isEmpty()) {
+      options.peer_id.reset();
+    } else {
+      std::uint64_t peer = 0;
+      if (!parse(peerId, QStringLiteral("对端 ID"), peer)) return;
+      options.peer_id = peer;
+    }
+    const auto host = connectHost->text().trimmed();
+    if (host.isEmpty()) {
+      options.connect.reset();
+    } else {
+      bool ok = false;
+      const auto port = connectPort->text().trimmed().toUShort(&ok);
+      if (!ok || port == 0) {
+        status->setText(QStringLiteral("手动连接端口必须有效"));
+        return;
+      }
+      options.connect = transport::Endpoint{host.toStdString(), port};
+    }
+    options.remote_side = remoteSide->currentData().toString() == QStringLiteral("left")
+                              ? app::RemoteSide::kLeft
+                              : app::RemoteSide::kRight;
+    options.peer_display_id_explicit = !autoTopology->isChecked();
+    options.remote_side_explicit = !autoTopology->isChecked();
+    state->options = options;
+    if (startRuntime) startRuntime(options);
+  });
+
   auto* preferences = panel(QStringLiteral("subpanel"));
   auto* preferenceLayout = new QVBoxLayout(preferences);
   preferenceLayout->setContentsMargins(18, 16, 18, 16);
-  const auto addPreference = [preferenceLayout](const QString& title, const QString& subtitle, bool checked,
+  const auto addPreference = [preferenceLayout](const QString& title, const QString& subtitle,
+                                                 bool checked, bool enabled,
                                                  std::function<void(bool)> callback) {
     auto* row = new QWidget;
     auto* rowLayout = new QHBoxLayout(row);
@@ -416,21 +583,17 @@ QWidget* buildSettingsPage(DesktopState* state, QWidget* parent) {
     text->addWidget(label(subtitle, QStringLiteral("muted")));
     rowLayout->addLayout(text);
     rowLayout->addStretch();
-    auto* toggle = new QToolButton;
-    toggle->setObjectName(QStringLiteral("settingToggle"));
-    toggle->setText(QStringLiteral("✓"));
-    toggle->setCheckable(true);
-    toggle->setChecked(checked);
-    QObject::connect(toggle, &QCheckBox::toggled, row, std::move(callback));
-    rowLayout->addWidget(toggle);
+    auto* check = new QCheckBox;
+    check->setChecked(checked);
+    check->setEnabled(enabled);
+    if (callback) QObject::connect(check, &QCheckBox::toggled, row, std::move(callback));
+    rowLayout->addWidget(check);
     preferenceLayout->addWidget(row);
   };
-  addPreference(QStringLiteral("允许跨设备键鼠共享"), QStringLiteral("开启后可申请远程输入租约"), state->allowRemoteKeys,
-                [state](bool checked) { state->allowRemoteKeys = checked; });
-  addPreference(QStringLiteral("剪贴板同步"), QStringLiteral("同步已授权设备间的文本与图片"), state->clipboardEnabled,
-                [state](bool checked) { state->clipboardEnabled = checked; });
-  addPreference(QStringLiteral("允许接收文件"), QStringLiteral("接收前仍可以要求确认"), state->allowReceiveFiles,
-                [state](bool checked) { state->allowReceiveFiles = checked; });
+  addPreference(QStringLiteral("跨屏键鼠转发"), QStringLiteral("由 LANLink runtime 自动处理输入租约"),
+                state->allowRemoteKeys, false, {});
+  addPreference(QStringLiteral("剪贴板同步"), QStringLiteral("当前核心未提供剪贴板协议"), false, false, {});
+  addPreference(QStringLiteral("文件传输"), QStringLiteral("当前核心未提供文件传输协议"), false, false, {});
   layout->addWidget(preferences);
 
   auto* m0 = panel(QStringLiteral("subpanel"));
@@ -457,7 +620,6 @@ QWidget* buildSettingsPage(DesktopState* state, QWidget* parent) {
   layout->addStretch();
   return page;
 }
-
 }  // namespace lanlink::desktop
 
 #include "pages.moc"

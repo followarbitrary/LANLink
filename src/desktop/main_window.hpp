@@ -7,9 +7,11 @@
 #include <QPushButton>
 #include <QStackedWidget>
 #include <QSystemTrayIcon>
+#include <QThread>
 #include <QVector>
 
 #include "desktop_state.hpp"
+#include "runtime_worker.hpp"
 
 namespace lanlink::desktop {
 
@@ -32,11 +34,22 @@ class MainWindow final : public QMainWindow {
   void toggleClipboard(bool enabled);
   void lockCurrentDevice();
   void quitFromTray();
+  void onRuntimeStatusChanged(const QString& status, bool running, bool connected);
+  void onPeerChanged(const QString& name, const QString& platform, const QString& address,
+                     qulonglong deviceId, qulonglong displayId, bool online);
+  void onRuntimeLog(const QString& message);
+  void onRuntimeError(const QString& message);
 
  private:
   QWidget* makePageContainer(QWidget* page);
   void setupUi();
   void setupTray();
+  void startRuntime(const app::AppOptions& options);
+  void stopRuntime();
+  void recoverLocalInputOnWorker();
+  void rebuildPages();
+  void updateRuntimeControls();
+  void captureSettingsFromUi();
   void updateStatusMessage(const QString& message);
   void setWindowButtonStyle(QPushButton* button);
 
@@ -45,11 +58,15 @@ class MainWindow final : public QMainWindow {
   QVector<QPushButton*> navButtons_;
   QLabel* statusLabel_{nullptr};
   QLabel* footerLabel_{nullptr};
+  QLabel* networkLabel_{nullptr};
+  QLabel* localLabel_{nullptr};
   QLabel* controlLabel_{nullptr};
   QWidget* titleBar_{nullptr};
   QSystemTrayIcon* tray_{nullptr};
   QAction* trayCrossScreen_{nullptr};
   QAction* trayClipboard_{nullptr};
+  QThread* runtimeThread_{nullptr};
+  RuntimeWorker* runtimeWorker_{nullptr};
   bool draggingWindow_{false};
   QPoint windowDragOffset_;
 };

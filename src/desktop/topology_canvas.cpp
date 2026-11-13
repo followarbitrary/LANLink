@@ -33,15 +33,14 @@ void TopologyCanvas::setState(DesktopState* state) {
 void TopologyCanvas::setLayoutMode(bool horizontal) {
   horizontalLayout_ = horizontal;
   setMinimumHeight(horizontalLayout_ ? 270 : 370);
-  if (state_ != nullptr && state_->devices.size() >= 3) {
+  if (state_ != nullptr && state_->devices.size() >= 2) {
     if (horizontalLayout_) {
       state_->devices[0].position = QPointF(40.0, 68.0);
       state_->devices[1].position = QPointF(310.0, 68.0);
-      state_->devices[2].position = QPointF(580.0, 68.0);
     } else {
       state_->devices[0].position = QPointF(40.0, 68.0);
       state_->devices[1].position = QPointF(310.0, 68.0);
-      state_->devices[2].position = QPointF(310.0, 210.0);
+      state_->devices[1].position = QPointF(40.0, 210.0);
     }
     emit layoutChanged();
   }
@@ -51,7 +50,7 @@ void TopologyCanvas::setLayoutMode(bool horizontal) {
 void TopologyCanvas::resetLayout() {
   if (state_ == nullptr) return;
   state_->resetLayout();
-  if (!horizontalLayout_ && state_->devices.size() >= 3) state_->devices[2].position = QPointF(310.0, 210.0);
+  if (!horizontalLayout_ && state_->devices.size() >= 2) state_->devices[1].position = QPointF(40.0, 210.0);
   pan_ = QPointF(0.0, 0.0);
   emit layoutChanged();
   update();
@@ -128,8 +127,23 @@ void TopologyCanvas::paintEvent(QPaintEvent*) {
   for (int index = 0; index + 1 < state_->devices.size(); ++index) {
     const QRectF first = cardRect(index);
     const QRectF second = cardRect(index + 1);
-    painter.drawLine(first.center().x() + first.width() / 2.0, first.center().y(),
-                     second.center().x() - second.width() / 2.0, second.center().y());
+    const bool horizontal = std::abs(first.center().x() - second.center().x()) >=
+                            std::abs(first.center().y() - second.center().y());
+    const QPointF start = horizontal
+                              ? QPointF(second.center().x() >= first.center().x() ? first.right()
+                                                                                    : first.left(),
+                                        first.center().y())
+                              : QPointF(first.center().x(),
+                                        second.center().y() >= first.center().y() ? first.bottom()
+                                                                                    : first.top());
+    const QPointF end = horizontal
+                            ? QPointF(second.center().x() >= first.center().x() ? second.left()
+                                                                                  : second.right(),
+                                      second.center().y())
+                            : QPointF(second.center().x(),
+                                      second.center().y() >= first.center().y() ? second.top()
+                                                                                  : second.bottom());
+    painter.drawLine(start, end);
   }
 
   for (int index = 0; index < state_->devices.size(); ++index) {

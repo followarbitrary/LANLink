@@ -5,9 +5,13 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QCheckBox>
+#include <QComboBox>
 #include <QHBoxLayout>
+#include <QLineEdit>
 #include <QMouseEvent>
 #include <QMenu>
+#include <QMetaObject>
 #include <QSizeGrip>
 #include <QScreen>
 #include <QScrollArea>
@@ -58,7 +62,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   setupTray();
 }
 
-MainWindow::~MainWindow() = default;
+MainWindow::~MainWindow() { stopRuntime(); }
 
 void MainWindow::setupUi() {
   auto* root = new QWidget;
@@ -80,17 +84,18 @@ void MainWindow::setupUi() {
   auto* appName = new QLabel(QStringLiteral("LANLink"));
   appName->setStyleSheet(QStringLiteral("font-size: 24px; font-weight: 600;"));
   titleLayout->addWidget(appName);
-  auto* preview = new QLabel(QStringLiteral("Desktop Preview"));
+  auto* preview = new QLabel(QStringLiteral("Qt6 控制台"));
   preview->setStyleSheet(QStringLiteral("color: #8fa2b8; font-size: 15px;"));
   titleLayout->addWidget(preview);
   titleLayout->addStretch();
-  auto* running = new QLabel(QStringLiteral("●  运行中"));
+  auto* running = new QLabel(QStringLiteral("●  未运行"));
+  statusLabel_ = running;
   running->setAlignment(Qt::AlignCenter);
   running->setMinimumWidth(124);
   running->setStyleSheet(QStringLiteral(
-      "color: #9be3be; background: #174d3c; border-radius: 22px; padding: 9px 15px; font-size: 15px;"));
+      "color: #f2c77d; background: #5a4321; border-radius: 22px; padding: 9px 15px; font-size: 15px;"));
   titleLayout->addWidget(running);
-  controlLabel_ = new QLabel(QStringLiteral("当前控制：Windows PC"));
+  controlLabel_ = new QLabel(QStringLiteral("当前控制：本机输入"));
   controlLabel_->setStyleSheet(QStringLiteral("color: #a6b7ca; font-size: 13px;"));
   titleLayout->addWidget(controlLabel_);
   const QVector<QPair<QString, QStyle::StandardPixmap>> buttons = {
@@ -154,7 +159,8 @@ void MainWindow::setupUi() {
   auto* localIcon = new QLabel;
   localIcon->setPixmap(iconPixmap(IconKind::Monitor, QSize(24, 24), QColor(QStringLiteral("#8fc3ff"))));
   localLayout->addWidget(localIcon, 0, Qt::AlignTop);
-  auto* localText = new QLabel(QStringLiteral("本机 · Windows PC\n已加入共享网络"));
+  auto* localText = new QLabel(QStringLiteral("本机 · LANLink\n等待启动服务"));
+  localLabel_ = localText;
   localText->setStyleSheet(QStringLiteral("color: #cfdae7; font-size: 13px;"));
   localLayout->addWidget(localText);
   navLayout->addWidget(local);
@@ -166,7 +172,10 @@ void MainWindow::setupUi() {
   content_->addWidget(makePageContainer(buildLayoutPage(&state_, content_)));
   content_->addWidget(makePageContainer(buildDevicesPage(state_, content_)));
   content_->addWidget(makePageContainer(buildTransferPage(&state_, content_)));
-  content_->addWidget(makePageContainer(buildSettingsPage(&state_, content_)));
+  content_->addWidget(makePageContainer(
+      buildSettingsPage(&state_, content_,
+                         [this](const app::AppOptions& options) { startRuntime(options); },
+                         [this]() { stopRuntime(); })));
   bodyLayout->addWidget(content_, 1);
   rootLayout->addWidget(body, 1);
 
@@ -175,11 +184,13 @@ void MainWindow::setupUi() {
   footer->setFixedHeight(48);
   auto* footerLayout = new QHBoxLayout(footer);
   footerLayout->setContentsMargins(22, 0, 22, 0);
-  footerLabel_ = new QLabel(QStringLiteral("LANLink v0.1 · 多主控 P2P"));
+  footerLabel_ = new QLabel(QStringLiteral("LANLink · 未启动"));
   footerLabel_->setStyleSheet(QStringLiteral("color: #97a9bd; font-size: 13px;"));
   footerLayout->addWidget(footerLabel_);
   footerLayout->addStretch();
-  auto* network = new QLabel(QStringLiteral("◉  本地网络 · 加密连接"));
+  auto* network = new QLabel(QStringLiteral("◉  等待服务启动"));
+  network->setObjectName(QStringLiteral("networkLabel"));
+  networkLabel_ = network;
   network->setStyleSheet(QStringLiteral("color: #a6d8c0; font-size: 13px;"));
   footerLayout->addWidget(network);
   auto* resizeGrip = new QSizeGrip(footer);
@@ -217,7 +228,7 @@ void MainWindow::showPage(int index) {
 void MainWindow::setupTray() {
   tray_ = new QSystemTrayIcon(this);
   tray_->setIcon(style()->standardIcon(QStyle::SP_ComputerIcon));
-  tray_->setToolTip(QStringLiteral("LANLink · 运行中"));
+  tray_->setToolTip(QStringLiteral("LANLink · 未启动"));
   auto* menu = new QMenu(this);
   auto* open = menu->addAction(QStringLiteral("打开控制面板"));
   connect(open, &QAction::triggered, this, [this]() {
@@ -225,14 +236,10 @@ void MainWindow::setupTray() {
     raise();
     activateWindow();
   });
-  trayCrossScreen_ = menu->addAction(QStringLiteral("启用跨屏切换"));
-  trayCrossScreen_->setCheckable(true);
-  trayCrossScreen_->setChecked(state_.crossScreenEnabled);
-  connect(trayCrossScreen_, &QAction::toggled, this, &MainWindow::toggleCrossScreen);
-  trayClipboard_ = menu->addAction(QStringLiteral("剪贴板同步"));
-  trayClipboard_->setCheckable(true);
-  trayClipboard_->setChecked(state_.clipboardEnabled);
-  connect(trayClipboard_, &QAction::toggled, this, &MainWindow::toggleClipboard);
+  trayCrossScreen_ = menu->addAction(QStringLiteral("跨屏键鼠转发（由运行时管理）"));
+  trayCrossScreen_->setEnabled(false);
+  trayClipboard_ = menu->addAction(QStringLiteral("剪贴板同步（未接入）"));
+  trayClipboard_->setEnabled(false);
   menu->addAction(QStringLiteral("锁定当前设备"), this, &MainWindow::lockCurrentDevice);
   menu->addAction(QStringLiteral("紧急恢复本地输入"), this, &MainWindow::recoverLocalInput);
   menu->addSeparator();
@@ -261,26 +268,247 @@ void MainWindow::toggleClipboard(bool enabled) {
 
 void MainWindow::lockCurrentDevice() {
   state_.activeDevice = 0;
-  if (controlLabel_ != nullptr) controlLabel_->setText(QStringLiteral("当前控制：Windows PC"));
-  updateStatusMessage(QStringLiteral("LANLink v0.1 · 已锁定本机输入"));
+  if (controlLabel_ != nullptr) controlLabel_->setText(QStringLiteral("当前控制：本机输入"));
+  updateStatusMessage(QStringLiteral("LANLink · 已锁定本机输入"));
 }
 
 void MainWindow::recoverLocalInput() {
   state_.activeDevice = 0;
-  if (controlLabel_ != nullptr) controlLabel_->setText(QStringLiteral("当前控制：Windows PC · 本地"));
-  updateStatusMessage(QStringLiteral("LANLink v0.1 · 本地输入已恢复"));
+  recoverLocalInputOnWorker();
+  if (controlLabel_ != nullptr) controlLabel_->setText(QStringLiteral("当前控制：本机输入"));
+  updateStatusMessage(QStringLiteral("LANLink · 本地输入已恢复"));
 }
 
 void MainWindow::quitFromTray() {
+  stopRuntime();
   recoverLocalInput();
   if (tray_ != nullptr) tray_->hide();
   QApplication::quit();
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
+  stopRuntime();
   recoverLocalInput();
   if (tray_ != nullptr) tray_->hide();
   event->accept();
+}
+
+void MainWindow::startRuntime(const app::AppOptions& options) {
+  if (runtimeThread_ != nullptr) stopRuntime();
+  state_.options = options;
+  state_.autoDiscoverPeer = !options.peer_id.has_value();
+  state_.error.clear();
+  state_.status = QStringLiteral("正在启动");
+  state_.running = true;
+  state_.connected = false;
+  state_.localEndpoint = QStringLiteral("0.0.0.0:%1").arg(options.listen_port);
+  updateRuntimeControls();
+
+  runtimeThread_ = new QThread(this);
+  runtimeWorker_ = new RuntimeWorker;
+  runtimeWorker_->moveToThread(runtimeThread_);
+  connect(runtimeThread_, &QThread::finished, runtimeWorker_, &QObject::deleteLater);
+  connect(runtimeWorker_, &RuntimeWorker::statusChanged, this, &MainWindow::onRuntimeStatusChanged);
+  connect(runtimeWorker_, &RuntimeWorker::peerChanged, this, &MainWindow::onPeerChanged);
+  connect(runtimeWorker_, &RuntimeWorker::logMessage, this, &MainWindow::onRuntimeLog);
+  connect(runtimeWorker_, &RuntimeWorker::errorOccurred, this, &MainWindow::onRuntimeError);
+  RuntimeWorker* worker = runtimeWorker_;
+  const app::AppOptions copied = options;
+  connect(runtimeThread_, &QThread::started, worker, [worker, copied]() mutable {
+    worker->start(std::move(copied));
+  });
+  runtimeThread_->start();
+}
+
+void MainWindow::stopRuntime() {
+  if (runtimeThread_ == nullptr || runtimeWorker_ == nullptr) {
+    state_.running = false;
+    state_.connected = false;
+    state_.status = QStringLiteral("已停止");
+    updateRuntimeControls();
+    return;
+  }
+  QMetaObject::invokeMethod(runtimeWorker_, &RuntimeWorker::stop, Qt::BlockingQueuedConnection);
+  runtimeThread_->quit();
+  runtimeThread_->wait();
+  runtimeWorker_ = nullptr;
+  delete runtimeThread_;
+  runtimeThread_ = nullptr;
+  state_.running = false;
+  state_.connected = false;
+  state_.status = QStringLiteral("已停止");
+  state_.peerEndpoint.clear();
+  if (!state_.devices.isEmpty()) {
+    state_.devices[0].online = false;
+    state_.devices[0].address = QStringLiteral("未启动");
+  }
+  if (state_.devices.size() > 1) {
+    state_.devices[1].online = false;
+    if (state_.devices[1].deviceId == 0) state_.devices[1].address = QStringLiteral("自动发现中");
+  }
+  rebuildPages();
+  updateRuntimeControls();
+}
+
+void MainWindow::recoverLocalInputOnWorker() {
+  if (runtimeWorker_ == nullptr || runtimeThread_ == nullptr) return;
+  QMetaObject::invokeMethod(runtimeWorker_, &RuntimeWorker::recoverLocalInput,
+                            Qt::BlockingQueuedConnection);
+}
+
+void MainWindow::onRuntimeStatusChanged(const QString& status, bool running, bool connected) {
+  state_.status = status;
+  state_.running = running;
+  state_.connected = connected;
+  bool rebuild = false;
+  if (!state_.devices.isEmpty()) {
+    rebuild = state_.devices[0].online != running ||
+              state_.devices[0].address != (running ? state_.localEndpoint : QStringLiteral("未启动"));
+    state_.devices[0].online = running;
+    state_.devices[0].address = running ? state_.localEndpoint : QStringLiteral("未启动");
+  }
+  if (statusLabel_ != nullptr) {
+    statusLabel_->setText(connected ? QStringLiteral("●  已连接")
+                                    : (running ? QStringLiteral("●  运行中")
+                                               : QStringLiteral("●  未运行")));
+    statusLabel_->setStyleSheet(QStringLiteral(
+        "color: %1; background: %2; border-radius: 22px; padding: 9px 15px; font-size: 15px;")
+                                    .arg(connected ? QStringLiteral("#9be3be") : QStringLiteral("#f2c77d"))
+                                    .arg(connected ? QStringLiteral("#174d3c") : QStringLiteral("#5a4321")));
+  }
+  updateStatusMessage(QStringLiteral("LANLink · %1").arg(status));
+  if (tray_ != nullptr)
+    tray_->setToolTip(QStringLiteral("LANLink · %1").arg(status));
+  if (networkLabel_ != nullptr)
+    networkLabel_->setText(connected ? QStringLiteral("◉  局域网 · 已连接")
+                                     : (running ? QStringLiteral("◉  局域网 · 等待对端")
+                                                : QStringLiteral("◉  等待服务启动")));
+  if (localLabel_ != nullptr)
+    localLabel_->setText(running ? QStringLiteral("本机 · LANLink\n监听 %1").arg(state_.localEndpoint)
+                                 : QStringLiteral("本机 · LANLink\n等待启动服务"));
+  if (rebuild) rebuildPages();
+  updateRuntimeControls();
+}
+
+void MainWindow::onPeerChanged(const QString& name, const QString& platform,
+                               const QString& address, qulonglong deviceId,
+                               qulonglong displayId, bool online) {
+  if (state_.devices.size() < 2) state_.devices.resize(2);
+  auto& peer = state_.devices[1];
+  const bool changed = peer.name != name || peer.platform != platform || peer.address != address ||
+                       peer.deviceId != deviceId || peer.displayId != displayId || peer.online != online;
+  if (!changed) return;
+  captureSettingsFromUi();
+  peer.name = name;
+  peer.platform = platform;
+  peer.address = address;
+  peer.deviceId = deviceId;
+  peer.displayId = displayId;
+  peer.online = online;
+  state_.peerName = name;
+  state_.peerEndpoint = address;
+  if (!state_.autoDiscoverPeer) state_.options.peer_id = deviceId;
+  if (!state_.options.peer_display_id_explicit) state_.options.peer_display_id = displayId;
+  rebuildPages();
+}
+
+void MainWindow::onRuntimeLog(const QString& message) {
+  state_.lastLog = message;
+  updateStatusMessage(QStringLiteral("LANLink · %1").arg(message));
+}
+
+void MainWindow::onRuntimeError(const QString& message) {
+  state_.error = message;
+  state_.status = QStringLiteral("错误");
+  updateStatusMessage(QStringLiteral("LANLink · 错误：%1").arg(message));
+  updateRuntimeControls();
+}
+
+void MainWindow::rebuildPages() {
+  if (content_ == nullptr) return;
+  const int current = content_->currentIndex();
+  while (content_->count() > 0) delete content_->widget(0);
+  content_->addWidget(makePageContainer(buildOverviewPage(&state_, content_)));
+  content_->addWidget(makePageContainer(buildLayoutPage(&state_, content_)));
+  content_->addWidget(makePageContainer(buildDevicesPage(state_, content_)));
+  content_->addWidget(makePageContainer(buildTransferPage(&state_, content_)));
+  content_->addWidget(makePageContainer(
+      buildSettingsPage(&state_, content_,
+                         [this](const app::AppOptions& options) { startRuntime(options); },
+                         [this]() { stopRuntime(); })));
+  showPage(qBound(0, current, content_->count() - 1));
+  updateRuntimeControls();
+}
+
+void MainWindow::updateRuntimeControls() {
+  if (auto* button = findChild<QPushButton*>(QStringLiteral("runtimeToggle")))
+    button->setText(state_.running ? QStringLiteral("停止服务") : QStringLiteral("启动服务"));
+  if (auto* status = findChild<QLabel*>(QStringLiteral("runtimeFormStatus")))
+    status->setText(state_.status);
+}
+
+void MainWindow::captureSettingsFromUi() {
+  auto* deviceId = findChild<QLineEdit*>(QStringLiteral("deviceIdEdit"));
+  auto* peerId = findChild<QLineEdit*>(QStringLiteral("peerIdEdit"));
+  auto* listenPort = findChild<QLineEdit*>(QStringLiteral("listenPortEdit"));
+  auto* group = findChild<QLineEdit*>(QStringLiteral("groupEdit"));
+  auto* discoveryPort = findChild<QLineEdit*>(QStringLiteral("discoveryPortEdit"));
+  auto* connectHost = findChild<QLineEdit*>(QStringLiteral("connectHostEdit"));
+  auto* connectPort = findChild<QLineEdit*>(QStringLiteral("connectPortEdit"));
+  auto* displayId = findChild<QLineEdit*>(QStringLiteral("displayIdEdit"));
+  auto* peerDisplayId = findChild<QLineEdit*>(QStringLiteral("peerDisplayIdEdit"));
+  auto* remoteSide = findChild<QComboBox*>(QStringLiteral("remoteSideCombo"));
+  auto* autoTopology = findChild<QCheckBox*>(QStringLiteral("autoTopologyCheck"));
+  bool ok = false;
+  if (deviceId != nullptr) {
+    const auto value = deviceId->text().toULongLong(&ok);
+    if (ok && value != 0) state_.options.device_id = value;
+  }
+  if (peerId != nullptr) {
+    const auto text = peerId->text().trimmed();
+    state_.autoDiscoverPeer = text.isEmpty();
+    if (text.isEmpty()) {
+      state_.options.peer_id.reset();
+    } else {
+      const auto value = text.toULongLong(&ok);
+      if (ok && value != 0) state_.options.peer_id = value;
+    }
+  }
+  if (listenPort != nullptr) {
+    const auto value = listenPort->text().toUShort(&ok);
+    if (ok && value != 0) state_.options.listen_port = value;
+  }
+  if (group != nullptr) state_.options.group = group->text().trimmed().toStdString();
+  if (discoveryPort != nullptr) {
+    const auto value = discoveryPort->text().toUShort(&ok);
+    if (ok && value != 0) state_.options.discovery_port = value;
+  }
+  if (displayId != nullptr) {
+    const auto value = displayId->text().toULongLong(&ok);
+    if (ok && value != 0) state_.options.display_id = value;
+  }
+  if (peerDisplayId != nullptr) {
+    const auto value = peerDisplayId->text().toULongLong(&ok);
+    if (ok && value != 0) state_.options.peer_display_id = value;
+  }
+  if (remoteSide != nullptr) {
+    state_.options.remote_side = remoteSide->currentData().toString() == QStringLiteral("left")
+                                     ? app::RemoteSide::kLeft
+                                     : app::RemoteSide::kRight;
+  }
+  if (connectHost != nullptr) {
+    const auto host = connectHost->text().trimmed();
+    if (host.isEmpty()) {
+      state_.options.connect.reset();
+    } else if (connectPort != nullptr) {
+      const auto port = connectPort->text().trimmed().toUShort(&ok);
+      if (ok && port != 0) state_.options.connect = transport::Endpoint{host.toStdString(), port};
+    }
+  }
+  if (autoTopology != nullptr) {
+    state_.options.peer_display_id_explicit = !autoTopology->isChecked();
+    state_.options.remote_side_explicit = !autoTopology->isChecked();
+  }
 }
 
 bool MainWindow::eventFilter(QObject* watched, QEvent* event) {

@@ -55,6 +55,8 @@ if(LANLINK_BUILD_DESKTOP)
       src/desktop/main_window.hpp
       src/desktop/desktop_state.hpp
       src/desktop/icons.hpp
+      src/desktop/runtime_worker.cpp
+      src/desktop/runtime_worker.hpp
       src/desktop/topology_canvas.cpp
       src/desktop/topology_canvas.hpp
       src/desktop/pages.cpp
@@ -62,7 +64,7 @@ if(LANLINK_BUILD_DESKTOP)
     )
     set_target_properties(lanlink_desktop PROPERTIES AUTOMOC ON AUTOUIC ON AUTORCC ON)
     target_compile_features(lanlink_desktop PRIVATE cxx_std_20)
-    target_link_libraries(lanlink_desktop PRIVATE lanlink_core Qt6::Widgets)
+    target_link_libraries(lanlink_desktop PRIVATE Qt6::Widgets)
     target_include_directories(lanlink_desktop PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
     if(MSVC)
       target_compile_options(lanlink_desktop PRIVATE /W4)
@@ -92,7 +94,9 @@ include(GoogleTest)
 if(LANLINK_BUILD_DESKTOP AND Qt6_FOUND)
   add_executable(desktop_state_test tests/desktop_state_test.cpp)
   target_compile_features(desktop_state_test PRIVATE cxx_std_20)
-  target_include_directories(desktop_state_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/desktop)
+  target_include_directories(desktop_state_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/desktop)
   target_link_libraries(desktop_state_test PRIVATE Qt6::Widgets GTest::gtest_main)
   gtest_discover_tests(desktop_state_test)
   add_test(NAME desktop_state COMMAND desktop_state_test)
@@ -185,6 +189,16 @@ add_test(NAME input_node_runtime COMMAND input_node_runtime_test)
 add_library(lanlink_app_support src/app/options.cpp src/app/runtime_loop.cpp)
 target_link_libraries(lanlink_app_support PUBLIC lanlink_core)
 target_compile_features(lanlink_app_support PUBLIC cxx_std_20)
+if(LANLINK_BUILD_DESKTOP AND Qt6_FOUND)
+  target_link_libraries(lanlink_desktop PRIVATE lanlink_app_support)
+  add_executable(runtime_worker_test tests/runtime_worker_test.cpp src/desktop/runtime_worker.cpp src/desktop/runtime_worker.hpp)
+  set_target_properties(runtime_worker_test PROPERTIES AUTOMOC ON)
+  target_compile_features(runtime_worker_test PRIVATE cxx_std_20)
+  target_include_directories(runtime_worker_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/desktop)
+  target_link_libraries(runtime_worker_test PRIVATE lanlink_app_support Qt6::Widgets GTest::gtest_main)
+  gtest_discover_tests(runtime_worker_test)
+  add_test(NAME runtime_worker COMMAND runtime_worker_test)
+endif()
 
 add_executable(app_runtime_loop_test tests/unit/app_runtime_loop_test.cpp)
 target_link_libraries(app_runtime_loop_test PRIVATE lanlink_app_support GTest::gtest_main)
