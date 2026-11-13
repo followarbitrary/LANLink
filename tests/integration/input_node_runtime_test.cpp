@@ -178,6 +178,48 @@ TEST(InputNodeRuntime, CrossesAtExactThresholdAndForwardsSuppressedInput) {
   EXPECT_EQ(left->router().state(), RouterState::kLocal);
 }
 
+TEST(InputNodeRuntime, HoldsIncomingConnectionsUntilDiscoveryEnablesAcceptance) {
+  FakeInputBackend left_backend;
+  FakeInputBackend right_backend;
+  auto left_result = InputNodeRuntime::create(config(
+      id(501), id(501), AuthenticatedPeer{id(502)}, id(511), Endpoint{"127.0.0.1", 0},
+      &left_backend));
+  auto right_result = InputNodeRuntime::create(config(
+      id(502), id(502), AuthenticatedPeer{id(501)}, id(522), Endpoint{"127.0.0.1", 0},
+      &right_backend));
+  ASSERT_TRUE(left_result.ok());
+  ASSERT_TRUE(right_result.ok());
+  auto left = std::move(left_result.value());
+  auto right = std::move(right_result.value());
+  ScreenTopology left_topology = topology_for(id(511), id(522), true);
+  ScreenTopology right_topology = topology_for(id(522), id(511), false);
+  ASSERT_TRUE(left->set_topology(std::move(left_topology)).ok());
+  ASSERT_TRUE(right->set_topology(std::move(right_topology)).ok());
+  ASSERT_TRUE(left->set_accept_incoming(false).ok());
+  ASSERT_TRUE(left->start().ok());
+  ASSERT_TRUE(right->start().ok());
+  ASSERT_TRUE(right->connect_peer(left->local_endpoint()).ok());
+  IClock::time_point now{};
+  for (int i = 0; i < 8; ++i) {
+    ASSERT_TRUE(left->poll(now, 0ms).ok());
+    ASSERT_TRUE(right->poll(now, 0ms).ok());
+    ASSERT_TRUE(left->tick(now).ok());
+    ASSERT_TRUE(right->tick(now).ok());
+    now += 1ms;
+  }
+  EXPECT_FALSE(left->connected());
+  ASSERT_TRUE(left->set_accept_incoming(true).ok());
+  for (int i = 0; i < 20 && !left->connected(); ++i) {
+    ASSERT_TRUE(left->poll(now, 5ms).ok());
+    ASSERT_TRUE(right->poll(now, 5ms).ok());
+    ASSERT_TRUE(left->tick(now).ok());
+    ASSERT_TRUE(right->tick(now).ok());
+    now += 1ms;
+  }
+  EXPECT_TRUE(left->connected());
+  EXPECT_TRUE(right->connected());
+}
+
 TEST(InputNodeRuntime, MousePreemptionResumesTargetCursorPosition) {
   FakeInputBackend left_backend;
   FakeInputBackend right_backend;

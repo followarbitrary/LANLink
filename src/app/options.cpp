@@ -10,6 +10,9 @@ Result<double> dbl(std::string_view s,std::string_view f) { if(s.empty()) return
 Result<std::string_view> next(int& i,int n,char* const a[],std::string_view f) { if(i+1>=n) return Result<std::string_view>::failure(std::string(f)+" requires a value"); return Result<std::string_view>::success(a[++i]); }
 Result<transport::Endpoint> endpoint(std::string_view s) { auto p=s.rfind(':'); if(p==std::string_view::npos||p==0||p+1>=s.size()||s.find(':')!=p) return Result<transport::Endpoint>::failure("--connect must be HOST:PORT"); auto n=uintval(s.substr(p+1),"--connect port"); if(!n.ok()||n.value()==0||n.value()>65535) return Result<transport::Endpoint>::failure("--connect port must be in 1..65535"); return Result<transport::Endpoint>::success({std::string(s.substr(0,p)),(std::uint16_t)n.value()}); }
 bool valid_group(std::string_view group) { if(group.empty() || group.size()>32) return false; for(unsigned char c:group) if(!std::isalnum(c) && c!='-' && c!='_' && c!='.') return false; return true; }
+bool supported_numeric_peer(const discovery::DiscoveryPeer& peer) {
+ return peer.device.high == 0 && peer.display.high == 0 && peer.device.low != 0 && peer.display.low != 0;
+}
 }
 std::string usage() { return "Usage: lanlink_app --device-id N --listen-port P [options]\n--device-id --peer-id --listen-port --connect --group --discovery-port --display-id --peer-display-id --remote-side --width --height --peer-width --peer-height --help\nDiscovery defaults to group lanlink on UDP port 41001; --peer-id is optional unless --connect is supplied.\nDisplay dimensions are detected automatically; width/height flags are optional overrides.\n"; }
 Result<AppOptions> parse_options(int argc,char* const argv[]) {
@@ -48,5 +51,15 @@ Result<AppOptions> parse_options(int argc,char* const argv[]) {
  return Result<AppOptions>::success(o);
 }
 Uuid128 numeric_id(std::uint64_t v){return {0,v};}
+std::optional<discovery::DiscoveryPeer> select_discovery_peer(
+ const std::vector<discovery::DiscoveryPeer>& peers, std::optional<std::uint64_t> requested_peer) {
+ std::optional<discovery::DiscoveryPeer> selected;
+ for (const auto& peer : peers) {
+  if (!supported_numeric_peer(peer)) continue;
+  if (requested_peer.has_value() && peer.device.low != *requested_peer) continue;
+  if (!selected.has_value() || peer.device.low < selected->device.low) selected = peer;
+ }
+ return selected;
+}
 Result<ScreenTopology> make_topology(const AppOptions&o) { if(!o.device_id||!o.peer_id||!*o.peer_id||!o.display_id||!o.peer_display_id)return Result<ScreenTopology>::failure("IDs must be non-zero"); if(!std::isfinite(o.width)||!std::isfinite(o.height)||o.width<=0||o.height<=0)return Result<ScreenTopology>::failure("dimensions must be positive and finite"); const double peer_width=o.peer_width>0?o.peer_width:o.width; const double peer_height=o.peer_height>0?o.peer_height:o.height; if(!std::isfinite(peer_width)||!std::isfinite(peer_height)||peer_width<=0||peer_height<=0)return Result<ScreenTopology>::failure("peer dimensions must be positive and finite"); if(!std::isfinite(o.left)||!std::isfinite(o.top))return Result<ScreenTopology>::failure("display origin must be finite"); auto ld=numeric_id(o.display_id),pd=numeric_id(o.peer_display_id); bool r=o.remote_side==RemoteSide::kRight; const Rect local{o.left,o.top,o.left+o.width,o.top+o.height}; const Rect remote=r?Rect{local.right,local.top,local.right+peer_width,local.top+peer_height}:Rect{local.left-peer_width,local.top,local.left,local.top+peer_height}; Display a{numeric_id(o.device_id),ld,local,1.0,Rotation::k0}; Display b{numeric_id(*o.peer_id),pd,remote,1.0,Rotation::k0}; ScreenLink l{ld,r?Edge::kRight:Edge::kLeft,pd,r?Edge::kLeft:Edge::kRight,0,1,1}; ScreenTopology t; auto z=t.set_snapshot(1,{a,b},{l}); if(!z.ok())return Result<ScreenTopology>::failure(z.error()); return Result<ScreenTopology>::success(std::move(t)); }
 }

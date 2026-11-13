@@ -33,26 +33,8 @@ bool has_help_flag(int argc, char* const argv[]) {
   return false;
 }
 
-bool device_id_less(const lanlink::DeviceId& left, const lanlink::DeviceId& right) {
-  return left.high < right.high || (left.high == right.high && left.low < right.low);
-}
-
 bool local_id_less(std::uint64_t local, const lanlink::DeviceId& peer) {
-  return device_id_less(lanlink::app::numeric_id(local), peer);
-}
-
-const lanlink::discovery::DiscoveryPeer* select_peer(
-    const std::vector<lanlink::discovery::DiscoveryPeer>& peers,
-    std::optional<std::uint64_t> requested_peer) {
-  const lanlink::discovery::DiscoveryPeer* selected = nullptr;
-  for (const auto& peer : peers) {
-    if (requested_peer.has_value() &&
-        (peer.device.high != 0 || peer.device.low != *requested_peer))
-      continue;
-    if (selected == nullptr || device_id_less(peer.device, selected->device)) selected = &peer;
-    if (requested_peer.has_value()) break;
-  }
-  return selected;
+  return peer.high == 0 && local < peer.low;
 }
 
 }  // namespace
@@ -125,9 +107,7 @@ int main(int argc, char** argv) {
       stop_requested.store(true, std::memory_order_relaxed);
       return std::nullopt;
     }
-    const auto* peer = select_peer(peers.value(), options.peer_id);
-    if (peer == nullptr) return std::nullopt;
-    return *peer;
+    return lanlink::app::select_discovery_peer(peers.value(), options.peer_id);
   };
 
   auto selected_peer = poll_discovery();
@@ -157,6 +137,8 @@ int main(int argc, char** argv) {
                                 : lanlink::app::RemoteSide::kLeft;
     }
   }
+  std::optional<lanlink::DeviceId> selected_device_id;
+  if (selected_peer.has_value()) selected_device_id = selected_peer->device;
   bool topology_selected = selected_peer.has_value();
 
   auto topology = lanlink::app::make_topology(options);
@@ -175,6 +157,8 @@ int main(int argc, char** argv) {
   config.connection = lanlink::transport::ConnectionOptions{};
   config.backend = backend.get();
   config.queue_capacity = 256;
+  config.accept_incoming = options.connect.has_value() || !options.peer_id.has_value() ||
+                           selected_peer.has_value();
 
   auto runtime_result = lanlink::runtime::InputNodeRuntime::create(std::move(config));
   if (!runtime_result.ok()) {
@@ -218,6 +202,8 @@ int main(int argc, char** argv) {
       return 1;
     }
     discovery_connect_requested = true;
+  } else if (selected_peer.has_value()) {
+    discovery_connect_requested = true;
   }
 
   const auto endpoint = runtime->local_endpoint();
@@ -233,13 +219,15 @@ int main(int argc, char** argv) {
     auto discovered = discovery.poll(now);
     if (!discovered.ok()) {
       std::cerr << "discovery error: " << discovered.error() << '\n';
-    } else if (!options.connect.has_value() && !discovery_connect_requested) {
-      const auto* peer = select_peer(discovered.value(), options.peer_id);
-      if (peer != nullptr) {
+    } else if (!options.connect.has_value()) {
+      const auto candidate = lanlink::app::select_discovery_peer(discovered.value(), options.peer_id);
+      if (candidate.has_value() &&
+          (!selected_device_id.has_value() || candidate->device == *selected_device_id)) {
+        const auto& peer = *candidate;
         if (!topology_selected) {
-          if (!options.peer_display_id_explicit) options.peer_display_id = peer->display.low;
+          if (!options.peer_display_id_explicit) options.peer_display_id = peer.display.low;
           if (!options.remote_side_explicit) {
-            options.remote_side = local_id_less(options.device_id, peer->device)
+            options.remote_side = local_id_less(options.device_id, peer.device)
                                       ? lanlink::app::RemoteSide::kRight
                                       : lanlink::app::RemoteSide::kLeft;
           }
@@ -256,19 +244,34 @@ int main(int argc, char** argv) {
             continue;
           }
           topology_selected = true;
+          selected_device_id = peer.device;
+          auto enabled = runtime->set_accept_incoming(true);
+          if (!enabled.ok()) {
+            std::cerr << "error: " << enabled.error() << '\n';
+            stop_requested.store(true, std::memory_order_relaxed);
+            continue;
+          }
         }
-        selected_peer = *peer;
+        selected_peer = peer;
+        if (discovery_connect_requested && local_id_less(options.device_id, peer.device)) {
+          auto refreshed = runtime->update_peer_endpoint(peer.endpoint);
+          if (!refreshed.ok()) {
+            std::cerr << "discovery endpoint refresh error: " << refreshed.error() << '\n';
+          }
+        }
         // The lower device ID owns the outgoing connection. The higher ID
         // remains a listener and accepts the reciprocal connection.
-        if (local_id_less(options.device_id, peer->device)) {
-          auto connected = runtime->connect_peer(peer->endpoint);
-          if (!connected.ok()) {
-            std::cerr << "error: " << connected.error() << '\n';
+        if (!discovery_connect_requested) {
+          if (local_id_less(options.device_id, peer.device)) {
+            auto connected = runtime->connect_peer(peer.endpoint);
+            if (!connected.ok()) {
+              std::cerr << "error: " << connected.error() << '\n';
+            } else {
+              discovery_connect_requested = true;
+            }
           } else {
             discovery_connect_requested = true;
           }
-        } else {
-          discovery_connect_requested = true;
         }
       }
     }

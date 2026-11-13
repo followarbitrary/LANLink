@@ -50,6 +50,14 @@ Result<PeerHandle> ConnectionManager::add_outgoing(OutgoingPeer peer) {
     return Result<PeerHandle>::success(slots_.back().handle);
 }
 
+Result<void> ConnectionManager::update_outgoing_endpoint(PeerHandle handle, Endpoint endpoint) {
+    auto* slot = find(handle);
+    if (!slot) return Result<void>::failure("unknown peer handle");
+    if (!slot->outgoing) return Result<void>::failure("peer is not outgoing");
+    slot->endpoint = std::move(endpoint);
+    return Result<void>::success();
+}
+
 Result<PeerHandle> ConnectionManager::add_incoming(Connection connection,
                                                    PeerSessionConfig session,
                                                    IClock::time_point now) {

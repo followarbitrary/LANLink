@@ -2,8 +2,10 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 #include "lanlink/common/ids.hpp"
 #include "lanlink/common/result.hpp"
+#include "lanlink/discovery/discovery.hpp"
 #include "lanlink/topology/topology.hpp"
 #include "lanlink/transport/connection.hpp"
 namespace lanlink::app {
@@ -35,4 +37,7 @@ Result<AppOptions> parse_options(int argc, char* const argv[]);
 std::string usage();
 Uuid128 numeric_id(std::uint64_t value);
 Result<ScreenTopology> make_topology(const AppOptions& options);
+std::optional<discovery::DiscoveryPeer> select_discovery_peer(
+    const std::vector<discovery::DiscoveryPeer>& peers,
+    std::optional<std::uint64_t> requested_peer);
 }

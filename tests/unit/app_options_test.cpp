@@ -34,6 +34,16 @@ TEST(AppOptions, ParseOptionsAcceptsConnectAndTopologyValues) {
  auto a=args({"x","--device-id","1","--peer-id","2","--listen-port","65535","--connect","host.example:1234","--display-id","3","--peer-display-id","4","--remote-side","left","--width","800.5","--height","600","--peer-width","1920","--peer-height","1080"}); auto r=parse_options((int)a.size(),a.data()); ASSERT_TRUE(r.ok())<<r.error(); EXPECT_EQ(r.value().connect, (transport::Endpoint{"host.example",1234})); EXPECT_EQ(r.value().display_id,3u); EXPECT_EQ(r.value().peer_display_id,4u); EXPECT_EQ(r.value().remote_side,RemoteSide::kLeft); EXPECT_DOUBLE_EQ(r.value().width,800.5); EXPECT_DOUBLE_EQ(r.value().height,600.0); EXPECT_DOUBLE_EQ(r.value().peer_width,1920.0); EXPECT_DOUBLE_EQ(r.value().peer_height,1080.0);
 }
 TEST(AppOptions, UsageContainsAllSupportedFlags) { auto u=usage(); for(auto f:{"--device-id","--peer-id","--listen-port","--connect","--group","--discovery-port","--display-id","--peer-display-id","--remote-side","--width","--height","--peer-width","--peer-height","--help"}) EXPECT_NE(u.find(f),std::string::npos); }
+TEST(AppOptions, DiscoverySelectionIgnoresUnsupportedHighParts) {
+ std::vector<discovery::DiscoveryPeer> peers{
+   {{1, 9}, {0, 90}, {"127.0.0.1", 41009}, {}},
+   {{0, 7}, {2, 70}, {"127.0.0.1", 41007}, {}},
+   {{0, 8}, {0, 80}, {"127.0.0.1", 41008}, {}}};
+ auto selected = select_discovery_peer(peers, std::nullopt);
+ ASSERT_TRUE(selected.has_value());
+ EXPECT_EQ(selected->device, (Uuid128{0, 8}));
+ EXPECT_FALSE(select_discovery_peer(peers, 9u).has_value());
+}
 TEST(AppOptions, ParseOptionsRejectsMissingRequiredValues) { auto a=args({"x","--device-id","1","--peer-id","2"}); auto r=parse_options((int)a.size(),a.data()); EXPECT_FALSE(r.ok()); EXPECT_NE(r.error().find("listen-port"),std::string::npos); }
 TEST(AppOptions, ParseOptionsRejectsSignedAndUnknownValues) { for(auto bad: {"-1","+1"," 1"}) { auto a=args({"x","--device-id",bad,"--peer-id","2","--listen-port","1"}); EXPECT_FALSE(parse_options((int)a.size(),a.data()).ok()); } auto a=args({"x","--device-id","1","--peer-id","2","--listen-port","1","--bogus"}); EXPECT_FALSE(parse_options((int)a.size(),a.data()).ok()); }
 TEST(AppOptions, ParseOptionsRejectsMalformedConnectPortAndDimensions) { for(auto bad: {"host","host:0","host:65536","host:a","a:b:c"}) { auto a=args({"x","--device-id","1","--peer-id","2","--listen-port","1","--connect",bad}); EXPECT_FALSE(parse_options((int)a.size(),a.data()).ok())<<bad; } for(auto dim: {"0","-2","nan","inf"}) { auto a=args({"x","--device-id","1","--peer-id","2","--listen-port","1","--width",dim}); EXPECT_FALSE(parse_options((int)a.size(),a.data()).ok())<<dim; } }

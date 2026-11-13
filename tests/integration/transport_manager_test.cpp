@@ -86,6 +86,27 @@ TEST(ConnectionManager, ReconnectWaitsUntilDue) {
     EXPECT_EQ(attempts, 2u);
 }
 
+TEST(ConnectionManager, RefreshesOutgoingEndpointWithoutAddingSlot) {
+    std::vector<Endpoint> attempts;
+    ConnectionManager manager([&](const Endpoint& endpoint, const ConnectionOptions&) {
+        attempts.push_back(endpoint);
+        return Result<Connection>::failure("dial failed");
+    });
+    const auto handle_result = manager.add_outgoing(
+        outgoing(PeerSessionConfig{id(12), AuthenticatedPeer{id(13)}, nullptr, nullptr, nullptr},
+                 Endpoint{"127.0.0.1", 41000}));
+    ASSERT_TRUE(handle_result.ok());
+    const auto handle = handle_result.value();
+    EXPECT_FALSE(manager.poll(IClock::time_point{}).ok());
+    ASSERT_EQ(attempts.size(), 1u);
+    ASSERT_TRUE(manager.update_outgoing_endpoint(handle, Endpoint{"127.0.0.2", 42000}).ok());
+    EXPECT_EQ(manager.size(), 1u);
+    EXPECT_FALSE(manager.poll(IClock::time_point{} + 100ms).ok());
+    ASSERT_EQ(attempts.size(), 2u);
+    EXPECT_EQ(attempts.back(), (Endpoint{"127.0.0.2", 42000}));
+    EXPECT_EQ(manager.size(), 1u);
+}
+
 TEST(ConnectionManager, PollContinuesAfterOnePeerFailure) {
     auto listener_result = Listener::bind(Endpoint{"127.0.0.1", 0});
     ASSERT_TRUE(listener_result.ok());

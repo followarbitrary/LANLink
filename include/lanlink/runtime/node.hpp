@@ -27,6 +27,7 @@ struct InputRuntimeConfig {
   transport::ConnectionOptions connection;
   platform::IInputBackend* backend{nullptr};
   std::size_t queue_capacity{256};
+  bool accept_incoming{true};
 };
 
 class InputNodeRuntime {
@@ -38,8 +39,10 @@ class InputNodeRuntime {
   ~InputNodeRuntime();
 
   Result<void> set_topology(ScreenTopology topology);
+  Result<void> set_accept_incoming(bool accept);
   Result<void> start();
   Result<transport::PeerHandle> connect_peer(const transport::Endpoint& endpoint);
+  Result<void> update_peer_endpoint(const transport::Endpoint& endpoint);
   Result<void> poll(TimePoint now,
                     std::chrono::milliseconds timeout = std::chrono::milliseconds{0});
   Result<void> tick(TimePoint now);
@@ -95,6 +98,7 @@ class InputNodeRuntime {
   std::unique_ptr<transport::Listener> listener_;
   transport::ConnectionManager manager_;
   std::vector<transport::PeerHandle> peer_handles_;
+  std::optional<transport::PeerHandle> outgoing_peer_handle_;
   std::deque<QueuedEvent> queued_events_;
   mutable std::mutex queue_mutex_;
   bool queue_overflowed_{false};

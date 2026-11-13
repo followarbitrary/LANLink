@@ -38,6 +38,11 @@ Result<void> InputNodeRuntime::set_topology(ScreenTopology topology) {
   return Result<void>::success();
 }
 
+Result<void> InputNodeRuntime::set_accept_incoming(bool accept) {
+  config_.accept_incoming = accept;
+  return Result<void>::success();
+}
+
 transport::PeerSessionConfig InputNodeRuntime::session_config() {
   return transport::PeerSessionConfig{config_.local_device, config_.peer, &router_, &arbiter_,
                                       config_.backend, config_.local_display,
@@ -89,7 +94,14 @@ Result<transport::PeerHandle> InputNodeRuntime::connect_peer(const transport::En
   auto handle = manager_.add_outgoing(std::move(peer));
   if (!handle.ok()) return handle;
   peer_handles_.push_back(handle.value());
+  outgoing_peer_handle_ = handle.value();
   return handle;
+}
+
+Result<void> InputNodeRuntime::update_peer_endpoint(const transport::Endpoint& endpoint) {
+  if (!outgoing_peer_handle_.has_value())
+    return Result<void>::failure("outgoing peer is not configured");
+  return manager_.update_outgoing_endpoint(*outgoing_peer_handle_, endpoint);
 }
 
 Result<void> InputNodeRuntime::queue_event(const InputEvent& event) {
@@ -621,7 +633,7 @@ Result<void> InputNodeRuntime::drain_events(TimePoint now) {
 }
 
 Result<void> InputNodeRuntime::accept_incoming(TimePoint now) {
-  if (!listener_) return Result<void>::success();
+  if (!listener_ || !config_.accept_incoming) return Result<void>::success();
   while (true) {
     auto accepted = listener_->accept(std::chrono::milliseconds{0});
     if (!accepted.ok()) {
@@ -665,6 +677,7 @@ Result<void> InputNodeRuntime::stop(TimePoint now) {
     if (result.ok() && !removed.ok()) result = removed;
   }
   peer_handles_.clear();
+  outgoing_peer_handle_.reset();
   if (listener_) {
     auto closed = listener_->close();
     if (result.ok() && !closed.ok()) result = closed;

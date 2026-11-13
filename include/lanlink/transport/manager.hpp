@@ -52,6 +52,7 @@ class ConnectionManager {
     ConnectionManager& operator=(const ConnectionManager&) = delete;
 
     Result<PeerHandle> add_outgoing(OutgoingPeer peer);
+    Result<void> update_outgoing_endpoint(PeerHandle handle, Endpoint endpoint);
     Result<PeerHandle> add_incoming(Connection connection, PeerSessionConfig session,
                                     IClock::time_point now);
 

@@ -199,14 +199,21 @@ Result<std::vector<DiscoveryPeer>> DiscoveryService::poll(IClock::time_point now
         int source_size = sizeof(source);
         const int received = recvfrom(impl_->socket, packet.data(), static_cast<int>(packet.size()), 0,
                                       reinterpret_cast<sockaddr*>(&source), &source_size);
-        if (received < 0 && WSAGetLastError() == WSAEWOULDBLOCK) break;
+        if (received < 0) {
+            const auto error = WSAGetLastError();
+            if (error == WSAEWOULDBLOCK) break;
+            return Result<std::vector<DiscoveryPeer>>::failure("discovery recvfrom failed");
+        }
 #else
         socklen_t source_size = sizeof(source);
         const auto received = recvfrom(impl_->socket, packet.data(), packet.size(), 0,
                                        reinterpret_cast<sockaddr*>(&source), &source_size);
-        if (received < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) break;
+        if (received < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) break;
+            return Result<std::vector<DiscoveryPeer>>::failure("discovery recvfrom failed");
+        }
 #endif
-        if (received <= 0) break;
+        if (received == 0) continue;
         if (received > 512) continue;
         auto decoded = decode_announcement(std::string_view(packet.data(), static_cast<std::size_t>(received)));
         if (!decoded.ok() || decoded.value().group != impl_->config.group || decoded.value().device == impl_->config.device_id)
