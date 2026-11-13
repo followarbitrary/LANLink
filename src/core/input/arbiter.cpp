@@ -85,6 +85,8 @@ AcquireResult InputArbiter::acquire(const AuthenticatedPeer& peer, const SourceI
     lease.generation = generation_;
     lease.expires_at = now + m0::kLeaseDuration;
     lease.active = false;
+    lease.resume_pointer = can_resume_pointer(source, target_display);
+    resumable_lease_.reset();
     lease_ = lease;
     last_seq_ = 0;
     remote_input_mask_ = 0;
@@ -94,6 +96,12 @@ AcquireResult InputArbiter::acquire(const AuthenticatedPeer& peer, const SourceI
                " generation=", lease.generation,
                " target_display=", target_display.low);
     return AcquireResult{true, lease, {}};
+}
+
+bool InputArbiter::can_resume_pointer(const SourceId& source,
+                                      const DisplayId& target_display) const noexcept {
+    return resumable_lease_.has_value() && resumable_lease_->source == source &&
+           resumable_lease_->target_display == target_display;
 }
 
 Result<void> InputArbiter::activate(const SessionId& session, std::uint64_t generation,
@@ -203,6 +211,7 @@ void InputArbiter::release(const SessionId& session, TimePoint now) {
                " generation=", lease_->generation);
     clear_ledger();
     lease_.reset();
+    resumable_lease_.reset();
     last_seq_ = 0;
     remote_input_mask_ = 0;
     last_revoke_reason_ = RevokeReason::kExplicitRelease;
@@ -215,6 +224,10 @@ void InputArbiter::revoke_current(RevokeReason reason, TimePoint now) {
     debug::log("lease revoked session=", lease_->session.low,
                " generation=", lease_->generation,
                " reason=", static_cast<unsigned>(reason));
+    if (reason == RevokeReason::kLocalPreempt)
+        resumable_lease_ = *lease_;
+    else
+        resumable_lease_.reset();
     clear_ledger();
     lease_.reset();
     last_seq_ = 0;

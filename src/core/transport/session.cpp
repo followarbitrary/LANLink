@@ -151,8 +151,14 @@ Result<void> PeerSession::dispatch_actions(const std::vector<RouterAction>& acti
             debug::log("send lease revoke session=", action.session.low,
                        " generation=", action.generation,
                        " reason=", static_cast<unsigned>(action.reason));
-            result = connection_.send(
-                protocol::Revoke{action.session, action.generation, action.reason});
+            if (action.has_pointer_position) {
+                result = connection_.send(protocol::PointerPosition{
+                    action.session, action.generation, action.pointer_position});
+            }
+            if (result.ok()) {
+                result = connection_.send(
+                    protocol::Revoke{action.session, action.generation, action.reason});
+            }
             break;
         case RouterActionKind::kDrop:
             break;
@@ -286,8 +292,13 @@ Result<void> PeerSession::dispatch_message(const protocol::Message& message,
         const auto result = config_.arbiter->activate(request->session, request->generation, now);
         bool success = result.ok();
         std::string error = result.ok() ? std::string{} : result.error();
+        const bool resume_pointer =
+            success && config_.arbiter->lease().has_value() &&
+            config_.arbiter->lease()->session == request->session &&
+            config_.arbiter->lease()->generation == request->generation &&
+            config_.arbiter->lease()->resume_pointer;
         if (success && config_.backend && pending_target_acquire_.has_value() &&
-            pending_target_acquire_->request == request->session) {
+            pending_target_acquire_->request == request->session && !resume_pointer) {
             Point entry = pending_target_acquire_->entry;
             if (pending_target_acquire_->entry_normalized) {
                 const auto bounds = config_.backend->display_bounds();
@@ -317,6 +328,8 @@ Result<void> PeerSession::dispatch_message(const protocol::Message& message,
                 success = false;
                 error = injected.error();
             }
+        } else if (resume_pointer) {
+            debug::log("target pointer resume session=", request->session.low);
         }
         pending_target_acquire_.reset();
         auto sent = connection_.send(protocol::ActivateAck{
@@ -460,6 +473,8 @@ Result<void> PeerSession::disconnect(IClock::time_point now) {
         if (config_.backend)
             config_.backend->release_injected_state(session);
     }
+    if (config_.arbiter)
+        config_.arbiter->discard_resume_pointer();
     if (config_.backend && !config_.router)
         return config_.backend->recover();
     return Result<void>::success();

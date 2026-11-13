@@ -292,7 +292,8 @@ void InputNodeRuntime::begin_remote_cursor(const Crossing& crossing, Edge source
   if (router_.peer_display_bounds().has_value() &&
       (router_.peer_display() == crossing.target || router_.peer_display() == DisplayId{})) {
     bounds = *router_.peer_display_bounds();
-    position = edge_entry_point(bounds, crossing.target_edge, crossing.tangent_ratio);
+    if (crossing.has_tangent_ratio)
+      position = edge_entry_point(bounds, crossing.target_edge, crossing.tangent_ratio);
   } else {
     position.x = std::clamp(position.x, bounds.left, std::nextafter(bounds.right, bounds.left));
     position.y = std::clamp(position.y, bounds.top, std::nextafter(bounds.bottom, bounds.top));
@@ -412,6 +413,7 @@ Result<void> InputNodeRuntime::drain_events(TimePoint now) {
     const auto& event = queued.event;
     const Point pointer = queued.pointer.value_or(Point{});
     std::vector<RouterAction> actions;
+    bool local_preempted_remote_lease = false;
     const auto recover_after_handoff_failure = [&] {
       clear_remote_cursor();
       const auto cleanup = router_.on_disconnect(now);
@@ -434,8 +436,14 @@ Result<void> InputNodeRuntime::drain_events(TimePoint now) {
         revoke.session = inbound.session;
         revoke.generation = inbound.generation;
         revoke.reason = RevokeReason::kLocalPreempt;
+        if (const auto position = config_.backend->pointer_position(); position.has_value() &&
+            std::isfinite(position->x) && std::isfinite(position->y)) {
+          revoke.has_pointer_position = true;
+          revoke.pointer_position = *position;
+        }
         auto notified = dispatch_actions({revoke}, now);
         if (!notified.ok()) return notified;
+        local_preempted_remote_lease = true;
       }
     }
 
@@ -503,15 +511,26 @@ Result<void> InputNodeRuntime::drain_events(TimePoint now) {
       }
     }
 
-    if (actions.empty() && queued.pointer.has_value() &&
+    // The event that wins a local preemption belongs to the local desktop. Do
+    // not reuse its edge motion as a new handoff; a later event must cross the
+    // edge after the old remote session has exited.
+    if (!local_preempted_remote_lease && actions.empty() && queued.pointer.has_value() &&
         std::holds_alternative<MouseDelta>(event.payload) &&
         (router_.state() == RouterState::kLocal || router_.state() == RouterState::kHandoff)) {
       if (const auto crossing = detect_crossing(event, pointer, now)) {
-        debug::log("edge crossing target_display=", crossing->crossing.target.low,
-                   " entry=", crossing->crossing.entry_point.x, ",",
-                   crossing->crossing.entry_point.y,
-                   " target_edge=", static_cast<unsigned>(crossing->crossing.target_edge),
-                   " tangent_ratio=", crossing->crossing.tangent_ratio,
+        auto handoff = crossing->crossing;
+        const bool resume_marker = router_.can_resume_remote_cursor(handoff.target);
+        const bool resume_remote_cursor = resume_marker && remote_cursor_.has_value();
+        if (resume_remote_cursor) {
+          handoff.entry_point = remote_cursor_->position;
+          handoff.entry = remote_cursor_->position;
+          handoff.tangent_ratio = 0.0;
+          handoff.has_tangent_ratio = false;
+        }
+        debug::log("edge crossing target_display=", handoff.target.low,
+                   " entry=", handoff.entry_point.x, ",", handoff.entry_point.y,
+                   " target_edge=", static_cast<unsigned>(handoff.target_edge),
+                   " tangent_ratio=", handoff.tangent_ratio,
                    " source_boundary=", crossing->source_boundary.x, ",",
                    crossing->source_boundary.y);
         // Put the source cursor back on its own edge before the asynchronous
@@ -525,10 +544,12 @@ Result<void> InputNodeRuntime::drain_events(TimePoint now) {
         }
         debug::log("source cursor warped to boundary=", crossing->source_boundary.x, ",",
                    crossing->source_boundary.y);
-        actions = router_.on_crossing(crossing->crossing, now);
+        actions = router_.on_crossing(handoff, now);
+        if (resume_marker)
+          router_.consume_resume_remote_cursor();
         if (router_.state() == RouterState::kAcquiring ||
             router_.state() == RouterState::kHandoff) {
-          begin_remote_cursor(crossing->crossing, crossing->source_edge);
+          begin_remote_cursor(handoff, crossing->source_edge);
         }
       }
     }

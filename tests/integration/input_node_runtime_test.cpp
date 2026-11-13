@@ -178,6 +178,87 @@ TEST(InputNodeRuntime, CrossesAtExactThresholdAndForwardsSuppressedInput) {
   EXPECT_EQ(left->router().state(), RouterState::kLocal);
 }
 
+TEST(InputNodeRuntime, MousePreemptionResumesTargetCursorPosition) {
+  FakeInputBackend left_backend;
+  FakeInputBackend right_backend;
+  auto left_result = InputNodeRuntime::create(config(
+      id(601), id(602), AuthenticatedPeer{id(603)}, id(610), Endpoint{"127.0.0.1", 0},
+      &left_backend));
+  auto right_result = InputNodeRuntime::create(config(
+      id(603), id(604), AuthenticatedPeer{id(601)}, id(620), Endpoint{"127.0.0.1", 0},
+      &right_backend));
+  ASSERT_TRUE(left_result.ok()) << left_result.error();
+  ASSERT_TRUE(right_result.ok()) << right_result.error();
+  auto left = std::move(left_result.value());
+  auto right = std::move(right_result.value());
+  right_backend.set_display_bounds(Rect{0.0, 0.0, 100.0, 100.0});
+  right_backend.set_absolute_pointer_moves(true);
+  ASSERT_TRUE(left->set_topology(topology_for(id(610), id(620), true)).ok());
+  ASSERT_TRUE(right->set_topology(topology_for(id(620), id(610), false)).ok());
+  ASSERT_TRUE(left->start().ok());
+  ASSERT_TRUE(right->start().ok());
+  ASSERT_TRUE(left->connect_peer(right->local_endpoint()).ok());
+
+  IClock::time_point now{};
+  pump_pair(*left, *right, now, 20);
+
+  left_backend.set_pointer_position(Point{100.0, 50.0});
+  left_backend.emit_physical(
+      InputEvent{{}, {}, 0, 0, MouseDelta{4.0, 0.0}, InputOrigin::kPhysical});
+  ASSERT_TRUE(left->poll(now, 0ms).ok());
+  pump_pair(*left, *right, now, 12);
+  ASSERT_EQ(left->router().state(), RouterState::kRemote);
+  ASSERT_TRUE(right->arbiter().has_active_lease());
+
+  // Move the remote cursor to a non-edge position before the local device
+  // takes ownership back.
+  left_backend.set_pointer_position(Point{80.0, 50.0});
+  left_backend.emit_physical(
+      InputEvent{{}, {}, 0, 0, MouseDelta{20.0, 0.0}, InputOrigin::kPhysical});
+  ASSERT_TRUE(left->poll(now, 0ms).ok());
+  pump_pair(*left, *right, now, 4);
+  ASSERT_TRUE(right_backend.pointer_position().has_value());
+  EXPECT_EQ(*right_backend.pointer_position(), (Point{28.0, 50.0}));
+
+  // The local mouse preempts the incoming lease at an interior point. The
+  // target position after this event must be the position resumed later.
+  right_backend.set_pointer_position(Point{71.0, 60.0});
+  right_backend.emit_physical(
+      InputEvent{{}, {}, 0, 0, MouseDelta{1.0, 0.0}, InputOrigin::kPhysical});
+  ASSERT_TRUE(right->poll(now, 0ms).ok());
+  EXPECT_FALSE(right->arbiter().has_lease());
+  EXPECT_EQ(right->router().state(), RouterState::kLocal);
+  EXPECT_FALSE(right_backend.status().suppression);
+  ASSERT_TRUE(right_backend.pointer_position().has_value());
+  EXPECT_EQ(*right_backend.pointer_position(), (Point{72.0, 60.0}));
+
+  pump_pair(*left, *right, now, 4);
+  EXPECT_EQ(left->router().state(), RouterState::kLocal);
+
+  // A new crossing reacquires the same target, but must leave its cursor at
+  // the position where local input preempted the old session.
+  left_backend.set_pointer_position(Point{100.0, 50.0});
+  left_backend.emit_physical(
+      InputEvent{{}, {}, 0, 0, MouseDelta{4.0, 0.0}, InputOrigin::kPhysical});
+  ASSERT_TRUE(left->poll(now, 0ms).ok());
+  EXPECT_EQ(left->router().state(), RouterState::kAcquiring);
+  pump_pair(*left, *right, now, 12);
+  EXPECT_EQ(left->router().state(), RouterState::kRemote);
+  EXPECT_TRUE(right->arbiter().has_active_lease());
+  ASSERT_EQ(right_backend.injected_events().size(), 2u);
+  ASSERT_TRUE(
+      std::holds_alternative<PointerWarp>(right_backend.injected_events().front().payload));
+  ASSERT_TRUE(right_backend.pointer_position().has_value());
+  EXPECT_EQ(*right_backend.pointer_position(), (Point{72.0, 60.0}));
+
+  left_backend.emit_physical(
+      InputEvent{{}, {}, 0, 0, MouseDelta{4.0, 0.0}, InputOrigin::kPhysical});
+  ASSERT_TRUE(left->poll(now, 0ms).ok());
+  pump_pair(*left, *right, now, 4);
+  ASSERT_TRUE(right_backend.pointer_position().has_value());
+  EXPECT_EQ(*right_backend.pointer_position(), (Point{76.0, 60.0}));
+}
+
 TEST(InputNodeRuntime, ReplaysHeldModifierAcrossHandoffBeforeShortcutKey) {
   FakeInputBackend left_backend;
   FakeInputBackend right_backend;

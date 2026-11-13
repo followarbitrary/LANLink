@@ -27,6 +27,9 @@ struct ControlLease {
     std::uint64_t generation{};
     IClock::time_point expires_at{};
     bool active{};
+    // Local-only marker: a lease acquired after local preemption resumes the
+    // target cursor instead of warping it to the crossing edge.
+    bool resume_pointer{};
 
     IClock::time_point expiry() const noexcept { return expires_at; }
 };
@@ -94,6 +97,8 @@ class InputArbiter {
     bool has_active_lease() const noexcept { return lease_.has_value() && lease_->active; }
     const std::optional<ControlLease>& lease() const noexcept { return lease_; }
     const std::optional<ControlLease>& current_lease() const noexcept { return lease_; }
+    bool can_resume_pointer(const SourceId& source, const DisplayId& target_display) const noexcept;
+    void discard_resume_pointer() noexcept { resumable_lease_.reset(); }
     std::uint64_t generation() const noexcept { return generation_; }
     RevokeReason last_revoke_reason() const noexcept { return last_revoke_reason_; }
 
@@ -112,6 +117,7 @@ class InputArbiter {
     ValidationResult revoke_and_reject(RevokeReason reason, std::string message, TimePoint now);
 
     std::optional<ControlLease> lease_;
+    std::optional<ControlLease> resumable_lease_;
     std::uint64_t generation_{};
     std::uint64_t last_seq_{};
     RevokeReason last_revoke_reason_{RevokeReason::kExplicitRelease};

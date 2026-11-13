@@ -177,6 +177,8 @@ std::vector<RouterAction> InputRouter::on_suppressed_event(InputEvent event, Poi
 
 std::vector<RouterAction> InputRouter::on_crossing(Crossing crossing, TimePoint now) {
     std::vector<RouterAction> actions;
+    if (resume_target_.has_value() && *resume_target_ != crossing.target)
+        resume_target_.reset();
     pending_crossing_ = crossing;
     if (state_ == RouterState::kRemote) {
         if (lease_.has_value()) {
@@ -208,6 +210,7 @@ std::vector<RouterAction> InputRouter::on_crossing(Crossing crossing, TimePoint 
 std::vector<RouterAction> InputRouter::on_return_to_local(TimePoint now) {
     if (state_ != RouterState::kRemote) return {};
     debug::log("router returning to local");
+    resume_target_.reset();
     return recover(now);
 }
 
@@ -261,7 +264,11 @@ std::vector<RouterAction> InputRouter::on_activation_ack(const SessionId& sessio
     return on_activation_ack(success, now);
 }
 
-std::vector<RouterAction> InputRouter::on_revoke(RevokeReason, TimePoint now) {
+std::vector<RouterAction> InputRouter::on_revoke(RevokeReason reason, TimePoint now) {
+    if (reason == RevokeReason::kLocalPreempt && lease_.has_value())
+        resume_target_ = lease_->target_display;
+    else
+        resume_target_.reset();
     return recover(now);
 }
 
@@ -280,6 +287,7 @@ std::vector<RouterAction> InputRouter::on_renew_ack(const ControlLease& lease, T
 
 std::vector<RouterAction> InputRouter::on_disconnect(TimePoint now) {
     connected_ = false;
+    resume_target_.reset();
     return recover(now);
 }
 

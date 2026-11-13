@@ -82,6 +82,8 @@ struct RouterAction {
     Edge target_edge{Edge::kLeft};
     double tangent_ratio{};
     bool entry_normalized{false};
+    bool has_pointer_position{false};
+    Point pointer_position{};
     InputEvent event{};
     bool success{true};
     std::string error;
@@ -129,6 +131,10 @@ class InputRouter {
     std::uint64_t next_sequence() const noexcept { return next_seq_; }
     bool suppression_armed() const noexcept { return suppression_armed_; }
     bool connected() const noexcept { return connected_; }
+    bool can_resume_remote_cursor(DisplayId target) const noexcept {
+        return resume_target_.has_value() && *resume_target_ == target;
+    }
+    void consume_resume_remote_cursor() noexcept { resume_target_.reset(); }
 
     void set_peer(AuthenticatedPeer peer) { peer_ = peer; }
     void set_local_display(DisplayId display) { local_display_ = display; }
@@ -178,6 +184,7 @@ class InputRouter {
     std::optional<ControlLease> released_lease_;
     std::optional<Crossing> pending_crossing_;
     DisplayId pending_target_{};
+    std::optional<DisplayId> resume_target_;
     bool acquire_started_{false};
     std::set<std::uint32_t> held_buttons_;
     std::set<std::uint32_t> held_keys_;
