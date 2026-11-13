@@ -30,7 +30,7 @@ template <typename T> void expect_round_trip(const T& message) {
 
 TEST(ProtocolWire, RoundTripsEveryMessageAndInputPayload) {
     expect_round_trip(Hello{id(1, 2), kProtocolVersion});
-    expect_round_trip(DisplayInfo{id(15, 16), Rect{-1920.0, 0.0, 0.0, 1080.0}, 2.0});
+    expect_round_trip(DisplayInfo{id(15, 16), Rect{-1920.0, 0.0, 0.0, 1080.0}, 2.0, true});
     expect_round_trip(PointerPosition{id(17, 18), 9, Point{-123.5, 456.25}});
     expect_round_trip(Heartbeat{0x0102030405060708ULL});
     expect_round_trip(AcquireRequest{id(3, 4), id(5, 6), id(7, 8), Point{1.25, -2.5}});

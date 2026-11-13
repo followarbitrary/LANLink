@@ -21,6 +21,7 @@ class MacOSInputBackend final : public IInputBackend {
   Result<void> inject(const InputEvent& event) override;
   std::optional<Rect> display_bounds() const noexcept override;
   double display_scale() const noexcept override;
+  bool supports_absolute_pointer_moves() const noexcept override { return false; }
   Result<void> warp_pointer(Point point) override;
   std::optional<Point> pointer_position() const noexcept override;
   void release_injected_state(const SessionId& session) override;

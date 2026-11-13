@@ -191,6 +191,11 @@ TEST(M0TwoNode, LocalPhysicalInputPreemptsRemoteLease) {
   TwoNode node;
   node.acquire();
   ASSERT_TRUE(node.arbiter.has_active_lease());
+  const auto lease = *node.arbiter.lease();
+  ASSERT_TRUE(node.arbiter.validate(
+      node.peer, InputEvent{node.source, lease.session, lease.generation, 1,
+                            Key{65, true}, InputOrigin::kRemoteInjected},
+      node.clock.now()));
   node.arbiter.on_local_input(
       InputEvent{{}, {}, 0, 0, Key{65, true}, InputOrigin::kPhysical}, {});
   EXPECT_FALSE(node.arbiter.has_lease());

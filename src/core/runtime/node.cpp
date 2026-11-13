@@ -545,15 +545,21 @@ Result<void> InputNodeRuntime::drain_events(TimePoint now) {
       }
       if (router_.state() == RouterState::kRemote &&
           event.origin == InputOrigin::kPhysical && config_.backend->status().suppression) {
-        // The runtime owns the target-side virtual cursor. Forward its
-        // absolute position so the target backend can inject directly into
-        // its desktop coordinate space without applying Windows pointer
-        // acceleration to a relative delta.
+        // The runtime owns the target-side virtual cursor. Windows targets
+        // receive its absolute position so SendInput does not apply pointer
+        // acceleration; relative-capable targets receive a scaled delta so
+        // high-rate motion remains smooth across display scales.
         InputEvent forwarded = event;
         if (remote_cursor_.has_value() &&
             std::holds_alternative<MouseDelta>(forwarded.payload)) {
-          forwarded.payload = PointerMove{remote_cursor_->position.x,
-                                          remote_cursor_->position.y};
+          if (router_.peer_supports_absolute_pointer_moves()) {
+            forwarded.payload = PointerMove{remote_cursor_->position.x,
+                                            remote_cursor_->position.y};
+          } else {
+            const auto delta = std::get<MouseDelta>(forwarded.payload);
+            forwarded.payload = MouseDelta{delta.dx * remote_cursor_->movement_scale,
+                                           delta.dy * remote_cursor_->movement_scale};
+          }
         }
         actions = router_.on_suppressed_event(std::move(forwarded), pointer, now);
       } else {

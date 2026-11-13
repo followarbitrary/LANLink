@@ -296,6 +296,7 @@ Result<std::vector<std::uint8_t>> encode(const Message& message) {
                 w.f64(bounds.right);
                 w.f64(bounds.bottom);
                 w.f64(value.scale);
+                w.u8(value.absolute_pointer_moves ? 1 : 0);
                 return make_frame(MessageType::kDisplayInfo, std::move(w));
             } else if constexpr (std::is_same_v<T, PointerPosition>) {
                 if (zero(value.session) || value.generation == 0 || !finite(value.position.x) ||
@@ -441,6 +442,7 @@ Result<Message> decode(std::span<const std::uint8_t> frame) {
         if (!r.id(value.display) || !r.f64(value.logical_bounds.left) ||
             !r.f64(value.logical_bounds.top) || !r.f64(value.logical_bounds.right) ||
             !r.f64(value.logical_bounds.bottom) || !r.f64(value.scale) ||
+            !read_bool(r, value.absolute_pointer_moves) ||
             zero(value.display) || !finite(value.logical_bounds.left) ||
             !finite(value.logical_bounds.top) || !finite(value.logical_bounds.right) ||
             !finite(value.logical_bounds.bottom) ||

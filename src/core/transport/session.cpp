@@ -48,7 +48,8 @@ Result<void> PeerSession::send_display_info_if_changed(bool force, IClock::time_
     auto scale = config_.backend->display_scale();
     if (!std::isfinite(scale) || scale <= 0.0 || scale > protocol::kMaxDisplayScale)
         scale = 1.0;
-    protocol::DisplayInfo info{config_.local_display, *bounds, scale};
+    protocol::DisplayInfo info{config_.local_display, *bounds, scale,
+                               config_.backend->supports_absolute_pointer_moves()};
     if (!force && local_display_info_.has_value() && *local_display_info_ == info)
         return Result<void>::success();
     auto sent = connection_.send(info);
@@ -58,7 +59,8 @@ Result<void> PeerSession::send_display_info_if_changed(bool force, IClock::time_
     debug::log("send display info display=", info.display.low,
                " bounds=", info.logical_bounds.left, ",", info.logical_bounds.top, " ",
                info.logical_bounds.right, "x", info.logical_bounds.bottom,
-               " scale=", info.scale);
+               " scale=", info.scale,
+               " absolute_pointer_moves=", info.absolute_pointer_moves);
     return Result<void>::success();
 }
 
@@ -195,10 +197,11 @@ Result<void> PeerSession::dispatch_message(const protocol::Message& message,
         debug::log("receive display info display=", display->display.low,
                    " bounds=", display->logical_bounds.left, ",", display->logical_bounds.top,
                    " ", display->logical_bounds.right, "x", display->logical_bounds.bottom,
-                   " scale=", display->scale);
+                   " scale=", display->scale,
+                   " absolute_pointer_moves=", display->absolute_pointer_moves);
         if (config_.router)
             config_.router->set_peer_display_info(display->display, display->logical_bounds,
-                                                  display->scale);
+                                                  display->scale, display->absolute_pointer_moves);
         return Result<void>::success();
     }
     if (const auto* position = std::get_if<protocol::PointerPosition>(&message)) {

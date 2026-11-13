@@ -118,6 +118,11 @@ Result<void> InputArbiter::activate(const SessionId& session, std::uint64_t gene
         return Result<void>::success();
     lease_->active = true;
     last_seq_ = 0;
+    // Every handoff is initiated by a pointer crossing. Treat the target
+    // lease as pointer-owned until the first remote event identifies any
+    // additional modality, so an early local mouse event can still reclaim
+    // the cursor while a local keyboard remains independent.
+    remote_input_mask_ = modality_bit(InputModality::kPointer);
     debug::log("lease activated session=", session.low, " generation=", generation);
     return Result<void>::success();
 }
@@ -153,6 +158,7 @@ ValidationResult InputArbiter::validate(const AuthenticatedPeer& peer, const Inp
     if (event.seq == 0)
         return reject("sequence must be non-zero");
 
+    const bool first_remote_event = last_seq_ == 0;
     const auto expected = last_seq_ + 1;
     if (last_seq_ == 0 && event.seq != 1) {
         return revoke_and_reject(RevokeReason::kSequenceGap, "sequence must start at one", now);
@@ -182,7 +188,10 @@ ValidationResult InputArbiter::validate(const AuthenticatedPeer& peer, const Inp
             }
         },
         event.payload);
-    remote_input_mask_ |= input_modality_mask(event.payload);
+    if (first_remote_event)
+        remote_input_mask_ = input_modality_mask(event.payload);
+    else
+        remote_input_mask_ |= input_modality_mask(event.payload);
     return ValidationResult{true, false, RevokeReason::kProtocolError, {}};
 }
 
@@ -219,7 +228,7 @@ void InputArbiter::on_local_input(const InputEvent& event, TimePoint now) {
     if (event.origin != InputOrigin::kPhysical || is_zero(event.payload))
         return;
     const auto local_modality = input_modality_mask(event.payload);
-    if (remote_input_mask_ != 0 && (remote_input_mask_ & local_modality) == 0)
+    if ((remote_input_mask_ & local_modality) == 0)
         return;
     revoke_current(RevokeReason::kLocalPreempt, now);
 }

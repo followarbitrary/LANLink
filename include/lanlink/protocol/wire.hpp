@@ -15,11 +15,12 @@
 
 namespace lanlink::protocol {
 
-// Version 5 adds periodic target cursor position corrections. Version 4 added
-// absolute PointerMove input payloads. Each peer advertises the same version
-// during Hello so an older executable rejects the connection before decoding
-// newer messages.
-constexpr std::uint8_t kProtocolVersion = 5;
+// Version 6 adds the target pointer injection capability to DisplayInfo.
+// Version 5 added periodic target cursor position corrections and version 4
+// added absolute PointerMove input payloads. Each peer advertises the same
+// version during Hello so an older executable rejects the connection before
+// decoding newer messages.
+constexpr std::uint8_t kProtocolVersion = 6;
 constexpr std::size_t kHeaderSize = 12;
 constexpr std::size_t kMaxFrameSize = 64 * 1024;
 constexpr std::size_t kMaxErrorText = 4 * 1024;
@@ -55,11 +56,13 @@ struct DisplayInfo {
     DisplayId display;
     Rect logical_bounds;
     double scale{1.0};
+    bool absolute_pointer_moves{false};
     friend bool operator==(const DisplayInfo& a, const DisplayInfo& b) {
         return a.display == b.display && a.logical_bounds.left == b.logical_bounds.left &&
                a.logical_bounds.top == b.logical_bounds.top &&
                a.logical_bounds.right == b.logical_bounds.right &&
-               a.logical_bounds.bottom == b.logical_bounds.bottom && a.scale == b.scale;
+               a.logical_bounds.bottom == b.logical_bounds.bottom && a.scale == b.scale &&
+               a.absolute_pointer_moves == b.absolute_pointer_moves;
     }
 };
 struct PointerPosition {

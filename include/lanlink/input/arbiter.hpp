@@ -119,8 +119,10 @@ class InputArbiter {
     std::set<std::uint32_t> pressed_buttons_;
     std::vector<std::uint32_t> released_keys_;
     std::vector<std::uint32_t> released_buttons_;
-    // Input classes observed on the remote lease. A local event only revokes
-    // the lease when its class is also present in this mask.
+    // Input classes observed on the remote lease. Activation seeds the mask
+    // with pointer ownership because every handoff starts at a cursor edge;
+    // the first remote event replaces that provisional value. A local event
+    // only revokes the lease when its class is present in this mask.
     std::uint8_t remote_input_mask_{};
 };
 

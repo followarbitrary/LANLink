@@ -188,6 +188,34 @@ TEST(InputArbiter, LocalKeyboardDoesNotPreemptRemoteMouseButSameClassStillDoes) 
     EXPECT_FALSE(arbiter.has_lease());
 }
 
+TEST(InputArbiter, LocalInputBeforeFirstRemoteEventDoesNotPreemptLease) {
+    InputArbiter arbiter;
+    AuthenticatedPeer peer{id(1)};
+    auto grant = arbiter.acquire(peer, id(2), id(3), id(4), IClock::time_point{});
+    ASSERT_TRUE(grant.granted());
+    ASSERT_TRUE(
+        arbiter.activate(grant.lease.session, grant.lease.generation, IClock::time_point{}));
+
+    arbiter.on_local_input(
+        key_event({}, {}, 0, 0, 0x04, true, InputOrigin::kPhysical),
+        IClock::time_point{} + 1ms);
+    EXPECT_TRUE(arbiter.has_active_lease());
+}
+
+TEST(InputArbiter, LocalPointerBeforeFirstRemoteEventPreemptsLease) {
+    InputArbiter arbiter;
+    AuthenticatedPeer peer{id(1)};
+    auto grant = arbiter.acquire(peer, id(2), id(3), id(4), IClock::time_point{});
+    ASSERT_TRUE(grant.granted());
+    ASSERT_TRUE(
+        arbiter.activate(grant.lease.session, grant.lease.generation, IClock::time_point{}));
+
+    arbiter.on_local_input(
+        InputEvent{{}, {}, 0, 0, MouseDelta{1.0, 0.0}, InputOrigin::kPhysical},
+        IClock::time_point{} + 1ms);
+    EXPECT_FALSE(arbiter.has_lease());
+}
+
 TEST(InputArbiter, LocalMouseDoesNotPreemptRemoteKeyboardButSameClassStillDoes) {
     InputArbiter arbiter;
     AuthenticatedPeer peer{id(1)};

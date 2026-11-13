@@ -63,6 +63,8 @@ TEST(InputNodeRuntime, CrossesAtExactThresholdAndForwardsSuppressedInput) {
   ASSERT_TRUE(right_result.ok()) << right_result.error();
   auto left = std::move(left_result.value());
   auto right = std::move(right_result.value());
+  left_backend.set_display_scale(2.0);
+  right_backend.set_display_scale(1.0);
   ASSERT_TRUE(left->set_topology(topology_for(id(10), id(20), true)).ok());
   ASSERT_TRUE(right->set_topology(topology_for(id(20), id(10), false)).ok());
   ASSERT_TRUE(left->start().ok());
@@ -108,12 +110,15 @@ TEST(InputNodeRuntime, CrossesAtExactThresholdAndForwardsSuppressedInput) {
   ASSERT_TRUE(left->poll(now, 0ms).ok());
   pump_pair(*left, *right, now, 4);
   EXPECT_EQ(*left_backend.pointer_position(), (Point{80.0, 50.0}));
-  EXPECT_EQ(*right_backend.pointer_position(), (Point{28.0, 50.0}));
+  EXPECT_EQ(*right_backend.pointer_position(), (Point{48.0, 50.0}));
   ASSERT_EQ(right_backend.injected_events().size(), 2u);
-  ASSERT_TRUE(std::holds_alternative<PointerMove>(right_backend.injected_events()[1].payload));
-  const auto& remote_move = std::get<PointerMove>(right_backend.injected_events()[1].payload);
-  EXPECT_DOUBLE_EQ(remote_move.x, 28.0);
-  EXPECT_DOUBLE_EQ(remote_move.y, 50.0);
+  // A target that does not advertise absolute pointer injection receives the
+  // original relative delta. Quartz coalesces relative motion more smoothly
+  // than a stream of absolute warps when the source is a high-rate mouse.
+  ASSERT_TRUE(std::holds_alternative<MouseDelta>(right_backend.injected_events()[1].payload));
+  const auto& remote_move = std::get<MouseDelta>(right_backend.injected_events()[1].payload);
+  EXPECT_DOUBLE_EQ(remote_move.dx, 40.0);
+  EXPECT_DOUBLE_EQ(remote_move.dy, 0.0);
 
   // A local keyboard event on the target is independent from the remote
   // pointer lease and must not interrupt the source mouse.
@@ -291,6 +296,7 @@ TEST(InputNodeRuntime, RemoteSourceReturnsToLocalAtEdge) {
   auto left = std::move(left_result.value());
   auto right = std::move(right_result.value());
   right_backend.set_display_bounds(Rect{0.0, 0.0, 200.0, 100.0});
+  right_backend.set_absolute_pointer_moves(true);
   ASSERT_TRUE(left->set_topology(topology_for(id(310), id(320), true)).ok());
   ASSERT_TRUE(right->set_topology(topology_for(id(320), id(310), true)).ok());
   ASSERT_TRUE(left->start().ok());

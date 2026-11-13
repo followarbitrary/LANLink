@@ -95,6 +95,7 @@ TEST(PeerSession, RefreshesDisplayInfoWhenBoundsOrScaleChange) {
     source_backend.set_display_scale(2.0);
     target_backend.set_display_bounds(Rect{0.0, 0.0, 1920.0, 1080.0});
     target_backend.set_display_scale(1.25);
+    target_backend.set_absolute_pointer_moves(true);
     ASSERT_TRUE(source_backend.start({}).ok());
     ASSERT_TRUE(target_backend.start({}).ok());
 
@@ -115,6 +116,7 @@ TEST(PeerSession, RefreshesDisplayInfoWhenBoundsOrScaleChange) {
     ASSERT_TRUE(source_router.peer_display_bounds().has_value());
     EXPECT_EQ(source_router.peer_display(), id(62));
     EXPECT_DOUBLE_EQ(source_router.peer_display_scale(), 1.25);
+    EXPECT_TRUE(source_router.peer_supports_absolute_pointer_moves());
     EXPECT_EQ(*source_router.peer_display_bounds(), (Rect{0.0, 0.0, 1920.0, 1080.0}));
 
     target_backend.set_display_bounds(Rect{-1440.0, 0.0, 0.0, 900.0});

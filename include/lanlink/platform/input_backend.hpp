@@ -39,6 +39,10 @@ class IInputBackend {
   // Return the native backing scale for the same coordinate space. A scale of
   // 1.0 is the safe fallback when the platform cannot report one.
   virtual double display_scale() const noexcept { return 1.0; }
+  // Whether remote pointer motion should be delivered as absolute positions.
+  // Windows uses this to avoid applying the user's pointer acceleration curve;
+  // macOS can consume relative deltas smoothly.
+  virtual bool supports_absolute_pointer_moves() const noexcept { return false; }
   // Move the local cursor without treating the move as a remote input event.
   // Runtime handoff uses this to return the source cursor to its edge while
   // the control lease is being negotiated.

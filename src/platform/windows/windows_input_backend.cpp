@@ -381,7 +381,12 @@ Result<void> WindowsInputBackend::inject(const InputEvent& event) {
       return Result<void>::failure(status_.last_error);
     }
   }
-  if (expected_absolute_point.has_value()) {
+  // PointerWarp is a local handoff synchronization operation. Its native
+  // echo can coincide with the user's first real edge movement, so do not put
+  // it in the markerless remote-motion ledger. PointerMove is a regular
+  // remote event and still needs the short echo correlation window.
+  const bool track_markerless_echo = std::holds_alternative<PointerMove>(event.payload);
+  if (expected_absolute_point.has_value() && track_markerless_echo) {
     std::lock_guard lock(mutex_);
     PendingInjectedMotion pending{};
     pending.id = ++next_injected_motion_id_;
@@ -509,6 +514,12 @@ void WindowsInputBackend::release_injected_state(const SessionId& session) {
   std::lock_guard operation_lock(operation_mutex_);
   std::lock_guard lock(mutex_);
   release_session_locked(session);
+  // Motion echoes are not associated with a session. Drop them when the
+  // corresponding lease is released so a later physical edge movement cannot
+  // be mistaken for an old remote injection.
+  pending_injected_motions_.clear();
+  pending_move_dx_ = 0.0;
+  pending_move_dy_ = 0.0;
 }
 
 Result<void> WindowsInputBackend::recover() {
@@ -682,15 +693,6 @@ void WindowsInputBackend::handle_raw_input(HRAWINPUT input) {
       pending_injected_motions_.pop_front();
     if (mouse.ulExtraInformation == static_cast<ULONG>(own_extra_info())) {
       if (!pending_injected_motions_.empty()) pending_injected_motions_.pop_front();
-      return;
-    }
-    // Real HID mouse reports normally carry a device handle. If an injected
-    // report is mirrored without its marker, Windows may expose a null handle;
-    // only discard that form while an injection is still pending.
-    if (raw->header.hDevice == nullptr && !pending_injected_motions_.empty()) {
-      debug::log("windows ignored unmarked raw mouse echo hDevice=null flags=",
-                 mouse.usFlags, " delta=", mouse.lLastX, ",", mouse.lLastY,
-                 " extra=", mouse.ulExtraInformation);
       return;
     }
   }
