@@ -40,6 +40,35 @@ Check the command-line interface with:
 
 The help output lists these flags: `--device-id`, `--peer-id`, `--listen-port`, `--connect`, `--group`, `--discovery-port`, `--display-id`, `--peer-display-id`, `--remote-side`, `--width`, `--height`, `--peer-width`, `--peer-height`, and `--help`. Device and display IDs are numeric; `--remote-side` accepts only `left` or `right`; `--connect` takes `HOST:PORT`. LANLink reads the local display bounds from the native backend at startup: macOS uses Quartz logical points and Windows uses the DPI-aware monitor coordinate space. The width and height flags remain optional overrides for diagnostics. Peer dimensions are no longer required because the handoff sends an edge ratio and the target maps it into its own detected display bounds.
 
+## Packaging
+
+The packaging scripts create a clean Release build, run the complete CTest suite (retrying a failed test up to ten times for timing-sensitive tests), and place the executable and this README in a platform-specific archive. A test that remains failing still stops packaging. The release build disables the optional OpenSSL TLS backend so the archive does not depend on a separately installed OpenSSL runtime; the regular Debug build keeps its existing default. The scripts resolve the repository from their own location, so they can be invoked from any working directory.
+
+### macOS
+
+```sh
+chmod +x scripts/package-macos.sh
+./scripts/package-macos.sh
+```
+
+The script uses the host architecture reported by `uname -m` and writes `dist/lanlink-macos-<architecture>.tar.gz`. Extract the archive, then run `./lanlink_app --help` from the extracted directory. The packaged binary still needs Accessibility permission under **System Settings → Privacy & Security → Accessibility**.
+
+### Windows
+
+Run the PowerShell script from a PowerShell prompt. It uses the Visual Studio 17 2022 generator with the x64 platform and statically links the MSVC runtime:
+
+```powershell
+.\scripts\package-windows.ps1
+```
+
+If the PowerShell execution policy blocks local scripts, use:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\package-windows.ps1
+```
+
+The script writes `dist\lanlink-windows-x64.zip`. Extract it, then run `.\lanlink_app.exe --help` from the extracted directory. Allow the packaged executable through Windows Defender Firewall on the Private network profile when prompted so peers can connect.
+
 ## Automatic LAN discovery
 
 When `--peer-id` and `--connect` are omitted, LANLink announces itself on the `lanlink` group over UDP port `41001` and waits for a visible peer. The lowest device ID selects the outgoing connection. The selected peer's display ID is used automatically, and the side is inferred from device ID ordering. Pass `--group NAME` and `--discovery-port PORT` when separate pairs share a network.
