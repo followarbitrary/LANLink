@@ -202,6 +202,7 @@ Result<std::vector<DiscoveryPeer>> DiscoveryService::poll(IClock::time_point now
         if (received < 0) {
             const auto error = WSAGetLastError();
             if (error == WSAEWOULDBLOCK) break;
+            if (error == WSAEMSGSIZE) continue;
             return Result<std::vector<DiscoveryPeer>>::failure("discovery recvfrom failed");
         }
 #else
