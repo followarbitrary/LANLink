@@ -32,8 +32,8 @@ Result<std::unique_ptr<InputNodeRuntime>> InputNodeRuntime::create(InputRuntimeC
 }
 
 Result<void> InputNodeRuntime::set_topology(ScreenTopology topology) {
-  if (running_ && connected())
-    return Result<void>::failure("cannot change topology while peer is connected");
+  if (running_ && manager_.size() != 0)
+    return Result<void>::failure("cannot change topology while peer is active");
   topology_ = std::move(topology);
   return Result<void>::success();
 }

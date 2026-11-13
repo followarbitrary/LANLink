@@ -238,8 +238,18 @@ bool running_topology_update_case() {
             .ok())
     return false;
   const bool updated = runtime->set_topology(std::move(discovered)).ok();
+  const bool slot_added = runtime->connect_peer({"127.0.0.1", 1}).ok();
+  lanlink::ScreenTopology blocked;
+  if (!blocked.set_snapshot(3,
+                             {{id(1), id(11), {0, 0, 100, 100}, 1.0},
+                              {id(2), id(55), {100, 0, 300, 100}, 1.0}},
+                             {{id(11), lanlink::Edge::kRight, id(55), lanlink::Edge::kLeft,
+                               0.0, 1.0, 3}})
+            .ok())
+    return false;
+  const bool rejected_with_slot = !runtime->set_topology(std::move(blocked)).ok();
   const bool stopped = runtime->stop(lanlink::IClock::Clock::now()).ok();
-  return updated && stopped;
+  return updated && slot_added && rejected_with_slot && stopped;
 }
 
 int run_case(const std::string& executable, const std::string& arguments,
