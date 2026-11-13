@@ -64,5 +64,58 @@ TEST(WindowsInputBackend, HookForwardingSuppressesWithoutCallingNextHook) {
   EXPECT_FALSE(next_hook_called);
 }
 
+TEST(WindowsInputBackend, UnlockedSystemCallRunsOutsideStateMutex) {
+  std::timed_mutex state_mutex;
+  bool operation_saw_unlocked_mutex = false;
+  bool commit_saw_locked_mutex = false;
+
+  const auto result = detail::run_unlocked(
+      state_mutex,
+      [] { return 42; },
+      [&](int&) {
+        operation_saw_unlocked_mutex = state_mutex.try_lock();
+        if (operation_saw_unlocked_mutex) state_mutex.unlock();
+        return operation_saw_unlocked_mutex;
+      },
+      [&](int&, bool operation_ok) {
+        commit_saw_locked_mutex = !state_mutex.try_lock();
+        if (!commit_saw_locked_mutex) state_mutex.unlock();
+        return operation_ok;
+      });
+
+  EXPECT_TRUE(result);
+  EXPECT_TRUE(operation_saw_unlocked_mutex);
+  EXPECT_TRUE(commit_saw_locked_mutex);
+}
+
+TEST(WindowsInputBackend, RunningBackendSkipsJoiningPreviousThread) {
+  bool joined = false;
+
+  detail::join_previous_thread_if_stopped([] { return true; }, [&] { joined = true; });
+
+  EXPECT_FALSE(joined);
+}
+
+TEST(WindowsInputBackend, StoppedBackendJoinsPreviousThread) {
+  bool joined = false;
+
+  detail::join_previous_thread_if_stopped([] { return false; }, [&] { joined = true; });
+
+  EXPECT_TRUE(joined);
+}
+
+TEST(WindowsInputBackend, StartWhileRunningDoesNotWaitForHookThread) {
+#if defined(_WIN32)
+  WindowsInputBackend backend;
+  const auto first_start = backend.start({});
+  if (!first_start.ok()) GTEST_SKIP() << first_start.error();
+
+  EXPECT_TRUE(backend.start({}).ok());
+  backend.stop();
+#else
+  GTEST_SKIP() << "Windows hook lifecycle is only exercised on Windows";
+#endif
+}
+
 }  // namespace
 }  // namespace lanlink::platform

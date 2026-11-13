@@ -98,8 +98,12 @@ WindowsInputBackend::~WindowsInputBackend() { stop(); }
 
 Result<void> WindowsInputBackend::start(EventCallback callback) {
   std::lock_guard operation_lock(operation_mutex_);
-  if (hook_thread_.joinable() && hook_thread_.get_id() != std::this_thread::get_id())
-    hook_thread_.join();
+  detail::join_previous_thread_if_stopped(
+      [this] {
+        std::lock_guard lock(mutex_);
+        return status_.running;
+      },
+      [this] { join_thread(); });
   {
     std::lock_guard lock(mutex_);
     if (status_.running) {
@@ -183,8 +187,8 @@ void WindowsInputBackend::stop() {
   }
   if (thread_id != 0) PostThreadMessageW(thread_id, WM_QUIT, 0, 0);
   join_thread();
+  release_all();
   std::lock_guard lock(mutex_);
-  release_all_locked();
   status_.capture = false;
   status_.injection = status_.permission && held_.empty();
   status_.degraded = !status_.permission || !status_.injection;
@@ -455,12 +459,12 @@ Result<void> WindowsInputBackend::inject(const InputEvent& event) {
   return Result<void>::success();
 }
 
-bool WindowsInputBackend::release_session_locked(const SessionId& session) {
+WindowsInputBackend::ReleaseBatch WindowsInputBackend::prepare_release_locked(
+    const SessionId& session) {
+  ReleaseBatch batch;
   auto found = held_.find(session);
-  if (found == held_.end()) return true;
+  if (found == held_.end()) return batch;
 
-  std::vector<INPUT> inputs;
-  std::vector<std::pair<bool, std::uint32_t>> released;
   for (const auto code : found->second.keys) {
     INPUT input{};
     input.type = INPUT_KEYBOARD;
@@ -475,8 +479,8 @@ bool WindowsInputBackend::release_session_locked(const SessionId& session) {
       if (stroke->extended) input.ki.dwFlags |= KEYEVENTF_EXTENDEDKEY;
     }
     input.ki.dwExtraInfo = own_extra_info();
-    inputs.push_back(input);
-    released.emplace_back(true, code);
+    batch.inputs.push_back(input);
+    batch.released.emplace_back(true, code);
   }
   for (const auto button : found->second.buttons) {
     INPUT input{};
@@ -486,21 +490,27 @@ bool WindowsInputBackend::release_session_locked(const SessionId& session) {
     else if (button == 2) input.mi.dwFlags = MOUSEEVENTF_RIGHTUP;
     else if (button == 3) input.mi.dwFlags = MOUSEEVENTF_MIDDLEUP;
     else { input.mi.dwFlags = MOUSEEVENTF_XUP; input.mi.mouseData = button == 4 ? XBUTTON1 : XBUTTON2; }
-    inputs.push_back(input);
-    released.emplace_back(false, button);
+    batch.inputs.push_back(input);
+    batch.released.emplace_back(false, button);
   }
+  return batch;
+}
 
-  const auto input_count = static_cast<UINT>(inputs.size());
-  const UINT sent = inputs.empty() ? 0 : send_inputs(inputs.data(), input_count);
-  const auto released_count = std::min<std::size_t>(sent, released.size());
+bool WindowsInputBackend::commit_release_locked(const SessionId& session,
+                                                 const ReleaseBatch& batch,
+                                                 UINT sent) {
+  auto found = held_.find(session);
+  if (found == held_.end()) return sent == batch.inputs.size();
+
+  const auto released_count = std::min<std::size_t>(sent, batch.released.size());
   for (std::size_t index = 0; index < released_count; ++index) {
-    const auto [key, code] = released[index];
+    const auto [key, code] = batch.released[index];
     if (key) found->second.keys.erase(code);
     else found->second.buttons.erase(code);
   }
   if (found->second.keys.empty() && found->second.buttons.empty()) held_.erase(found);
 
-  if (sent != inputs.size()) {
+  if (sent != batch.inputs.size()) {
     status_.injection = false;
     status_.degraded = true;
     status_.last_error = "SendInput release failed";
@@ -509,13 +519,36 @@ bool WindowsInputBackend::release_session_locked(const SessionId& session) {
   return true;
 }
 
+bool WindowsInputBackend::release_session(const SessionId& session) {
+  return detail::run_unlocked(
+      mutex_,
+      [this, &session] { return prepare_release_locked(session); },
+      [this](ReleaseBatch& batch) {
+        const auto input_count = static_cast<UINT>(batch.inputs.size());
+        return batch.inputs.empty() ? 0 : send_inputs(batch.inputs.data(), input_count);
+      },
+      [this, &session](ReleaseBatch& batch, UINT sent) {
+        return commit_release_locked(session, batch, sent);
+      });
+}
+
+void WindowsInputBackend::release_all() {
+  std::vector<SessionId> sessions;
+  {
+    std::lock_guard lock(mutex_);
+    sessions.reserve(held_.size());
+    for (const auto& entry : held_) sessions.push_back(entry.first);
+  }
+  for (const auto& session : sessions) release_session(session);
+}
+
 void WindowsInputBackend::release_injected_state(const SessionId& session) {
   std::lock_guard operation_lock(operation_mutex_);
-  std::lock_guard lock(mutex_);
-  release_session_locked(session);
+  release_session(session);
   // Motion echoes are not associated with a session. Drop them when the
   // corresponding lease is released so a later physical edge movement cannot
   // be mistaken for an old remote injection.
+  std::lock_guard lock(mutex_);
   pending_injected_motions_.clear();
   pending_move_dx_ = 0.0;
   pending_move_dy_ = 0.0;
@@ -532,8 +565,8 @@ Result<void> WindowsInputBackend::recover() {
   stop();
   auto restarted = start(std::move(callback));
   if (!restarted.ok()) return restarted;
+  release_all();
   std::lock_guard lock(mutex_);
-  release_all_locked();
   if (!held_.empty()) {
     status_.injection = false;
     status_.degraded = true;
@@ -798,15 +831,60 @@ void WindowsInputBackend::handle_cursor_visibility_message(WPARAM wparam, LPARAM
   cursor_visibility_cv_.notify_all();
 }
 
-void WindowsInputBackend::release_all_locked() {
-  std::vector<SessionId> sessions;
-  sessions.reserve(held_.size());
-  for (const auto& entry : held_) sessions.push_back(entry.first);
-  for (const auto& session : sessions) release_session_locked(session);
-}
-
 void WindowsInputBackend::message_thread() {
+  struct HookCleanup {
+    HHOOK keyboard{};
+    HHOOK mouse{};
+    HWND raw_input_window{};
+    bool restore_cursor{};
+    bool unregister_class{};
+  };
+
   bool raw_class_registered = false;
+  const auto cleanup_resources = [&](bool unexpected_exit) {
+    HookCleanup cleanup{};
+    const bool cleaned = detail::run_unlocked(
+        mutex_,
+        [&] {
+          cleanup.keyboard = keyboard_hook_;
+          cleanup.mouse = mouse_hook_;
+          cleanup.raw_input_window = raw_input_window_;
+          cleanup.restore_cursor = cursor_hidden_;
+          cleanup.unregister_class = raw_class_registered;
+          keyboard_hook_ = nullptr;
+          mouse_hook_ = nullptr;
+          raw_input_window_ = nullptr;
+          cursor_hidden_ = false;
+          status_.capture = false;
+          status_.running = false;
+          status_.suppression = false;
+          if (active_instance_.load(std::memory_order_acquire) == this)
+            active_instance_.store(nullptr, std::memory_order_release);
+          raw_input_ready_ = false;
+          pending_injected_motions_.clear();
+          if (unexpected_exit) {
+            status_.injection = false;
+            status_.degraded = true;
+            status_.last_error = "low-level hook thread exited unexpectedly";
+          }
+          return 0;
+        },
+        [&](int&) {
+          if (cleanup.keyboard) UnhookWindowsHookEx(cleanup.keyboard);
+          if (cleanup.mouse) UnhookWindowsHookEx(cleanup.mouse);
+          return true;
+        },
+        [](int&, bool operation_ok) { return operation_ok; });
+
+    if (unexpected_exit) debug::log("windows hook thread exited unexpectedly");
+    if (cleanup.restore_cursor) show_cursor_on_current_thread(cursor_visibility_adjustment_);
+    cursor_visibility_cv_.notify_all();
+    if (cleanup.raw_input_window) DestroyWindow(cleanup.raw_input_window);
+    if (cleanup.unregister_class)
+      UnregisterClassW(kRawInputWindowClass, GetModuleHandleW(nullptr));
+    return cleaned;
+  };
+
   WNDCLASSEXW window_class{};
   window_class.cbSize = sizeof(window_class);
   window_class.lpfnWndProc = &WindowsInputBackend::raw_input_proc;
@@ -818,34 +896,43 @@ void WindowsInputBackend::message_thread() {
   } else if (GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
     debug::log("windows raw input class registration failed");
   }
-  raw_input_window_ = CreateWindowExW(0, kRawInputWindowClass, L"LANLink raw input", 0, 0, 0,
-                                      0, 0, HWND_MESSAGE, nullptr, GetModuleHandleW(nullptr),
-                                      this);
-  if (raw_input_window_ != nullptr) {
+  HWND raw_input_window = CreateWindowExW(0, kRawInputWindowClass, L"LANLink raw input", 0, 0, 0,
+                                         0, 0, HWND_MESSAGE, nullptr, GetModuleHandleW(nullptr),
+                                         this);
+  bool raw_input_ready = false;
+  if (raw_input_window != nullptr) {
     RAWINPUTDEVICE device{};
     device.usUsagePage = 0x01;
     device.usUsage = 0x02;
     device.dwFlags = RIDEV_INPUTSINK;
-    device.hwndTarget = raw_input_window_;
-    raw_input_ready_ = RegisterRawInputDevices(&device, 1, sizeof(device)) != FALSE;
-    if (raw_input_ready_)
+    device.hwndTarget = raw_input_window;
+    raw_input_ready = RegisterRawInputDevices(&device, 1, sizeof(device)) != FALSE;
+    if (raw_input_ready)
       debug::log("windows raw input ready");
     else
       debug::log("windows raw input registration failed; using hook deltas");
   } else {
-    raw_input_ready_ = false;
     debug::log("windows raw input window creation failed; using hook deltas");
   }
   {
     std::lock_guard lock(mutex_);
-    hook_thread_id_ = GetCurrentThreadId();
-    PeekMessageW(nullptr, nullptr, WM_USER, WM_USER, PM_NOREMOVE);
-    keyboard_hook_ = SetWindowsHookExW(WH_KEYBOARD_LL, &WindowsInputBackend::keyboard_proc, GetModuleHandleW(nullptr), 0);
-    mouse_hook_ = SetWindowsHookExW(WH_MOUSE_LL, &WindowsInputBackend::mouse_proc, GetModuleHandleW(nullptr), 0);
+    raw_input_window_ = raw_input_window;
+    raw_input_ready_ = raw_input_ready;
+  }
+  const DWORD hook_thread_id = GetCurrentThreadId();
+  PeekMessageW(nullptr, nullptr, WM_USER, WM_USER, PM_NOREMOVE);
+  HHOOK keyboard_hook =
+      SetWindowsHookExW(WH_KEYBOARD_LL, &WindowsInputBackend::keyboard_proc,
+                        GetModuleHandleW(nullptr), 0);
+  HHOOK mouse_hook =
+      SetWindowsHookExW(WH_MOUSE_LL, &WindowsInputBackend::mouse_proc,
+                        GetModuleHandleW(nullptr), 0);
+  {
+    std::lock_guard lock(mutex_);
+    hook_thread_id_ = hook_thread_id;
+    keyboard_hook_ = keyboard_hook;
+    mouse_hook_ = mouse_hook;
     if (keyboard_hook_ == nullptr || mouse_hook_ == nullptr) {
-      if (keyboard_hook_) UnhookWindowsHookEx(keyboard_hook_);
-      if (mouse_hook_) UnhookWindowsHookEx(mouse_hook_);
-      keyboard_hook_ = nullptr; mouse_hook_ = nullptr;
       status_.last_error = "SetWindowsHookEx failed";
       status_.capture = false;
     } else {
@@ -861,23 +948,7 @@ void WindowsInputBackend::message_thread() {
     capture_ready = status_.capture;
   }
   if (!capture_ready || stop_requested_.load(std::memory_order_acquire)) {
-    std::lock_guard lock(mutex_);
-    if (keyboard_hook_) UnhookWindowsHookEx(keyboard_hook_);
-    if (mouse_hook_) UnhookWindowsHookEx(mouse_hook_);
-    keyboard_hook_ = nullptr;
-    mouse_hook_ = nullptr;
-    status_.capture = false;
-    status_.running = false;
-    status_.suppression = false;
-    if (active_instance_.load(std::memory_order_acquire) == this)
-      active_instance_.store(nullptr, std::memory_order_release);
-    raw_input_ready_ = false;
-    if (raw_input_window_ != nullptr) {
-      DestroyWindow(raw_input_window_);
-      raw_input_window_ = nullptr;
-    }
-    if (raw_class_registered)
-      UnregisterClassW(kRawInputWindowClass, GetModuleHandleW(nullptr));
+    cleanup_resources(false);
     return;
   }
   MSG message;
@@ -887,39 +958,7 @@ void WindowsInputBackend::message_thread() {
     else
       DispatchMessageW(&message);
   }
-  bool unexpected_exit = false;
-  bool restore_cursor = false;
-  {
-    std::lock_guard lock(mutex_);
-    restore_cursor = cursor_hidden_;
-    cursor_hidden_ = false;
-    if (keyboard_hook_) UnhookWindowsHookEx(keyboard_hook_);
-    if (mouse_hook_) UnhookWindowsHookEx(mouse_hook_);
-    unexpected_exit = !stop_requested_.load(std::memory_order_acquire);
-    keyboard_hook_ = nullptr;
-    mouse_hook_ = nullptr;
-    status_.capture = false;
-    if (active_instance_.load(std::memory_order_acquire) == this)
-      active_instance_.store(nullptr, std::memory_order_release);
-    status_.running = false;
-    status_.suppression = false;
-    pending_injected_motions_.clear();
-    raw_input_ready_ = false;
-    if (unexpected_exit) {
-      status_.injection = false;
-      status_.degraded = true;
-      status_.last_error = "low-level hook thread exited unexpectedly";
-      debug::log("windows hook thread exited unexpectedly");
-    }
-  }
-  if (restore_cursor) show_cursor_on_current_thread(cursor_visibility_adjustment_);
-  cursor_visibility_cv_.notify_all();
-  if (raw_input_window_ != nullptr) {
-    DestroyWindow(raw_input_window_);
-    raw_input_window_ = nullptr;
-  }
-  if (raw_class_registered)
-    UnregisterClassW(kRawInputWindowClass, GetModuleHandleW(nullptr));
+  cleanup_resources(!stop_requested_.load(std::memory_order_acquire));
 }
 
 void WindowsInputBackend::set_hook_error(const char* operation) {

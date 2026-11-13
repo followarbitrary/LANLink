@@ -13,6 +13,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 
 #if defined(_WIN32)
 #ifndef NOMINMAX
@@ -40,6 +41,23 @@ auto dispatch_hook(Snapshot&& snapshot, Next&& next) {
   using Result = std::invoke_result_t<Next&>;
   if (suppressed) return static_cast<Result>(1);
   return std::invoke(std::forward<Next>(next));
+}
+
+template <typename IsRunning, typename Join>
+void join_previous_thread_if_stopped(IsRunning&& is_running, Join&& join) {
+  if (!std::invoke(std::forward<IsRunning>(is_running)))
+    std::invoke(std::forward<Join>(join));
+}
+
+template <typename Mutex, typename Prepare, typename Operation, typename Commit>
+auto run_unlocked(Mutex& mutex, Prepare&& prepare, Operation&& operation, Commit&& commit) {
+  auto prepared = [&] {
+    std::lock_guard lock(mutex);
+    return std::invoke(std::forward<Prepare>(prepare));
+  }();
+  auto operation_result = std::invoke(std::forward<Operation>(operation), prepared);
+  std::lock_guard lock(mutex);
+  return std::invoke(std::forward<Commit>(commit), prepared, operation_result);
 }
 
 }  // namespace detail
@@ -82,6 +100,11 @@ class WindowsInputBackend final : public IInputBackend {
     std::uint8_t seen_sources{};
   };
 
+  struct ReleaseBatch {
+    std::vector<INPUT> inputs;
+    std::vector<std::pair<bool, std::uint32_t>> released;
+  };
+
   static LRESULT CALLBACK keyboard_proc(int code, WPARAM wparam, LPARAM lparam);
   static LRESULT CALLBACK mouse_proc(int code, WPARAM wparam, LPARAM lparam);
   static LRESULT CALLBACK raw_input_proc(HWND window, UINT message, WPARAM wparam,
@@ -96,8 +119,10 @@ class WindowsInputBackend final : public IInputBackend {
   void handle_cursor_visibility_message(WPARAM wparam, LPARAM lparam);
   void dispatch(InputEvent event);
   UINT send_inputs(INPUT* inputs, UINT count);
-  bool release_session_locked(const SessionId& session);
-  void release_all_locked();
+  ReleaseBatch prepare_release_locked(const SessionId& session);
+  bool commit_release_locked(const SessionId& session, const ReleaseBatch& batch, UINT sent);
+  bool release_session(const SessionId& session);
+  void release_all();
   void set_hook_error(const char* operation);
   void join_thread();
   bool request_cursor_visibility(bool hidden);
