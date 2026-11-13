@@ -40,6 +40,17 @@ Check the command-line interface with:
 
 The help output lists these flags: `--device-id`, `--peer-id`, `--listen-port`, `--connect`, `--group`, `--discovery-port`, `--display-id`, `--peer-display-id`, `--remote-side`, `--width`, `--height`, `--peer-width`, `--peer-height`, and `--help`. Device and display IDs are numeric; `--remote-side` accepts only `left` or `right`; `--connect` takes `HOST:PORT`. LANLink reads the local display bounds from the native backend at startup: macOS uses Quartz logical points and Windows uses the DPI-aware monitor coordinate space. The width and height flags remain optional overrides for diagnostics. Peer dimensions are no longer required because the handoff sends an edge ratio and the target maps it into its own detected display bounds.
 
+### Qt6 desktop control panel
+
+When Qt 6 is installed, the Debug preset also builds the optional `lanlink_desktop` Qt Widgets control panel. It provides the overview, screen-layout canvas, device list, transfer workspace, preferences, and tray controls in a dark native desktop window:
+
+```sh
+cmake --build cmake-build-debug --target lanlink_desktop
+QT_QPA_PLATFORM=offscreen ./cmake-build-debug/lanlink_desktop # headless smoke test
+```
+
+Set `-DLANLINK_BUILD_DESKTOP=OFF` to skip the desktop target on machines without Qt 6; the CLI and core targets remain available.
+
 ## Packaging
 
 The packaging scripts create a clean Release build, run the complete CTest suite (retrying a failed test up to ten times for timing-sensitive tests), and place the executable and this README in a platform-specific archive. A test that remains failing still stops packaging. The release build disables the optional OpenSSL TLS backend so the archive does not depend on a separately installed OpenSSL runtime; the regular Debug build keeps its existing default. The scripts resolve the repository from their own location, so they can be invoked from any working directory.

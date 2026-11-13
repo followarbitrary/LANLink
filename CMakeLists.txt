@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.23)
 project(LANLink LANGUAGES CXX)
 
+option(LANLINK_BUILD_DESKTOP "Build the optional Qt 6 desktop control panel" ON)
+
 option(LANLINK_ENABLE_TLS "Build the OpenSSL TLS transport backend" ON)
 
 include(FetchContent)
@@ -43,6 +45,33 @@ if(LANLINK_ENABLE_TLS)
     target_link_libraries(lanlink_core PRIVATE OpenSSL::SSL OpenSSL::Crypto)
   endif()
 endif()
+
+if(LANLINK_BUILD_DESKTOP)
+  find_package(Qt6 COMPONENTS Widgets QUIET)
+  if(Qt6_FOUND)
+    add_executable(lanlink_desktop
+      src/desktop/main.cpp
+      src/desktop/main_window.cpp
+      src/desktop/main_window.hpp
+      src/desktop/desktop_state.hpp
+      src/desktop/icons.hpp
+      src/desktop/topology_canvas.cpp
+      src/desktop/topology_canvas.hpp
+      src/desktop/pages.cpp
+      src/desktop/pages.hpp
+    )
+    set_target_properties(lanlink_desktop PROPERTIES AUTOMOC ON AUTOUIC ON AUTORCC ON)
+    target_compile_features(lanlink_desktop PRIVATE cxx_std_20)
+    target_link_libraries(lanlink_desktop PRIVATE lanlink_core Qt6::Widgets)
+    target_include_directories(lanlink_desktop PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    if(MSVC)
+      target_compile_options(lanlink_desktop PRIVATE /W4)
+    else()
+      target_compile_options(lanlink_desktop PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+
+  endif()
+endif()
 target_compile_definitions(lanlink_core PUBLIC LANLINK_HAS_OPENSSL=${LANLINK_HAS_OPENSSL})
 if(APPLE)
   target_link_libraries(lanlink_core PRIVATE "-framework ApplicationServices")
@@ -60,6 +89,14 @@ enable_testing()
 add_executable(common_types_test tests/unit/common_types_test.cpp)
 target_link_libraries(common_types_test PRIVATE lanlink_core GTest::gtest_main)
 include(GoogleTest)
+if(LANLINK_BUILD_DESKTOP AND Qt6_FOUND)
+  add_executable(desktop_state_test tests/desktop_state_test.cpp)
+  target_compile_features(desktop_state_test PRIVATE cxx_std_20)
+  target_include_directories(desktop_state_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/desktop)
+  target_link_libraries(desktop_state_test PRIVATE Qt6::Widgets GTest::gtest_main)
+  gtest_discover_tests(desktop_state_test)
+  add_test(NAME desktop_state COMMAND desktop_state_test)
+endif()
 gtest_discover_tests(common_types_test)
 add_test(NAME common_types COMMAND common_types_test)
 
