@@ -9,11 +9,31 @@ std::vector<char*> args(std::initializer_list<const char*> values) { std::vector
 }
 TEST(AppOptions, ParseOptionsAcceptsRequiredValuesAndDefaults) {
  auto a=args({"lanlink_app","--device-id","11","--peer-id","22","--listen-port","4000"}); auto r=parse_options((int)a.size(),a.data()); ASSERT_TRUE(r.ok())<<r.error(); EXPECT_EQ(r.value().device_id,11u); EXPECT_EQ(r.value().peer_id,22u); EXPECT_EQ(r.value().listen_port,4000); EXPECT_EQ(r.value().remote_side,RemoteSide::kRight); EXPECT_DOUBLE_EQ(r.value().width,0.0); EXPECT_DOUBLE_EQ(r.value().height,0.0); EXPECT_FALSE(r.value().width_explicit); EXPECT_FALSE(r.value().height_explicit); EXPECT_FALSE(r.value().connect.has_value());
+ EXPECT_EQ(r.value().group, "lanlink"); EXPECT_EQ(r.value().discovery_port, 41001); EXPECT_FALSE(r.value().peer_display_id_explicit); EXPECT_FALSE(r.value().remote_side_explicit);
+}
+TEST(AppOptions, ParseOptionsAcceptsDiscoveryModeWithoutPeerId) {
+ auto a=args({"x","--device-id","11","--listen-port","4000"}); auto r=parse_options((int)a.size(),a.data()); ASSERT_TRUE(r.ok())<<r.error(); EXPECT_FALSE(r.value().peer_id.has_value());
+}
+TEST(AppOptions, ParseOptionsAcceptsCustomDiscoveryGroupAndPort) {
+ auto a=args({"x","--device-id","11","--listen-port","4000","--group","lab_1.a","--discovery-port","12345","--peer-display-id","8","--remote-side","left"}); auto r=parse_options((int)a.size(),a.data()); ASSERT_TRUE(r.ok())<<r.error(); EXPECT_EQ(r.value().group, "lab_1.a"); EXPECT_EQ(r.value().discovery_port, 12345); EXPECT_TRUE(r.value().peer_display_id_explicit); EXPECT_TRUE(r.value().remote_side_explicit);
+}
+TEST(AppOptions, ParseOptionsRequiresPeerIdForExplicitConnect) {
+ auto a=args({"x","--device-id","11","--listen-port","4000","--connect","host:1234"}); auto r=parse_options((int)a.size(),a.data()); EXPECT_FALSE(r.ok()); EXPECT_NE(r.error().find("peer-id"),std::string::npos);
+}
+TEST(AppOptions, ParseOptionsRejectsInvalidDiscoveryGroup) {
+ for (auto bad : {"", "bad/group", "bad group", "bad$group", "123456789012345678901234567890123"}) {
+  auto a=args({"x","--device-id","11","--listen-port","4000","--group",bad}); auto r=parse_options((int)a.size(),a.data()); EXPECT_FALSE(r.ok()) << bad;
+ }
+}
+TEST(AppOptions, ParseOptionsRejectsInvalidDiscoveryPort) {
+ for (auto bad : {"0", "65536", "abc", "-1"}) {
+  auto a=args({"x","--device-id","11","--listen-port","4000","--discovery-port",bad}); auto r=parse_options((int)a.size(),a.data()); EXPECT_FALSE(r.ok()) << bad;
+ }
 }
 TEST(AppOptions, ParseOptionsAcceptsConnectAndTopologyValues) {
  auto a=args({"x","--device-id","1","--peer-id","2","--listen-port","65535","--connect","host.example:1234","--display-id","3","--peer-display-id","4","--remote-side","left","--width","800.5","--height","600","--peer-width","1920","--peer-height","1080"}); auto r=parse_options((int)a.size(),a.data()); ASSERT_TRUE(r.ok())<<r.error(); EXPECT_EQ(r.value().connect, (transport::Endpoint{"host.example",1234})); EXPECT_EQ(r.value().display_id,3u); EXPECT_EQ(r.value().peer_display_id,4u); EXPECT_EQ(r.value().remote_side,RemoteSide::kLeft); EXPECT_DOUBLE_EQ(r.value().width,800.5); EXPECT_DOUBLE_EQ(r.value().height,600.0); EXPECT_DOUBLE_EQ(r.value().peer_width,1920.0); EXPECT_DOUBLE_EQ(r.value().peer_height,1080.0);
 }
-TEST(AppOptions, UsageContainsAllSupportedFlags) { auto u=usage(); for(auto f:{"--device-id","--peer-id","--listen-port","--connect","--display-id","--peer-display-id","--remote-side","--width","--height","--peer-width","--peer-height","--help"}) EXPECT_NE(u.find(f),std::string::npos); }
+TEST(AppOptions, UsageContainsAllSupportedFlags) { auto u=usage(); for(auto f:{"--device-id","--peer-id","--listen-port","--connect","--group","--discovery-port","--display-id","--peer-display-id","--remote-side","--width","--height","--peer-width","--peer-height","--help"}) EXPECT_NE(u.find(f),std::string::npos); }
 TEST(AppOptions, ParseOptionsRejectsMissingRequiredValues) { auto a=args({"x","--device-id","1","--peer-id","2"}); auto r=parse_options((int)a.size(),a.data()); EXPECT_FALSE(r.ok()); EXPECT_NE(r.error().find("listen-port"),std::string::npos); }
 TEST(AppOptions, ParseOptionsRejectsSignedAndUnknownValues) { for(auto bad: {"-1","+1"," 1"}) { auto a=args({"x","--device-id",bad,"--peer-id","2","--listen-port","1"}); EXPECT_FALSE(parse_options((int)a.size(),a.data()).ok()); } auto a=args({"x","--device-id","1","--peer-id","2","--listen-port","1","--bogus"}); EXPECT_FALSE(parse_options((int)a.size(),a.data()).ok()); }
 TEST(AppOptions, ParseOptionsRejectsMalformedConnectPortAndDimensions) { for(auto bad: {"host","host:0","host:65536","host:a","a:b:c"}) { auto a=args({"x","--device-id","1","--peer-id","2","--listen-port","1","--connect",bad}); EXPECT_FALSE(parse_options((int)a.size(),a.data()).ok())<<bad; } for(auto dim: {"0","-2","nan","inf"}) { auto a=args({"x","--device-id","1","--peer-id","2","--listen-port","1","--width",dim}); EXPECT_FALSE(parse_options((int)a.size(),a.data()).ok())<<dim; } }
