@@ -1,4 +1,7 @@
 #include "lanlink/discovery/discovery.hpp"
+#include "lanlink/platform/fake_input_backend.hpp"
+#include "lanlink/runtime/node.hpp"
+#include "lanlink/topology/topology.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -81,6 +84,8 @@ void inject(std::uint16_t port, std::string_view packet) {
   if (sent != static_cast<decltype(sent)>(packet.size()))
     throw std::runtime_error("discovery test send failed");
 }
+
+bool running_topology_update_case();
 
 int discovery_flow_case() {
   const auto port = static_cast<std::uint16_t>(43000u + (process_id() % 1000u));
@@ -194,7 +199,47 @@ int discovery_flow_case() {
 
   if (first_service.value().stop().ok() == false || second_service.value().stop().ok() == false)
     return 1;
+  if (!running_topology_update_case()) {
+    std::cerr << "running topology update failed\n";
+    return 1;
+  }
   return 0;
+}
+
+bool running_topology_update_case() {
+  lanlink::platform::FakeInputBackend backend;
+  lanlink::runtime::InputRuntimeConfig config;
+  config.local_device = id(1);
+  config.source = id(1);
+  config.peer = lanlink::AuthenticatedPeer{id(2)};
+  config.local_display = id(11);
+  config.listen_endpoint = {"127.0.0.1", 0};
+  config.backend = &backend;
+  auto runtime_result = lanlink::runtime::InputNodeRuntime::create(config);
+  if (!runtime_result.ok()) return false;
+  auto runtime = std::move(runtime_result.value());
+
+  lanlink::ScreenTopology initial;
+  if (!initial.set_snapshot(1,
+                            {{id(1), id(11), {0, 0, 100, 100}, 1.0},
+                             {id(2), id(22), {100, 0, 200, 100}, 1.0}},
+                            {{id(11), lanlink::Edge::kRight, id(22), lanlink::Edge::kLeft,
+                              0.0, 1.0, 1}})
+           .ok())
+    return false;
+  if (!runtime->set_topology(std::move(initial)).ok() || !runtime->start().ok()) return false;
+
+  lanlink::ScreenTopology discovered;
+  if (!discovered.set_snapshot(2,
+                               {{id(1), id(11), {0, 0, 100, 100}, 1.0},
+                                {id(2), id(44), {100, 0, 300, 100}, 1.0}},
+                               {{id(11), lanlink::Edge::kRight, id(44), lanlink::Edge::kLeft,
+                                 0.0, 1.0, 2}})
+            .ok())
+    return false;
+  const bool updated = runtime->set_topology(std::move(discovered)).ok();
+  const bool stopped = runtime->stop(lanlink::IClock::Clock::now()).ok();
+  return updated && stopped;
 }
 
 int run_case(const std::string& executable, const std::string& arguments,

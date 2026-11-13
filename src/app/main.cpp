@@ -157,6 +157,7 @@ int main(int argc, char** argv) {
                                 : lanlink::app::RemoteSide::kLeft;
     }
   }
+  bool topology_selected = selected_peer.has_value();
 
   auto topology = lanlink::app::make_topology(options);
   if (!topology.ok()) {
@@ -235,6 +236,28 @@ int main(int argc, char** argv) {
     } else if (!options.connect.has_value() && !discovery_connect_requested) {
       const auto* peer = select_peer(discovered.value(), options.peer_id);
       if (peer != nullptr) {
+        if (!topology_selected) {
+          if (!options.peer_display_id_explicit) options.peer_display_id = peer->display.low;
+          if (!options.remote_side_explicit) {
+            options.remote_side = local_id_less(options.device_id, peer->device)
+                                      ? lanlink::app::RemoteSide::kRight
+                                      : lanlink::app::RemoteSide::kLeft;
+          }
+          auto selected_topology = lanlink::app::make_topology(options);
+          if (!selected_topology.ok()) {
+            std::cerr << "error: " << selected_topology.error() << '\n';
+            stop_requested.store(true, std::memory_order_relaxed);
+            continue;
+          }
+          auto updated = runtime->set_topology(std::move(selected_topology.value()));
+          if (!updated.ok()) {
+            std::cerr << "error: " << updated.error() << '\n';
+            stop_requested.store(true, std::memory_order_relaxed);
+            continue;
+          }
+          topology_selected = true;
+        }
+        selected_peer = *peer;
         // The lower device ID owns the outgoing connection. The higher ID
         // remains a listener and accepts the reciprocal connection.
         if (local_id_less(options.device_id, peer->device)) {
