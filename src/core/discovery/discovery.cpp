@@ -124,7 +124,13 @@ Result<DiscoveryAnnouncement> DiscoveryService::decode_announcement(std::string_
 
 DiscoveryService::DiscoveryService(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
 DiscoveryService::DiscoveryService(DiscoveryService&&) noexcept = default;
-DiscoveryService& DiscoveryService::operator=(DiscoveryService&&) noexcept = default;
+DiscoveryService& DiscoveryService::operator=(DiscoveryService&& other) noexcept {
+    if (this == &other) return *this;
+    (void)stop();
+    impl_ = std::move(other.impl_);
+    peers_ = std::move(other.peers_);
+    return *this;
+}
 DiscoveryService::~DiscoveryService() { (void)stop(); }
 
 Result<DiscoveryService> DiscoveryService::bind(const DiscoveryConfig& config) {
@@ -164,7 +170,8 @@ Result<DiscoveryService> DiscoveryService::bind(const DiscoveryConfig& config) {
     auto impl = std::make_unique<Impl>();
     impl->socket = socket;
     impl->config = config;
-    impl->next_announce = IClock::Clock::now();
+    // Epoch makes the first poll announce regardless of the caller's injected clock.
+    impl->next_announce = IClock::time_point{};
     return Result<DiscoveryService>::success(DiscoveryService(std::move(impl)));
 }
 
@@ -190,16 +197,17 @@ Result<std::vector<DiscoveryPeer>> DiscoveryService::poll(IClock::time_point now
         sockaddr_in source{};
 #if defined(_WIN32)
         int source_size = sizeof(source);
-        const int received = recvfrom(impl_->socket, packet.data(), 512, 0,
+        const int received = recvfrom(impl_->socket, packet.data(), static_cast<int>(packet.size()), 0,
                                       reinterpret_cast<sockaddr*>(&source), &source_size);
         if (received < 0 && WSAGetLastError() == WSAEWOULDBLOCK) break;
 #else
         socklen_t source_size = sizeof(source);
-        const auto received = recvfrom(impl_->socket, packet.data(), 512, 0,
+        const auto received = recvfrom(impl_->socket, packet.data(), packet.size(), 0,
                                        reinterpret_cast<sockaddr*>(&source), &source_size);
         if (received < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) break;
 #endif
         if (received <= 0) break;
+        if (received > 512) continue;
         auto decoded = decode_announcement(std::string_view(packet.data(), static_cast<std::size_t>(received)));
         if (!decoded.ok() || decoded.value().group != impl_->config.group || decoded.value().device == impl_->config.device_id)
             continue;
