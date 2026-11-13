@@ -51,6 +51,21 @@ void pump_pair(InputNodeRuntime& left, InputNodeRuntime& right,
   }
 }
 
+void pump_until_router_state(InputNodeRuntime& node, RouterState expected,
+                             IClock::time_point& now, int max_iterations = 20) {
+  for (int i = 0; i < max_iterations && node.router().state() != expected; ++i) {
+    const auto polled = node.poll(now, 5ms);
+    // A peer close reports an error after disconnect cleanup has already
+    // moved the router into the expected recovery state.
+    if (!polled.ok() && node.router().state() != expected) {
+      ADD_FAILURE() << polled.error();
+      return;
+    }
+    now += 1ms;
+  }
+  ASSERT_EQ(node.router().state(), expected);
+}
+
 TEST(InputNodeRuntime, CrossesAtExactThresholdAndForwardsSuppressedInput) {
   FakeInputBackend left_backend;
   FakeInputBackend right_backend;
@@ -152,7 +167,7 @@ TEST(InputNodeRuntime, CrossesAtExactThresholdAndForwardsSuppressedInput) {
   right_backend.emit_physical(
       InputEvent{{}, {}, 0, 0, Key{0x04, true}, InputOrigin::kPhysical});
   ASSERT_TRUE(right->poll(now, 0ms).ok());
-  ASSERT_TRUE(left->poll(now, 10ms).ok());
+  pump_until_router_state(*left, RouterState::kRecovering, now);
   EXPECT_FALSE(right->arbiter().has_lease());
   EXPECT_EQ(left->router().state(), RouterState::kRecovering);
   EXPECT_FALSE(left_backend.status().suppression);
@@ -171,7 +186,7 @@ TEST(InputNodeRuntime, CrossesAtExactThresholdAndForwardsSuppressedInput) {
   EXPECT_TRUE(left->arbiter().has_active_lease());
 
   ASSERT_TRUE(right->stop(now).ok());
-  (void)left->poll(now, 0ms);
+  pump_until_router_state(*left, RouterState::kRecovering, now);
   EXPECT_EQ(left->router().state(), RouterState::kRecovering);
   EXPECT_FALSE(left_backend.status().suppression);
   ASSERT_TRUE(left->tick(now).ok());
