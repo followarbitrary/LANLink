@@ -2,6 +2,7 @@
 
 #include <QObject>
 
+#include <functional>
 #include <memory>
 #include <optional>
 
@@ -18,7 +19,9 @@ class RuntimeWorker final : public QObject {
   Q_OBJECT
 
  public:
-  explicit RuntimeWorker(QObject* parent = nullptr);
+  using BackendFactory = std::function<std::unique_ptr<platform::IInputBackend>()>;
+
+  explicit RuntimeWorker(QObject* parent = nullptr, BackendFactory backend_factory = {});
 
   static Result<void> validate_options(const app::AppOptions& options);
 
@@ -49,6 +52,7 @@ class RuntimeWorker final : public QObject {
   void stop_runtime();
 
   QTimer* timer_{nullptr};
+  BackendFactory backend_factory_;
   app::AppOptions options_;
   std::unique_ptr<platform::IInputBackend> backend_;
   std::optional<discovery::DiscoveryService> discovery_;

@@ -19,7 +19,8 @@ class MainWindow final : public QMainWindow {
   Q_OBJECT
 
  public:
-  explicit MainWindow(QWidget* parent = nullptr);
+  explicit MainWindow(QWidget* parent = nullptr,
+                      RuntimeWorker::BackendFactory backend_factory = {});
   ~MainWindow() override;
 
   void showPage(int index);
@@ -67,6 +68,7 @@ class MainWindow final : public QMainWindow {
   QAction* trayClipboard_{nullptr};
   QThread* runtimeThread_{nullptr};
   RuntimeWorker* runtimeWorker_{nullptr};
+  RuntimeWorker::BackendFactory backend_factory_;
   bool draggingWindow_{false};
   QPoint windowDragOffset_;
 };

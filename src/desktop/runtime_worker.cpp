@@ -6,6 +6,7 @@
 #include <cmath>
 #include <memory>
 #include <string>
+#include <utility>
 
 #if defined(_WIN32)
 #include "lanlink/platform/windows_input_backend.hpp"
@@ -32,7 +33,21 @@ QString endpoint_text(const transport::Endpoint& endpoint) {
 
 }  // namespace
 
-RuntimeWorker::RuntimeWorker(QObject* parent) : QObject(parent), timer_(new QTimer(this)) {
+RuntimeWorker::RuntimeWorker(QObject* parent, BackendFactory backend_factory)
+    : QObject(parent), timer_(new QTimer(this)), backend_factory_(std::move(backend_factory)) {
+  if (!backend_factory_) {
+    backend_factory_ = [] {
+#if defined(_WIN32)
+      return std::unique_ptr<platform::IInputBackend>(
+          std::make_unique<platform::WindowsInputBackend>());
+#elif defined(__APPLE__)
+      return std::unique_ptr<platform::IInputBackend>(
+          std::make_unique<platform::MacOSInputBackend>());
+#else
+      return std::unique_ptr<platform::IInputBackend>{};
+#endif
+    };
+  }
   timer_->setInterval(10);
   connect(timer_, &QTimer::timeout, this, &RuntimeWorker::pump);
 }
@@ -85,14 +100,11 @@ void RuntimeWorker::start(app::AppOptions options) {
   }
   options_ = std::move(options);
 
-#if defined(_WIN32)
-  backend_ = std::make_unique<platform::WindowsInputBackend>();
-#elif defined(__APPLE__)
-  backend_ = std::make_unique<platform::MacOSInputBackend>();
-#else
-  fail(QStringLiteral("LANLink requires Windows or macOS for native input forwarding"));
-  return;
-#endif
+  backend_ = backend_factory_();
+  if (!backend_) {
+    fail(QStringLiteral("LANLink requires Windows or macOS for native input forwarding"));
+    return;
+  }
 
   const auto bounds = backend_->display_bounds();
   if (!bounds.has_value()) {

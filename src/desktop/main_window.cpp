@@ -18,6 +18,8 @@
 #include <QStyle>
 #include <QVBoxLayout>
 
+#include <utility>
+
 namespace lanlink::desktop {
 namespace {
 
@@ -51,7 +53,8 @@ QPushButton* navButton(const QString& text, IconKind kind) {
 
 }  // namespace
 
-MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
+MainWindow::MainWindow(QWidget* parent, RuntimeWorker::BackendFactory backend_factory)
+    : QMainWindow(parent), backend_factory_(std::move(backend_factory)) {
   setWindowTitle(QStringLiteral("LANLink"));
   setWindowFlags(Qt::FramelessWindowHint | Qt::Window);
   setAttribute(Qt::WA_TranslucentBackground, false);
@@ -90,6 +93,7 @@ void MainWindow::setupUi() {
   titleLayout->addStretch();
   auto* running = new QLabel(QStringLiteral("●  未运行"));
   statusLabel_ = running;
+  running->setObjectName(QStringLiteral("runtimeHeaderStatus"));
   running->setAlignment(Qt::AlignCenter);
   running->setMinimumWidth(124);
   running->setStyleSheet(QStringLiteral(
@@ -185,6 +189,7 @@ void MainWindow::setupUi() {
   auto* footerLayout = new QHBoxLayout(footer);
   footerLayout->setContentsMargins(22, 0, 22, 0);
   footerLabel_ = new QLabel(QStringLiteral("LANLink · 未启动"));
+  footerLabel_->setObjectName(QStringLiteral("footerStatusLabel"));
   footerLabel_->setStyleSheet(QStringLiteral("color: #97a9bd; font-size: 13px;"));
   footerLayout->addWidget(footerLabel_);
   footerLayout->addStretch();
@@ -305,7 +310,7 @@ void MainWindow::startRuntime(const app::AppOptions& options) {
   updateRuntimeControls();
 
   runtimeThread_ = new QThread(this);
-  runtimeWorker_ = new RuntimeWorker;
+  runtimeWorker_ = new RuntimeWorker(nullptr, backend_factory_);
   runtimeWorker_->moveToThread(runtimeThread_);
   connect(runtimeThread_, &QThread::finished, runtimeWorker_, &QObject::deleteLater);
   connect(runtimeWorker_, &RuntimeWorker::statusChanged, this, &MainWindow::onRuntimeStatusChanged);

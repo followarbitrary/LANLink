@@ -48,7 +48,11 @@ endif()
 
 if(LANLINK_BUILD_DESKTOP)
   find_package(Qt6 COMPONENTS Widgets QUIET)
-  if(Qt6_FOUND)
+  set(LANLINK_QT6_WIDGETS_FOUND ${Qt6_FOUND})
+  if(LANLINK_QT6_WIDGETS_FOUND)
+    find_package(Qt6 COMPONENTS Test QUIET)
+  endif()
+  if(LANLINK_QT6_WIDGETS_FOUND)
     add_executable(lanlink_desktop
       src/desktop/main.cpp
       src/desktop/main_window.cpp
@@ -91,7 +95,7 @@ enable_testing()
 add_executable(common_types_test tests/unit/common_types_test.cpp)
 target_link_libraries(common_types_test PRIVATE lanlink_core GTest::gtest_main)
 include(GoogleTest)
-if(LANLINK_BUILD_DESKTOP AND Qt6_FOUND)
+if(LANLINK_BUILD_DESKTOP AND LANLINK_QT6_WIDGETS_FOUND)
   add_executable(desktop_state_test tests/desktop_state_test.cpp)
   target_compile_features(desktop_state_test PRIVATE cxx_std_20)
   target_include_directories(desktop_state_test PRIVATE
@@ -189,15 +193,39 @@ add_test(NAME input_node_runtime COMMAND input_node_runtime_test)
 add_library(lanlink_app_support src/app/options.cpp src/app/runtime_loop.cpp)
 target_link_libraries(lanlink_app_support PUBLIC lanlink_core)
 target_compile_features(lanlink_app_support PUBLIC cxx_std_20)
-if(LANLINK_BUILD_DESKTOP AND Qt6_FOUND)
+if(LANLINK_BUILD_DESKTOP AND LANLINK_QT6_WIDGETS_FOUND)
   target_link_libraries(lanlink_desktop PRIVATE lanlink_app_support)
+endif()
+if(LANLINK_BUILD_DESKTOP AND LANLINK_QT6_WIDGETS_FOUND AND Qt6Test_FOUND)
   add_executable(runtime_worker_test tests/runtime_worker_test.cpp src/desktop/runtime_worker.cpp src/desktop/runtime_worker.hpp)
   set_target_properties(runtime_worker_test PROPERTIES AUTOMOC ON)
   target_compile_features(runtime_worker_test PRIVATE cxx_std_20)
   target_include_directories(runtime_worker_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/desktop)
-  target_link_libraries(runtime_worker_test PRIVATE lanlink_app_support Qt6::Widgets GTest::gtest_main)
+  target_link_libraries(runtime_worker_test PRIVATE lanlink_app_support Qt6::Widgets Qt6::Test GTest::gtest_main)
   gtest_discover_tests(runtime_worker_test)
   add_test(NAME runtime_worker COMMAND runtime_worker_test)
+endif()
+if(LANLINK_BUILD_DESKTOP AND LANLINK_QT6_WIDGETS_FOUND AND Qt6Test_FOUND)
+  add_executable(main_window_test
+    tests/main_window_test.cpp
+    src/desktop/main_window.cpp
+    src/desktop/main_window.hpp
+    src/desktop/pages.cpp
+    src/desktop/pages.hpp
+    src/desktop/topology_canvas.cpp
+    src/desktop/topology_canvas.hpp
+    src/desktop/runtime_worker.cpp
+    src/desktop/runtime_worker.hpp)
+  set_target_properties(main_window_test PROPERTIES AUTOMOC ON)
+  target_compile_features(main_window_test PRIVATE cxx_std_20)
+  target_include_directories(main_window_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/desktop)
+  target_link_libraries(main_window_test PRIVATE
+    lanlink_app_support Qt6::Widgets Qt6::Test GTest::gtest_main)
+  gtest_discover_tests(main_window_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+  add_test(NAME main_window COMMAND main_window_test)
+  set_tests_properties(main_window PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()
 
 add_executable(app_runtime_loop_test tests/unit/app_runtime_loop_test.cpp)
