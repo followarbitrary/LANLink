@@ -38,7 +38,21 @@ Check the command-line interface with:
 .\build\debug\lanlink_app.exe --help
 ```
 
-The help output lists these flags: `--device-id`, `--peer-id`, `--listen-port`, `--connect`, `--display-id`, `--peer-display-id`, `--remote-side`, `--width`, `--height`, `--peer-width`, `--peer-height`, and `--help`. Device and display IDs are numeric; `--remote-side` accepts only `left` or `right`; `--connect` takes `HOST:PORT`. LANLink reads the local display bounds from the native backend at startup: macOS uses Quartz logical points and Windows uses the DPI-aware monitor coordinate space. The width and height flags remain optional overrides for diagnostics. Peer dimensions are no longer required because the handoff sends an edge ratio and the target maps it into its own detected display bounds.
+The help output lists these flags: `--device-id`, `--peer-id`, `--listen-port`, `--connect`, `--group`, `--discovery-port`, `--display-id`, `--peer-display-id`, `--remote-side`, `--width`, `--height`, `--peer-width`, `--peer-height`, and `--help`. Device and display IDs are numeric; `--remote-side` accepts only `left` or `right`; `--connect` takes `HOST:PORT`. LANLink reads the local display bounds from the native backend at startup: macOS uses Quartz logical points and Windows uses the DPI-aware monitor coordinate space. The width and height flags remain optional overrides for diagnostics. Peer dimensions are no longer required because the handoff sends an edge ratio and the target maps it into its own detected display bounds.
+
+## Automatic LAN discovery
+
+When `--peer-id` and `--connect` are omitted, LANLink announces itself on the `lanlink` group over UDP port `41001` and waits for a visible peer. The lowest device ID selects the outgoing connection. The selected peer's display ID is used automatically, and the side is inferred from device ID ordering. Pass `--group NAME` and `--discovery-port PORT` when separate pairs share a network.
+
+```sh
+# Device A, lower ID, connects automatically
+./build/debug/lanlink_app --device-id 1 --listen-port 41000
+
+# Device B, higher ID, listens and accepts automatically
+./build/debug/lanlink_app --device-id 2 --listen-port 41000
+```
+
+Use `--peer-id` to restrict discovery to one device. Explicit `--display-id`, `--peer-display-id`, and `--remote-side` values take precedence over discovered defaults. Use `--connect HOST:PORT` for an explicit two-node connection. Discovery continues to poll while the node runs, while an outgoing endpoint selected from discovery remains pinned for reconnects.
 
 ## Two-device LAN test
 

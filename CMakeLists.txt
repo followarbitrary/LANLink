@@ -157,6 +157,7 @@ add_test(NAME app_runtime_loop COMMAND app_runtime_loop_test)
 
 add_executable(app_entry_test tests/integration/app_entry_test.cpp)
 target_compile_features(app_entry_test PRIVATE cxx_std_20)
+target_link_libraries(app_entry_test PRIVATE lanlink_core)
 
 add_executable(lanlink_app src/app/main.cpp)
 target_link_libraries(lanlink_app PRIVATE lanlink_app_support)
@@ -165,6 +166,7 @@ add_dependencies(app_entry_test lanlink_app)
 
 add_test(NAME app_entry_help COMMAND app_entry_test $<TARGET_FILE:lanlink_app> help)
 add_test(NAME app_entry_invalid_port COMMAND app_entry_test $<TARGET_FILE:lanlink_app> invalid-port)
+add_test(NAME app_entry_discovery_flow COMMAND app_entry_test $<TARGET_FILE:lanlink_app> discovery-flow)
 
 add_executable(app_options_test tests/unit/app_options_test.cpp)
 target_link_libraries(app_options_test PRIVATE lanlink_app_support GTest::gtest_main)
