@@ -18,6 +18,7 @@ add_library(lanlink_core
   src/core/common/clock.cpp
   src/core/common/debug.cpp
   src/core/common/liveness.cpp
+  src/core/discovery/discovery.cpp
   src/core/topology/topology.cpp
   src/core/input/arbiter.cpp
   src/core/input/router.cpp
@@ -61,6 +62,11 @@ target_link_libraries(common_types_test PRIVATE lanlink_core GTest::gtest_main)
 include(GoogleTest)
 gtest_discover_tests(common_types_test)
 add_test(NAME common_types COMMAND common_types_test)
+
+add_executable(discovery_test tests/unit/discovery_test.cpp)
+target_link_libraries(discovery_test PRIVATE lanlink_core GTest::gtest_main)
+gtest_discover_tests(discovery_test)
+add_test(NAME discovery COMMAND discovery_test)
 
 add_executable(protocol_wire_test tests/unit/protocol_wire_test.cpp)
 target_link_libraries(protocol_wire_test PRIVATE lanlink_core GTest::gtest_main)
