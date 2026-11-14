@@ -1,4 +1,5 @@
 #include "lanlink/platform/fake_input_backend.hpp"
+#include "lanlink/platform/fake_clipboard_backend.hpp"
 
 #include <gtest/gtest.h>
 
@@ -162,6 +163,66 @@ TEST(BackendContract, ReportsConfiguredDisplayScale) {
   EXPECT_DOUBLE_EQ(backend.display_scale(), 1.0);
   backend.set_display_scale(1.5);
   EXPECT_DOUBLE_EQ(backend.display_scale(), 1.5);
+}
+
+TEST(ClipboardBackendContract, PollDeliversQueuedChangeExactlyOnce) {
+  FakeClipboardBackend backend;
+  ClipboardData expected;
+  expected.text = "hello";
+  expected.html = "<b>hello</b>";
+  expected.png = std::vector<std::uint8_t>{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'};
+  std::vector<ClipboardData> seen;
+  ASSERT_TRUE(backend.start([&](ClipboardData data) { seen.push_back(std::move(data)); }).ok());
+
+  backend.emit_change(expected);
+  ASSERT_TRUE(backend.poll().ok());
+  ASSERT_EQ(seen.size(), 1u);
+  EXPECT_EQ(seen.front(), expected);
+  ASSERT_TRUE(backend.poll().ok());
+  EXPECT_EQ(seen.size(), 1u);
+}
+
+TEST(ClipboardBackendContract, WriteUpdatesDataWithoutEchoAndClearEmptiesIt) {
+  FakeClipboardBackend backend;
+  ASSERT_TRUE(backend.start({}).ok());
+  ClipboardData expected;
+  expected.text = "copied";
+  ASSERT_TRUE(backend.write(expected).ok());
+  EXPECT_EQ(backend.data(), expected);
+  EXPECT_EQ(backend.write_count(), 1u);
+  ASSERT_TRUE(backend.poll().ok());
+
+  ASSERT_TRUE(backend.clear().ok());
+  EXPECT_EQ(backend.data(), ClipboardData{});
+  EXPECT_EQ(backend.write_count(), 2u);
+  ASSERT_TRUE(backend.poll().ok());
+}
+
+TEST(ClipboardBackendContract, EqualityDistinguishesAbsentAndEmptyTextAndHtml) {
+  ClipboardData absent;
+  ClipboardData empty_text;
+  empty_text.text = "";
+  ClipboardData empty_html;
+  empty_html.html = "";
+  EXPECT_NE(absent, empty_text);
+  EXPECT_NE(absent, empty_html);
+  EXPECT_NE(empty_text, empty_html);
+  EXPECT_EQ(absent.byte_size(), 0u);
+  EXPECT_EQ(empty_text.byte_size(), 0u);
+}
+
+TEST(ClipboardBackendContract, RejectsOversizedAndInvalidPngWrites) {
+  FakeClipboardBackend backend;
+  ASSERT_TRUE(backend.start({}).ok());
+
+  ClipboardData oversized;
+  oversized.text = std::string(kMaxClipboardDataSize + 1, 'x');
+  EXPECT_FALSE(backend.write(oversized).ok());
+  EXPECT_FALSE(backend.last_error().empty());
+
+  ClipboardData invalid_png;
+  invalid_png.png = std::vector<std::uint8_t>{0, 1, 2, 3};
+  EXPECT_FALSE(backend.write(invalid_png).ok());
 }
 
 }  // namespace

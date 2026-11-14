@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.23)
 project(LANLink LANGUAGES CXX)
 
+if(APPLE)
+  enable_language(OBJCXX)
+endif()
+
 option(LANLINK_BUILD_DESKTOP "Build the optional Qt 6 desktop control panel" ON)
 
 option(LANLINK_ENABLE_TLS "Build the OpenSSL TLS transport backend" ON)
@@ -31,6 +35,9 @@ add_library(lanlink_core
   src/core/transport/manager.cpp
   src/core/runtime/node.cpp
   src/platform/fake_input_backend.cpp
+  src/platform/fake_clipboard_backend.cpp
+  src/platform/windows/windows_clipboard_backend.cpp
+  src/platform/macos/macos_clipboard_backend.cpp
   src/platform/key_mapping.cpp
   src/platform/windows/windows_input_backend.cpp
   src/platform/macos/macos_input_backend.cpp
@@ -97,10 +104,12 @@ if(LANLINK_BUILD_DESKTOP)
 endif()
 target_compile_definitions(lanlink_core PUBLIC LANLINK_HAS_OPENSSL=${LANLINK_HAS_OPENSSL})
 if(APPLE)
-  target_link_libraries(lanlink_core PRIVATE "-framework ApplicationServices")
+  set_source_files_properties(src/platform/macos/macos_clipboard_backend.cpp
+    PROPERTIES LANGUAGE OBJCXX)
+  target_link_libraries(lanlink_core PRIVATE "-framework ApplicationServices" "-framework AppKit")
 endif()
 if(WIN32)
-  target_link_libraries(lanlink_core PRIVATE user32 ws2_32)
+  target_link_libraries(lanlink_core PRIVATE user32 ws2_32 ole32 windowscodecs)
 endif()
 if(MSVC)
   target_compile_options(lanlink_core PRIVATE /W4)
