@@ -115,6 +115,10 @@ When `--peer-id` and `--connect` are omitted, LANLink announces itself on the `l
 
 Use `--peer-id` to restrict discovery to one device. Explicit `--display-id`, `--peer-display-id`, and `--remote-side` values take precedence over discovered defaults. Use `--connect HOST:PORT` for an explicit two-node connection. Discovery continues to poll while the node runs, while an outgoing endpoint selected from discovery remains pinned for reconnects.
 
+## Topology synchronization
+
+Topology edits made in the desktop control panel are broadcast as complete snapshots to the configured discovery group. Each snapshot carries the originating device ID and a monotonically ordered revision, so peers can retain the newest state they have received. A node periodically re-announces its own complete snapshot on that group, allowing nodes that start later or miss a datagram to converge eventually. Applying a remote snapshot updates the local runtime and desktop view without broadcasting that remote update again. The current desktop editor presents the two-device layout as two editable device cards.
+
 To exercise clipboard synchronization during a two-device test, pass `--clipboard` to both processes. The setting is local to each process, so leaving it off on either peer keeps that peer from publishing or applying clipboard updates.
 
 ## Two-device LAN test
