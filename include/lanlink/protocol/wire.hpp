@@ -30,7 +30,6 @@ constexpr std::uint32_t kMaxClipboardPackageSize = 4 * 1024 * 1024;
 // offset (4), and data length (4) bytes.
 constexpr std::uint32_t kMaxClipboardChunkDataSize =
     static_cast<std::uint32_t>(kMaxFrameSize - kHeaderSize - 16 - 8 - 1 - 4 - 4);
-constexpr std::uint32_t kMaxClipboardChunkSize = kMaxClipboardChunkDataSize;
 // Keep untrusted display metadata inside a desktop-sized coordinate range.
 // This is generous enough for large multi-monitor walls while preventing
 // overflow-prone values from entering cursor tracking and coordinate mapping.

@@ -32,8 +32,18 @@ bool valid_edge(std::uint8_t value) {
 bool zero(const Uuid128& id) { return id.high == 0 && id.low == 0; }
 bool finite(double value) { return std::isfinite(value); }
 
-bool valid_utf8(std::span<const std::uint8_t> bytes) {
+// Chunks can split a code point. Validate complete code points while allowing
+// an incomplete prefix or suffix for the session-level reassembly check.
+bool valid_utf8_fragment(std::span<const std::uint8_t> bytes, bool allow_leading_continuations) {
     std::size_t offset = 0;
+    if (allow_leading_continuations) {
+        std::size_t leading_continuations = 0;
+        while (offset < bytes.size() && (bytes[offset] & 0xc0) == 0x80) {
+            ++offset;
+            if (++leading_continuations > 3)
+                return false;
+        }
+    }
     while (offset < bytes.size()) {
         const auto first = bytes[offset++];
         if (first <= 0x7f)
@@ -52,8 +62,13 @@ bool valid_utf8(std::span<const std::uint8_t> bytes) {
         } else {
             return false;
         }
-        if (offset + continuation_count > bytes.size())
-            return false;
+        if (offset + continuation_count > bytes.size()) {
+            while (offset < bytes.size()) {
+                if ((bytes[offset++] & 0xc0) != 0x80)
+                    return false;
+            }
+            return true;
+        }
         for (std::size_t i = 0; i < continuation_count; ++i) {
             const auto next = bytes[offset++];
             if ((next & 0xc0) != 0x80)
@@ -74,10 +89,15 @@ constexpr std::array<std::uint8_t, 8> kPngSignature = {
 bool valid_png_chunk(std::uint32_t offset, std::span<const std::uint8_t> data) {
     if (data.empty())
         return false;
-    if (offset != 0)
+    if (offset >= kPngSignature.size())
         return true;
-    return data.size() >= kPngSignature.size() &&
-           std::equal(kPngSignature.begin(), kPngSignature.end(), data.begin());
+    const auto expected = kPngSignature.size() - offset;
+    if (data.size() > expected)
+        return std::equal(kPngSignature.begin() + static_cast<std::ptrdiff_t>(offset),
+                          kPngSignature.end(), data.begin());
+    return std::equal(kPngSignature.begin() + static_cast<std::ptrdiff_t>(offset),
+                      kPngSignature.begin() + static_cast<std::ptrdiff_t>(offset + data.size()),
+                      data.begin());
 }
 
 bool valid_clipboard_begin(const ClipboardBegin& value) {
@@ -106,7 +126,7 @@ bool valid_clipboard_chunk(const ClipboardChunk& value) {
     switch (value.format) {
     case ClipboardFormat::kText:
     case ClipboardFormat::kHtml:
-        return valid_utf8(value.data);
+        return valid_utf8_fragment(value.data, value.offset != 0);
     case ClipboardFormat::kPng:
         return valid_png_chunk(value.offset, value.data);
     }

@@ -265,6 +265,38 @@ TEST(ProtocolWire, RejectsMalformedClipboardMetadataAndPayloads) {
                      .ok());
 }
 
+TEST(ProtocolWire, AllowsUtf8CodePointsToCrossChunkBoundaries) {
+    const ClipboardChunk first{id(2, 2), 1, ClipboardFormat::kText, 0, {0xe2, 0x82}};
+    const ClipboardChunk second{id(2, 2), 1, ClipboardFormat::kText, 2, {0xac}};
+    EXPECT_TRUE(encode(first).ok());
+    EXPECT_TRUE(encode(second).ok());
+}
+
+TEST(ProtocolWire, AllowsPngSignatureToCrossChunkBoundaries) {
+    const ClipboardChunk first{id(2, 2), 1, ClipboardFormat::kPng, 0, {0x89, 'P', 'N'}};
+    const ClipboardChunk second{id(2, 2), 1, ClipboardFormat::kPng, 3,
+                                {'G', 0x0d, 0x0a, 0x1a, 0x0a}};
+    EXPECT_TRUE(encode(first).ok());
+    EXPECT_TRUE(encode(second).ok());
+}
+
+TEST(ProtocolWire, RejectsMalformedClipboardFramesOnDecode) {
+    auto begin = encode(ClipboardBegin{id(3, 3), 1, 0x01, 1, 1, 0, 0});
+    ASSERT_TRUE(begin.ok());
+    auto begin_bytes = begin.value();
+    begin_bytes[kHeaderSize + 16 + 8] = 0x80;
+    EXPECT_FALSE(decode(begin_bytes).ok());
+
+    auto chunk = encode(ClipboardChunk{id(3, 3), 1, ClipboardFormat::kText, 0, {'x'}});
+    ASSERT_TRUE(chunk.ok());
+    auto chunk_bytes = chunk.value();
+    chunk_bytes[kHeaderSize + 16 + 8] = 0xff;
+    EXPECT_FALSE(decode(chunk_bytes).ok());
+    chunk_bytes = chunk.value();
+    chunk_bytes[kHeaderSize + 16 + 8 + 1 + 4 + 3] = 0xff;
+    EXPECT_FALSE(decode(chunk_bytes).ok());
+}
+
 TEST(ProtocolWire, FrameDecoderHandlesFragmentedClipboardSequence) {
     const ClipboardBegin begin{id(30, 31), 7, 0x01, 5, 5, 0, 0};
     const ClipboardChunk chunk{id(30, 31), 7, ClipboardFormat::kText, 0,
