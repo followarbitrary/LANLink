@@ -15,13 +15,13 @@
 
 namespace lanlink::protocol {
 
-// Version 7 adds chunked clipboard transfer messages. Version 6 added the
+// Version 8 adds chunked file transfer messages. Version 7 adds chunked clipboard transfer messages. Version 6 added the
 // target pointer injection capability to DisplayInfo.
 // Version 5 added periodic target cursor position corrections and version 4
 // added absolute PointerMove input payloads. Each peer advertises the same
 // version during Hello so an older executable rejects the connection before
 // decoding newer messages.
-constexpr std::uint8_t kProtocolVersion = 7;
+constexpr std::uint8_t kProtocolVersion = 8;
 constexpr std::size_t kHeaderSize = 12;
 constexpr std::size_t kMaxFrameSize = 64 * 1024;
 constexpr std::size_t kMaxErrorText = 4 * 1024;
@@ -36,6 +36,11 @@ constexpr std::uint32_t kMaxClipboardPayloadSize =
 // offset (4), and data length (4) bytes.
 constexpr std::uint32_t kMaxClipboardChunkDataSize =
     static_cast<std::uint32_t>(kMaxFrameSize - kHeaderSize - 16 - 8 - 1 - 4 - 4);
+constexpr std::uint64_t kMaxFileSize = 4ULL * 1024ULL * 1024ULL * 1024ULL;
+constexpr std::size_t kMaxFileNameSize = 255;
+// FileChunk payload overhead is source (16), transfer (16), offset (8), and
+// data length (4) bytes.
+constexpr std::size_t kMaxFileChunkDataSize = kMaxFrameSize - kHeaderSize - 16 - 16 - 8 - 4;
 // Keep untrusted display metadata inside a desktop-sized coordinate range.
 // This is generous enough for large multi-monitor walls while preventing
 // overflow-prone values from entering cursor tracking and coordinate mapping.
@@ -60,12 +65,25 @@ enum class MessageType : std::uint8_t {
     kClipboardBegin,
     kClipboardChunk,
     kClipboardEnd,
+    kFileBegin,
+    kFileChunk,
+    kFileEnd,
+    kFileCancel,
+    kFileStatus,
 };
 
 enum class ClipboardFormat : std::uint8_t {
     kText = 1,
     kHtml = 2,
     kPng = 3,
+};
+
+enum class FileStatusCode : std::uint8_t {
+    kAccepted = 1,
+    kProgress,
+    kCompleted,
+    kFailed,
+    kCanceled,
 };
 
 struct Hello {
@@ -182,11 +200,47 @@ struct ClipboardEnd {
     std::uint64_t sequence{};
     friend bool operator==(const ClipboardEnd&, const ClipboardEnd&) = default;
 };
+struct FileBegin {
+    DeviceId source;
+    Uuid128 transfer;
+    std::string name;
+    std::uint64_t total_size{};
+    friend bool operator==(const FileBegin&, const FileBegin&) = default;
+};
+struct FileChunk {
+    DeviceId source;
+    Uuid128 transfer;
+    std::uint64_t offset{};
+    std::vector<std::uint8_t> data;
+    friend bool operator==(const FileChunk&, const FileChunk&) = default;
+};
+struct FileEnd {
+    DeviceId source;
+    Uuid128 transfer;
+    std::uint64_t total_size{};
+    friend bool operator==(const FileEnd&, const FileEnd&) = default;
+};
+struct FileCancel {
+    DeviceId source;
+    Uuid128 transfer;
+    std::string reason;
+    friend bool operator==(const FileCancel&, const FileCancel&) = default;
+};
+struct FileStatus {
+    DeviceId source;
+    Uuid128 transfer;
+    FileStatusCode status{FileStatusCode::kAccepted};
+    std::uint64_t bytes{};
+    std::uint64_t total_size{};
+    std::string message;
+    friend bool operator==(const FileStatus&, const FileStatus&) = default;
+};
 
 using Message =
     std::variant<Hello, DisplayInfo, PointerPosition, Heartbeat, AcquireRequest, AcquireResponse,
                  ActivateRequest, ActivateAck, RenewRequest, RenewAck, InputMessage, Release,
-                 Revoke, ErrorMessage, ClipboardBegin, ClipboardChunk, ClipboardEnd>;
+                 Revoke, ErrorMessage, ClipboardBegin, ClipboardChunk, ClipboardEnd, FileBegin,
+                 FileChunk, FileEnd, FileCancel, FileStatus>;
 
 Result<std::vector<std::uint8_t>> encode(const Message& message);
 Result<Message> decode(std::span<const std::uint8_t> frame);

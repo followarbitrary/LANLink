@@ -14,7 +14,7 @@ namespace {
 constexpr std::uint8_t to_u8(MessageType type) { return static_cast<std::uint8_t>(type); }
 
 bool valid_type(std::uint8_t value) {
-    return value >= to_u8(MessageType::kHello) && value <= to_u8(MessageType::kClipboardEnd);
+    return value >= to_u8(MessageType::kHello) && value <= to_u8(MessageType::kFileStatus);
 }
 bool valid_clipboard_format(std::uint8_t value) {
     return value >= static_cast<std::uint8_t>(ClipboardFormat::kText) &&
@@ -134,6 +134,81 @@ bool valid_clipboard_chunk(const ClipboardChunk& value) {
     return false;
 }
 
+bool valid_utf8_string(std::span<const std::uint8_t> bytes) {
+    std::size_t offset = 0;
+    while (offset < bytes.size()) {
+        const auto first = bytes[offset++];
+        if (first <= 0x7f)
+            continue;
+        std::size_t continuation_count = 0;
+        std::uint32_t codepoint = 0;
+        if (first >= 0xc2 && first <= 0xdf) {
+            codepoint = first & 0x1f;
+            continuation_count = 1;
+        } else if (first >= 0xe0 && first <= 0xef) {
+            codepoint = first & 0x0f;
+            continuation_count = 2;
+        } else if (first >= 0xf0 && first <= 0xf4) {
+            codepoint = first & 0x07;
+            continuation_count = 3;
+        } else {
+            return false;
+        }
+        if (offset + continuation_count > bytes.size())
+            return false;
+        for (std::size_t i = 0; i < continuation_count; ++i) {
+            const auto next = bytes[offset++];
+            if ((next & 0xc0) != 0x80)
+                return false;
+            codepoint = (codepoint << 6) | (next & 0x3f);
+        }
+        if ((continuation_count == 2 && codepoint < 0x800) ||
+            (continuation_count == 3 && codepoint < 0x10000) ||
+            codepoint > 0x10ffff || (codepoint >= 0xd800 && codepoint <= 0xdfff))
+            return false;
+    }
+    return true;
+}
+
+bool valid_file_name(const std::string& name) {
+    if (name.empty() || name.size() > kMaxFileNameSize ||
+        !valid_utf8_string(std::span<const std::uint8_t>(
+            reinterpret_cast<const std::uint8_t*>(name.data()), name.size())))
+        return false;
+    for (const auto byte : name) {
+        const auto value = static_cast<unsigned char>(byte);
+        if (value < 0x20 || byte == '/' || byte == '\\')
+            return false;
+    }
+    return true;
+}
+
+bool valid_file_begin(const FileBegin& value) {
+    return !zero(value.source) && !zero(value.transfer) && valid_file_name(value.name) &&
+           value.total_size <= kMaxFileSize;
+}
+
+bool valid_file_chunk(const FileChunk& value) {
+    return !zero(value.source) && !zero(value.transfer) &&
+           value.data.size() <= kMaxFileChunkDataSize && value.offset <= kMaxFileSize &&
+           static_cast<std::uint64_t>(value.data.size()) <= kMaxFileSize - value.offset;
+}
+
+bool valid_file_end(const FileEnd& value) {
+    return !zero(value.source) && !zero(value.transfer) && value.total_size <= kMaxFileSize;
+}
+
+bool valid_file_cancel(const FileCancel& value) {
+    return !zero(value.source) && !zero(value.transfer) && value.reason.size() <= kMaxErrorText;
+}
+
+bool valid_file_status(const FileStatus& value) {
+    const auto status = static_cast<std::uint8_t>(value.status);
+    return !zero(value.source) && !zero(value.transfer) && status >= 1 && status <= 5 &&
+           value.bytes <= kMaxFileSize && value.total_size <= kMaxFileSize &&
+           value.bytes <= value.total_size && value.message.size() <= kMaxErrorText;
+}
+
 class Writer {
   public:
     void u8(std::uint8_t v) { data_.push_back(v); }
@@ -220,9 +295,14 @@ class Reader {
         offset_ += length;
         return true;
     }
-    bool bytes(std::vector<std::uint8_t>& out) {
+    bool bytes(std::vector<std::uint8_t>& out, std::size_t max_size = kMaxClipboardChunkDataSize) {
         std::uint32_t length{};
-        if (!u32(length) || length > kMaxClipboardChunkDataSize || remaining() < length)
+        if (!u32(length) || length > max_size || remaining() < length)
+            return false;
+        return raw(length, out);
+    }
+    bool raw(std::size_t length, std::vector<std::uint8_t>& out) {
+        if (length > remaining())
             return false;
         out.assign(bytes_.begin() + static_cast<std::ptrdiff_t>(offset_),
                    bytes_.begin() + static_cast<std::ptrdiff_t>(offset_ + length));
@@ -554,6 +634,52 @@ Result<std::vector<std::uint8_t>> encode(const Message& message) {
                 w.id(value.source);
                 w.u64(value.sequence);
                 return make_frame(MessageType::kClipboardEnd, std::move(w));
+            } else if constexpr (std::is_same_v<T, FileBegin>) {
+                if (!valid_file_begin(value))
+                    return Result<std::vector<std::uint8_t>>::failure("invalid file begin");
+                w.id(value.source);
+                w.id(value.transfer);
+                w.u32(static_cast<std::uint32_t>(value.name.size()));
+                for (const auto byte : value.name)
+                    w.u8(static_cast<std::uint8_t>(byte));
+                w.u64(value.total_size);
+                return make_frame(MessageType::kFileBegin, std::move(w));
+            } else if constexpr (std::is_same_v<T, FileChunk>) {
+                if (!valid_file_chunk(value))
+                    return Result<std::vector<std::uint8_t>>::failure("invalid file chunk");
+                w.id(value.source);
+                w.id(value.transfer);
+                w.u64(value.offset);
+                w.u32(static_cast<std::uint32_t>(value.data.size()));
+                for (const auto byte : value.data)
+                    w.u8(byte);
+                return make_frame(MessageType::kFileChunk, std::move(w));
+            } else if constexpr (std::is_same_v<T, FileEnd>) {
+                if (!valid_file_end(value))
+                    return Result<std::vector<std::uint8_t>>::failure("invalid file end");
+                w.id(value.source);
+                w.id(value.transfer);
+                w.u64(value.total_size);
+                return make_frame(MessageType::kFileEnd, std::move(w));
+            } else if constexpr (std::is_same_v<T, FileCancel>) {
+                if (!valid_file_cancel(value))
+                    return Result<std::vector<std::uint8_t>>::failure("invalid file cancel");
+                w.id(value.source);
+                w.id(value.transfer);
+                if (!w.string(value.reason))
+                    return Result<std::vector<std::uint8_t>>::failure("cancel reason too long");
+                return make_frame(MessageType::kFileCancel, std::move(w));
+            } else if constexpr (std::is_same_v<T, FileStatus>) {
+                if (!valid_file_status(value))
+                    return Result<std::vector<std::uint8_t>>::failure("invalid file status");
+                w.id(value.source);
+                w.id(value.transfer);
+                w.u8(static_cast<std::uint8_t>(value.status));
+                w.u64(value.bytes);
+                w.u64(value.total_size);
+                if (!w.string(value.message))
+                    return Result<std::vector<std::uint8_t>>::failure("status message too long");
+                return make_frame(MessageType::kFileStatus, std::move(w));
             } else {
                 w.u16(value.code);
                 if (!w.string(value.message))
@@ -752,6 +878,58 @@ Result<Message> decode(std::span<const std::uint8_t> frame) {
         message = value;
         break;
     }
+    case MessageType::kFileBegin: {
+        FileBegin value;
+        std::uint32_t name_size{};
+        if (!r.id(value.source) || !r.id(value.transfer) || !r.u32(name_size) ||
+            name_size == 0 || name_size > kMaxFileNameSize || r.remaining() < name_size)
+            return fail("invalid file begin");
+        std::vector<std::uint8_t> name_bytes;
+        if (!r.raw(name_size, name_bytes))
+            return fail("invalid file begin");
+        value.name.assign(reinterpret_cast<const char*>(name_bytes.data()), name_bytes.size());
+        if (!r.u64(value.total_size) || !valid_file_begin(value))
+            return fail("invalid file begin");
+        message = std::move(value);
+        break;
+    }
+    case MessageType::kFileChunk: {
+        FileChunk value;
+        if (!r.id(value.source) || !r.id(value.transfer) || !r.u64(value.offset) ||
+            !r.bytes(value.data, kMaxFileChunkDataSize) || !valid_file_chunk(value))
+            return fail("invalid file chunk");
+        message = std::move(value);
+        break;
+    }
+    case MessageType::kFileEnd: {
+        FileEnd value;
+        if (!r.id(value.source) || !r.id(value.transfer) || !r.u64(value.total_size) ||
+            !valid_file_end(value))
+            return fail("invalid file end");
+        message = value;
+        break;
+    }
+    case MessageType::kFileCancel: {
+        FileCancel value;
+        if (!r.id(value.source) || !r.id(value.transfer) || !r.string(value.reason) ||
+            !valid_file_cancel(value))
+            return fail("invalid file cancel");
+        message = std::move(value);
+        break;
+    }
+    case MessageType::kFileStatus: {
+        FileStatus value;
+        std::uint8_t status{};
+        if (!r.id(value.source) || !r.id(value.transfer) || !r.u8(status) ||
+            !r.u64(value.bytes) || !r.u64(value.total_size) || !r.string(value.message) ||
+            !valid_file_status(value))
+            return fail("invalid file status");
+        value.status = static_cast<FileStatusCode>(status);
+        if (!valid_file_status(value))
+            return fail("invalid file status");
+        message = std::move(value);
+        break;
+    }
     default:
         return fail("invalid type");
     }
@@ -783,9 +961,9 @@ Result<std::vector<Message>> FrameDecoder::feed(std::span<const std::uint8_t> by
                 break;
             auto result = decode(std::span<const std::uint8_t>(buffer_.data(), total));
             if (!result.ok()) {
-                // A frame with valid LLNK framing and a clipboard message type
-                // is untrusted clipboard data. Drop that frame and continue so
-                // malformed clipboard payloads cannot tear down keyboard/mouse
+                // A frame with valid LLNK framing and a clipboard or file
+                // message type is untrusted transfer data. Drop that frame and
+                // continue so malformed payloads cannot tear down keyboard/mouse
                 // forwarding. Corruption of framing or any other protocol
                 // message remains fatal to the connection.
                 const auto type = static_cast<MessageType>(buffer_[5]);
@@ -793,9 +971,14 @@ Result<std::vector<Message>> FrameDecoder::feed(std::span<const std::uint8_t> by
                     type == MessageType::kClipboardBegin ||
                     type == MessageType::kClipboardChunk ||
                     type == MessageType::kClipboardEnd;
+                const bool file_type = type == MessageType::kFileBegin ||
+                                       type == MessageType::kFileChunk ||
+                                       type == MessageType::kFileEnd ||
+                                       type == MessageType::kFileCancel ||
+                                       type == MessageType::kFileStatus;
                 buffer_.erase(buffer_.begin(),
                               buffer_.begin() + static_cast<std::ptrdiff_t>(total));
-                if (clipboard_type)
+                if (clipboard_type || file_type)
                     continue;
                 return Result<void>::failure(result.error());
             }

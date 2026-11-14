@@ -64,6 +64,34 @@ TEST(ProtocolWire, RoundTripsEveryMessageAndInputPayload) {
     expect_round_trip(Release{id(9, 10), 42});
     expect_round_trip(Revoke{id(9, 10), 42, RevokeReason::kProtocolError});
     expect_round_trip(ErrorMessage{17, "protocol error"});
+
+    expect_round_trip(FileBegin{id(21, 22), id(23, 24), "report.txt", 123456});
+    expect_round_trip(FileChunk{id(21, 22), id(23, 24), 60000, {1, 2, 3, 4}});
+    expect_round_trip(FileEnd{id(21, 22), id(23, 24), 123456});
+    expect_round_trip(FileCancel{id(21, 22), id(23, 24), "user canceled"});
+    expect_round_trip(FileStatus{id(21, 22), id(23, 24), FileStatusCode::kProgress,
+                                 60000, 123456, ""});
+}
+
+TEST(ProtocolWire, RejectsInvalidFileMessagesAndLimits) {
+    EXPECT_FALSE(encode(FileBegin{{}, id(1, 2), "file.txt", 1}).ok());
+    EXPECT_FALSE(encode(FileBegin{id(1, 2), {}, "file.txt", 1}).ok());
+    EXPECT_FALSE(encode(FileBegin{id(1, 2), id(3, 4), "", 1}).ok());
+    EXPECT_FALSE(encode(FileBegin{id(1, 2), id(3, 4), "dir/file.txt", 1}).ok());
+    EXPECT_FALSE(encode(FileBegin{id(1, 2), id(3, 4),
+                                  std::string(kMaxFileNameSize + 1, 'x'), 1})
+                     .ok());
+    EXPECT_FALSE(encode(FileBegin{id(1, 2), id(3, 4), "file.txt", kMaxFileSize + 1}).ok());
+    EXPECT_FALSE(encode(FileChunk{{}, id(3, 4), 0, {1}}).ok());
+    EXPECT_FALSE(encode(FileChunk{id(1, 2), {}, 0, {1}}).ok());
+    EXPECT_FALSE(encode(FileChunk{id(1, 2), id(3, 4), 0,
+                                  std::vector<std::uint8_t>(kMaxFileChunkDataSize + 1)})
+                     .ok());
+    EXPECT_FALSE(encode(FileEnd{{}, id(3, 4), 1}).ok());
+    EXPECT_FALSE(encode(FileCancel{id(1, 2), {}, "cancel"}).ok());
+    EXPECT_FALSE(encode(FileStatus{id(1, 2), id(3, 4),
+                                   static_cast<FileStatusCode>(0xff), 0, 1, ""})
+                     .ok());
 }
 
 TEST(ProtocolWire, EncodesGoldenHeaderInNetworkOrder) {
