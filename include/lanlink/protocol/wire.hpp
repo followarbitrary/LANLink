@@ -15,15 +15,22 @@
 
 namespace lanlink::protocol {
 
-// Version 6 adds the target pointer injection capability to DisplayInfo.
+// Version 7 adds chunked clipboard transfer messages. Version 6 added the
+// target pointer injection capability to DisplayInfo.
 // Version 5 added periodic target cursor position corrections and version 4
 // added absolute PointerMove input payloads. Each peer advertises the same
 // version during Hello so an older executable rejects the connection before
 // decoding newer messages.
-constexpr std::uint8_t kProtocolVersion = 6;
+constexpr std::uint8_t kProtocolVersion = 7;
 constexpr std::size_t kHeaderSize = 12;
 constexpr std::size_t kMaxFrameSize = 64 * 1024;
 constexpr std::size_t kMaxErrorText = 4 * 1024;
+constexpr std::uint32_t kMaxClipboardPackageSize = 4 * 1024 * 1024;
+// ClipboardChunk payload overhead is source (16), sequence (8), format (1),
+// offset (4), and data length (4) bytes.
+constexpr std::uint32_t kMaxClipboardChunkDataSize =
+    static_cast<std::uint32_t>(kMaxFrameSize - kHeaderSize - 16 - 8 - 1 - 4 - 4);
+constexpr std::uint32_t kMaxClipboardChunkSize = kMaxClipboardChunkDataSize;
 // Keep untrusted display metadata inside a desktop-sized coordinate range.
 // This is generous enough for large multi-monitor walls while preventing
 // overflow-prone values from entering cursor tracking and coordinate mapping.
@@ -45,6 +52,15 @@ enum class MessageType : std::uint8_t {
     kError,
     kDisplayInfo,
     kPointerPosition,
+    kClipboardBegin,
+    kClipboardChunk,
+    kClipboardEnd,
+};
+
+enum class ClipboardFormat : std::uint8_t {
+    kText = 1,
+    kHtml = 2,
+    kPng = 3,
 };
 
 struct Hello {
@@ -138,10 +154,34 @@ struct ErrorMessage {
     friend bool operator==(const ErrorMessage&, const ErrorMessage&) = default;
 };
 
+struct ClipboardBegin {
+    DeviceId source;
+    std::uint64_t sequence{};
+    std::uint8_t format_mask{};
+    std::uint32_t total_size{};
+    std::uint32_t text_size{};
+    std::uint32_t html_size{};
+    std::uint32_t png_size{};
+    friend bool operator==(const ClipboardBegin&, const ClipboardBegin&) = default;
+};
+struct ClipboardChunk {
+    DeviceId source;
+    std::uint64_t sequence{};
+    ClipboardFormat format{ClipboardFormat::kText};
+    std::uint32_t offset{};
+    std::vector<std::uint8_t> data;
+    friend bool operator==(const ClipboardChunk&, const ClipboardChunk&) = default;
+};
+struct ClipboardEnd {
+    DeviceId source;
+    std::uint64_t sequence{};
+    friend bool operator==(const ClipboardEnd&, const ClipboardEnd&) = default;
+};
+
 using Message =
     std::variant<Hello, DisplayInfo, PointerPosition, Heartbeat, AcquireRequest, AcquireResponse,
                  ActivateRequest, ActivateAck, RenewRequest, RenewAck, InputMessage, Release,
-                 Revoke, ErrorMessage>;
+                 Revoke, ErrorMessage, ClipboardBegin, ClipboardChunk, ClipboardEnd>;
 
 Result<std::vector<std::uint8_t>> encode(const Message& message);
 Result<Message> decode(std::span<const std::uint8_t> frame);

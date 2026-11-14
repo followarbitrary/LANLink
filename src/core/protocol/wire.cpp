@@ -1,6 +1,7 @@
 #include "lanlink/protocol/wire.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -13,7 +14,14 @@ namespace {
 constexpr std::uint8_t to_u8(MessageType type) { return static_cast<std::uint8_t>(type); }
 
 bool valid_type(std::uint8_t value) {
-    return value >= to_u8(MessageType::kHello) && value <= to_u8(MessageType::kPointerPosition);
+    return value >= to_u8(MessageType::kHello) && value <= to_u8(MessageType::kClipboardEnd);
+}
+bool valid_clipboard_format(std::uint8_t value) {
+    return value >= static_cast<std::uint8_t>(ClipboardFormat::kText) &&
+           value <= static_cast<std::uint8_t>(ClipboardFormat::kPng);
+}
+constexpr std::uint8_t clipboard_bit(ClipboardFormat format) {
+    return static_cast<std::uint8_t>(1U << (static_cast<std::uint8_t>(format) - 1U));
 }
 bool valid_reason(std::uint8_t value) {
     return value <= static_cast<std::uint8_t>(RevokeReason::kProtocolError);
@@ -23,6 +31,87 @@ bool valid_edge(std::uint8_t value) {
 }
 bool zero(const Uuid128& id) { return id.high == 0 && id.low == 0; }
 bool finite(double value) { return std::isfinite(value); }
+
+bool valid_utf8(std::span<const std::uint8_t> bytes) {
+    std::size_t offset = 0;
+    while (offset < bytes.size()) {
+        const auto first = bytes[offset++];
+        if (first <= 0x7f)
+            continue;
+        std::uint32_t codepoint{};
+        std::size_t continuation_count{};
+        if (first >= 0xc2 && first <= 0xdf) {
+            codepoint = first & 0x1f;
+            continuation_count = 1;
+        } else if (first >= 0xe0 && first <= 0xef) {
+            codepoint = first & 0x0f;
+            continuation_count = 2;
+        } else if (first >= 0xf0 && first <= 0xf4) {
+            codepoint = first & 0x07;
+            continuation_count = 3;
+        } else {
+            return false;
+        }
+        if (offset + continuation_count > bytes.size())
+            return false;
+        for (std::size_t i = 0; i < continuation_count; ++i) {
+            const auto next = bytes[offset++];
+            if ((next & 0xc0) != 0x80)
+                return false;
+            codepoint = (codepoint << 6) | (next & 0x3f);
+        }
+        if ((continuation_count == 2 && codepoint < 0x800) ||
+            (continuation_count == 3 && codepoint < 0x10000) ||
+            codepoint > 0x10ffff || (codepoint >= 0xd800 && codepoint <= 0xdfff))
+            return false;
+    }
+    return true;
+}
+
+constexpr std::array<std::uint8_t, 8> kPngSignature = {
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a};
+
+bool valid_png_chunk(std::uint32_t offset, std::span<const std::uint8_t> data) {
+    if (data.empty())
+        return false;
+    if (offset != 0)
+        return true;
+    return data.size() >= kPngSignature.size() &&
+           std::equal(kPngSignature.begin(), kPngSignature.end(), data.begin());
+}
+
+bool valid_clipboard_begin(const ClipboardBegin& value) {
+    if (zero(value.source) || value.sequence == 0 || (value.format_mask & ~0x07U) != 0 ||
+        value.total_size > kMaxClipboardPackageSize)
+        return false;
+    if ((value.format_mask & clipboard_bit(ClipboardFormat::kText)) == 0 && value.text_size != 0)
+        return false;
+    if ((value.format_mask & clipboard_bit(ClipboardFormat::kHtml)) == 0 && value.html_size != 0)
+        return false;
+    if ((value.format_mask & clipboard_bit(ClipboardFormat::kPng)) == 0 && value.png_size != 0)
+        return false;
+    if ((value.format_mask & clipboard_bit(ClipboardFormat::kPng)) != 0 && value.png_size == 0)
+        return false;
+    const auto sum = static_cast<std::uint64_t>(value.text_size) + value.html_size + value.png_size;
+    return sum == value.total_size;
+}
+
+bool valid_clipboard_chunk(const ClipboardChunk& value) {
+    if (zero(value.source) || value.sequence == 0 ||
+        !valid_clipboard_format(static_cast<std::uint8_t>(value.format)) ||
+        value.data.size() > kMaxClipboardChunkDataSize ||
+        value.offset > kMaxClipboardPackageSize ||
+        static_cast<std::uint64_t>(value.offset) + value.data.size() > kMaxClipboardPackageSize)
+        return false;
+    switch (value.format) {
+    case ClipboardFormat::kText:
+    case ClipboardFormat::kHtml:
+        return valid_utf8(value.data);
+    case ClipboardFormat::kPng:
+        return valid_png_chunk(value.offset, value.data);
+    }
+    return false;
+}
 
 class Writer {
   public:
@@ -107,6 +196,15 @@ class Reader {
         if (!u32(length) || length > kMaxErrorText || remaining() < length)
             return false;
         out.assign(reinterpret_cast<const char*>(bytes_.data() + offset_), length);
+        offset_ += length;
+        return true;
+    }
+    bool bytes(std::vector<std::uint8_t>& out) {
+        std::uint32_t length{};
+        if (!u32(length) || length > kMaxClipboardChunkDataSize || remaining() < length)
+            return false;
+        out.assign(bytes_.begin() + static_cast<std::ptrdiff_t>(offset_),
+                   bytes_.begin() + static_cast<std::ptrdiff_t>(offset_ + length));
         offset_ += length;
         return true;
     }
@@ -406,6 +504,35 @@ Result<std::vector<std::uint8_t>> encode(const Message& message) {
                 w.u64(value.generation);
                 w.u8(static_cast<std::uint8_t>(value.reason));
                 return make_frame(MessageType::kRevoke, std::move(w));
+            } else if constexpr (std::is_same_v<T, ClipboardBegin>) {
+                if (!valid_clipboard_begin(value))
+                    return Result<std::vector<std::uint8_t>>::failure("invalid clipboard begin");
+                w.id(value.source);
+                w.u64(value.sequence);
+                w.u8(value.format_mask);
+                w.u32(value.total_size);
+                w.u32(value.text_size);
+                w.u32(value.html_size);
+                w.u32(value.png_size);
+                return make_frame(MessageType::kClipboardBegin, std::move(w));
+            } else if constexpr (std::is_same_v<T, ClipboardChunk>) {
+                if (!valid_clipboard_chunk(value))
+                    return Result<std::vector<std::uint8_t>>::failure("invalid clipboard chunk");
+                w.id(value.source);
+                w.u64(value.sequence);
+                w.u8(static_cast<std::uint8_t>(value.format));
+                w.u32(value.offset);
+                w.u32(static_cast<std::uint32_t>(value.data.size()));
+                // The validation above bounds the conversion to uint32_t.
+                for (const auto byte : value.data)
+                    w.u8(byte);
+                return make_frame(MessageType::kClipboardChunk, std::move(w));
+            } else if constexpr (std::is_same_v<T, ClipboardEnd>) {
+                if (zero(value.source) || value.sequence == 0)
+                    return Result<std::vector<std::uint8_t>>::failure("invalid clipboard end");
+                w.id(value.source);
+                w.u64(value.sequence);
+                return make_frame(MessageType::kClipboardEnd, std::move(w));
             } else {
                 w.u16(value.code);
                 if (!w.string(value.message))
@@ -572,6 +699,35 @@ Result<Message> decode(std::span<const std::uint8_t> frame) {
         ErrorMessage value;
         if (!r.u16(value.code) || !r.string(value.message))
             return fail("invalid error");
+        message = value;
+        break;
+    }
+    case MessageType::kClipboardBegin: {
+        ClipboardBegin value;
+        if (!r.id(value.source) || !r.u64(value.sequence) || !r.u8(value.format_mask) ||
+            !r.u32(value.total_size) || !r.u32(value.text_size) || !r.u32(value.html_size) ||
+            !r.u32(value.png_size) || !valid_clipboard_begin(value))
+            return fail("invalid clipboard begin");
+        message = value;
+        break;
+    }
+    case MessageType::kClipboardChunk: {
+        ClipboardChunk value;
+        std::uint8_t format{};
+        if (!r.id(value.source) || !r.u64(value.sequence) || !r.u8(format) || !r.u32(value.offset) ||
+            !valid_clipboard_format(format) || !r.bytes(value.data))
+            return fail("invalid clipboard chunk");
+        value.format = static_cast<ClipboardFormat>(format);
+        if (!valid_clipboard_chunk(value))
+            return fail("invalid clipboard chunk");
+        message = std::move(value);
+        break;
+    }
+    case MessageType::kClipboardEnd: {
+        ClipboardEnd value;
+        if (!r.id(value.source) || !r.u64(value.sequence) || zero(value.source) ||
+            value.sequence == 0)
+            return fail("invalid clipboard end");
         message = value;
         break;
     }

@@ -1,9 +1,11 @@
 #include "lanlink/protocol/wire.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstring>
 #include <gtest/gtest.h>
+#include <limits>
 #include <span>
 #include <string>
 #include <type_traits>
@@ -217,6 +219,80 @@ TEST(ProtocolWire, FinishRejectsPartialFrame) {
     ASSERT_TRUE(decoder.feed(std::span<const std::uint8_t>(encoded.value().data(), 4)).ok());
     EXPECT_FALSE(decoder.finish().ok());
     EXPECT_EQ(decoder.buffered_bytes(), 0u);
+}
+
+TEST(ProtocolWire, RoundTripsClipboardFrames) {
+    expect_round_trip(ClipboardBegin{id(21, 22), 1, 0, 0, 0, 0, 0});
+    expect_round_trip(ClipboardBegin{id(21, 22), 2, 0x07, 12, 3, 4, 5});
+    expect_round_trip(ClipboardChunk{id(21, 22), 2, ClipboardFormat::kText, 0,
+                                     {'h', 'i'}});
+    expect_round_trip(ClipboardChunk{id(21, 22), 2, ClipboardFormat::kHtml, 0,
+                                     {'<', 'p', '>'}});
+    expect_round_trip(ClipboardChunk{id(21, 22), 2, ClipboardFormat::kPng, 0,
+                                     {0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a}});
+    expect_round_trip(ClipboardEnd{id(21, 22), 2});
+}
+
+TEST(ProtocolWire, RejectsMalformedClipboardMetadataAndPayloads) {
+    EXPECT_FALSE(encode(ClipboardBegin{{}, 1, 0, 0, 0, 0, 0}).ok());
+    EXPECT_FALSE(encode(ClipboardBegin{id(1, 1), 0, 0, 0, 0, 0, 0}).ok());
+    EXPECT_FALSE(encode(ClipboardEnd{{}, 1}).ok());
+    EXPECT_FALSE(encode(ClipboardEnd{id(1, 1), 0}).ok());
+    EXPECT_FALSE(encode(ClipboardChunk{{}, 1, ClipboardFormat::kText, 0, {'x'}}).ok());
+    EXPECT_FALSE(encode(ClipboardChunk{id(1, 1), 0, ClipboardFormat::kText, 0, {'x'}}).ok());
+    EXPECT_FALSE(encode(ClipboardChunk{id(1, 1), 1,
+                                       static_cast<ClipboardFormat>(99), 0, {'x'}})
+                     .ok());
+    EXPECT_FALSE(encode(ClipboardBegin{id(1, 1), 1, 0x80, 0, 0, 0, 0}).ok());
+    EXPECT_FALSE(encode(ClipboardBegin{id(1, 1), 1, 0x01, 9, 2, 3, 3}).ok());
+    EXPECT_FALSE(encode(ClipboardBegin{id(1, 1), 1, 0x01, kMaxClipboardPackageSize + 1, 0, 0,
+                                       0})
+                     .ok());
+    EXPECT_FALSE(encode(ClipboardChunk{id(1, 1), 1, ClipboardFormat::kText, 0,
+                                       {0xff}})
+                     .ok());
+    EXPECT_FALSE(encode(ClipboardChunk{id(1, 1), 1, ClipboardFormat::kHtml, 0,
+                                       {0xc3, 0x28}})
+                     .ok());
+    EXPECT_FALSE(encode(ClipboardChunk{id(1, 1), 1, ClipboardFormat::kPng, 0,
+                                       {0x00, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a}})
+                     .ok());
+    EXPECT_FALSE(encode(ClipboardChunk{id(1, 1), 1, ClipboardFormat::kText,
+                                       std::numeric_limits<std::uint32_t>::max(), {'x'}})
+                     .ok());
+    EXPECT_FALSE(encode(ClipboardChunk{id(1, 1), 1, ClipboardFormat::kText, 0,
+                                       std::vector<std::uint8_t>(kMaxClipboardChunkDataSize + 1)})
+                     .ok());
+}
+
+TEST(ProtocolWire, FrameDecoderHandlesFragmentedClipboardSequence) {
+    const ClipboardBegin begin{id(30, 31), 7, 0x01, 5, 5, 0, 0};
+    const ClipboardChunk chunk{id(30, 31), 7, ClipboardFormat::kText, 0,
+                               {'h', 'e', 'l', 'l', 'o'}};
+    const ClipboardEnd end{id(30, 31), 7};
+    auto first = encode(begin);
+    auto second = encode(chunk);
+    auto third = encode(end);
+    ASSERT_TRUE(first.ok());
+    ASSERT_TRUE(second.ok());
+    ASSERT_TRUE(third.ok());
+    std::vector<std::uint8_t> bytes = first.value();
+    bytes.insert(bytes.end(), second.value().begin(), second.value().end());
+    bytes.insert(bytes.end(), third.value().begin(), third.value().end());
+
+    FrameDecoder decoder;
+    std::vector<Message> messages;
+    for (std::size_t offset = 0; offset < bytes.size();) {
+        const std::size_t count = std::min<std::size_t>(3, bytes.size() - offset);
+        auto result = decoder.feed(std::span<const std::uint8_t>(bytes.data() + offset, count));
+        ASSERT_TRUE(result.ok()) << result.error();
+        messages.insert(messages.end(), result.value().begin(), result.value().end());
+        offset += count;
+    }
+    ASSERT_EQ(messages.size(), 3u);
+    EXPECT_EQ(std::get<ClipboardBegin>(messages[0]), begin);
+    EXPECT_EQ(std::get<ClipboardChunk>(messages[1]), chunk);
+    EXPECT_EQ(std::get<ClipboardEnd>(messages[2]), end);
 }
 
 } // namespace
