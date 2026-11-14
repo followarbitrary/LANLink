@@ -1,11 +1,14 @@
 #pragma once
 
 #include <QObject>
+#include <QMetaType>
 
 #include <functional>
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <cstdint>
+#include <utility>
 
 #include "lanlink/app/options.hpp"
 #include "lanlink/common/result.hpp"
@@ -14,6 +17,8 @@
 #include "lanlink/runtime/node.hpp"
 
 class QTimer;
+
+Q_DECLARE_METATYPE(lanlink::discovery::TopologySnapshot)
 
 namespace lanlink::desktop {
 
@@ -41,6 +46,8 @@ class RuntimeWorker final : public QObject {
   void sendFile(const QString& path);
   void cancelFile();
 
+  std::uint64_t topology_revision() const noexcept { return local_topology_revision_; }
+
  signals:
   void statusChanged(const QString& status, bool running, bool connected);
   void peerChanged(const QString& name, const QString& platform, const QString& address,
@@ -49,6 +56,7 @@ class RuntimeWorker final : public QObject {
   void errorOccurred(const QString& message);
   void fileTransferChanged(const QString& name, qulonglong done, qulonglong total,
                            const QString& status, bool outgoing);
+  void remoteTopologyChanged(const discovery::TopologySnapshot& snapshot);
   void finished();
 
  private slots:
@@ -61,6 +69,8 @@ class RuntimeWorker final : public QObject {
   bool select_peer(const std::vector<discovery::DiscoveryPeer>& peers);
   bool start_runtime();
   bool update_topology_from_peer(const discovery::DiscoveryPeer& peer);
+  bool broadcast_local_topology();
+  bool apply_remote_topology_snapshots();
   void emit_peer_snapshot(bool online);
   void stop_runtime();
 
@@ -83,6 +93,9 @@ class RuntimeWorker final : public QObject {
   QString last_status_;
   bool last_status_running_{false};
   bool last_status_connected_{false};
+  std::optional<ScreenTopology> local_topology_;
+  std::uint64_t local_topology_revision_{0};
+  std::optional<std::pair<std::uint64_t, DeviceId>> latest_remote_topology_;
 };
 
 }  // namespace lanlink::desktop

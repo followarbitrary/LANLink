@@ -5,6 +5,7 @@
 #include "lanlink/runtime/node.hpp"
 
 #include <atomic>
+#include <algorithm>
 #include <chrono>
 #include <csignal>
 #include <iostream>
@@ -37,6 +38,21 @@ bool has_help_flag(int argc, char* const argv[]) {
 
 bool local_id_less(std::uint64_t local, const lanlink::DeviceId& peer) {
   return peer.high == 0 && local < peer.low;
+}
+
+bool device_id_less(const lanlink::DeviceId& left, const lanlink::DeviceId& right) {
+  return left.high < right.high || (left.high == right.high && left.low < right.low);
+}
+
+lanlink::Result<lanlink::ScreenTopology> topology_with_revision(
+    const lanlink::ScreenTopology& source, std::uint64_t revision) {
+  auto displays = source.displays();
+  auto links = source.links();
+  for (auto& link : links) link.version = revision;
+  lanlink::ScreenTopology updated;
+  auto set = updated.set_snapshot(revision, std::move(displays), std::move(links));
+  if (!set.ok()) return lanlink::Result<lanlink::ScreenTopology>::failure(set.error());
+  return lanlink::Result<lanlink::ScreenTopology>::success(std::move(updated));
 }
 
 }  // namespace
@@ -175,7 +191,9 @@ int main(int argc, char** argv) {
   }
   auto runtime = std::move(runtime_result.value());
 
-  auto set_topology = runtime->set_topology(std::move(topology.value()));
+  auto local_topology = topology.value();
+  std::uint64_t local_topology_revision = local_topology.version();
+  auto set_topology = runtime->set_topology(local_topology);
   if (!set_topology.ok()) {
     std::cerr << "error: " << set_topology.error() << '\n';
     stop_discovery();
@@ -189,6 +207,47 @@ int main(int argc, char** argv) {
     (void)runtime->stop(lanlink::IClock::Clock::now());
     return 1;
   }
+
+  const auto broadcast_local_topology = [&]() {
+    auto result = discovery.broadcast_topology(local_topology, local_topology_revision);
+    if (!result.ok()) std::cerr << "topology broadcast error: " << result.error() << '\n';
+    return result.ok();
+  };
+  if (!broadcast_local_topology()) {
+    stop_discovery();
+    (void)runtime->stop(lanlink::IClock::Clock::now());
+    return 1;
+  }
+
+  std::optional<std::pair<std::uint64_t, lanlink::DeviceId>> latest_remote_topology;
+  const auto apply_remote_topologies = [&]() {
+    const lanlink::discovery::TopologySnapshot* newest = nullptr;
+    for (const auto& snapshot : discovery.topology_snapshots()) {
+      if (snapshot.origin == lanlink::app::numeric_id(options.device_id)) continue;
+      const std::pair<std::uint64_t, lanlink::DeviceId> key{snapshot.revision, snapshot.origin};
+      if (latest_remote_topology.has_value() &&
+          !(latest_remote_topology->first < key.first ||
+            (latest_remote_topology->first == key.first &&
+             device_id_less(latest_remote_topology->second, key.second)))) {
+        continue;
+      }
+      if (newest == nullptr || newest->revision < snapshot.revision ||
+          (newest->revision == snapshot.revision &&
+           device_id_less(newest->origin, snapshot.origin))) {
+        newest = &snapshot;
+      }
+    }
+    if (newest == nullptr) return true;
+    auto updated = runtime->set_topology(newest->topology);
+    if (!updated.ok()) {
+      std::cerr << "remote topology update error: " << updated.error() << '\n';
+      return false;
+    }
+    latest_remote_topology = std::pair<std::uint64_t, lanlink::DeviceId>{newest->revision,
+                                                                          newest->origin};
+    local_topology_revision = std::max(local_topology_revision, newest->revision);
+    return true;
+  };
 
   bool discovery_connect_requested = false;
   if (options.connect.has_value()) {
@@ -244,12 +303,23 @@ int main(int argc, char** argv) {
             stop_requested.store(true, std::memory_order_relaxed);
             continue;
           }
-          auto updated = runtime->set_topology(std::move(selected_topology.value()));
+          const auto next_revision =
+              std::max(local_topology_revision, local_topology.version()) + 1;
+          auto revised = topology_with_revision(selected_topology.value(), next_revision);
+          if (!revised.ok()) {
+            std::cerr << "error: " << revised.error() << '\n';
+            stop_requested.store(true, std::memory_order_relaxed);
+            continue;
+          }
+          auto updated = runtime->set_topology(revised.value());
           if (!updated.ok()) {
             std::cerr << "error: " << updated.error() << '\n';
             stop_requested.store(true, std::memory_order_relaxed);
             continue;
           }
+          local_topology = revised.value();
+          local_topology_revision = next_revision;
+          (void)broadcast_local_topology();
           topology_selected = true;
           selected_device_id = peer.device;
           auto enabled = runtime->set_accept_incoming(true);
@@ -281,6 +351,10 @@ int main(int argc, char** argv) {
           }
         }
       }
+    }
+    if (!apply_remote_topologies()) {
+      stop_requested.store(true, std::memory_order_relaxed);
+      continue;
     }
     auto polled = runtime->poll(now, std::chrono::milliseconds{10});
     if (!polled.ok()) {

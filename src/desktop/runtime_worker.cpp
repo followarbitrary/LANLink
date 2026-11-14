@@ -7,6 +7,7 @@
 
 #include <cctype>
 #include <cmath>
+#include <algorithm>
 #include <memory>
 #include <filesystem>
 #include <string>
@@ -37,6 +38,21 @@ QString endpoint_text(const transport::Endpoint& endpoint) {
          QString::number(endpoint.port);
 }
 
+bool device_id_less(const DeviceId& left, const DeviceId& right) {
+  return left.high < right.high || (left.high == right.high && left.low < right.low);
+}
+
+Result<ScreenTopology> topology_with_revision(const ScreenTopology& source,
+                                               std::uint64_t revision) {
+  auto displays = source.displays();
+  auto links = source.links();
+  for (auto& link : links) link.version = revision;
+  ScreenTopology updated;
+  auto set = updated.set_snapshot(revision, std::move(displays), std::move(links));
+  if (!set.ok()) return Result<ScreenTopology>::failure(set.error());
+  return Result<ScreenTopology>::success(std::move(updated));
+}
+
 }  // namespace
 
 RuntimeWorker::RuntimeWorker(QObject* parent, BackendFactory backend_factory,
@@ -45,6 +61,7 @@ RuntimeWorker::RuntimeWorker(QObject* parent, BackendFactory backend_factory,
     : QObject(parent), timer_(new QTimer(this)), backend_factory_(std::move(backend_factory)),
       clipboard_backend_factory_(std::move(clipboard_backend_factory)),
       input_forwarding_enabled_(input_forwarding_enabled) {
+  qRegisterMetaType<discovery::TopologySnapshot>("lanlink::discovery::TopologySnapshot");
   if (!backend_factory_) {
     backend_factory_ = [] {
 #if defined(_WIN32)
@@ -156,6 +173,9 @@ void RuntimeWorker::start(app::AppOptions options) {
   was_connected_ = false;
   selected_peer_.reset();
   selected_device_id_.reset();
+  local_topology_.reset();
+  local_topology_revision_ = 0;
+  latest_remote_topology_.reset();
   active_file_transfer_.reset();
   topology_selected_ = false;
   outgoing_requested_ = false;
@@ -191,6 +211,9 @@ void RuntimeWorker::stop() {
   running_ = false;
   selected_peer_.reset();
   selected_device_id_.reset();
+  local_topology_.reset();
+  local_topology_revision_ = 0;
+  latest_remote_topology_.reset();
   topology_selected_ = false;
   outgoing_requested_ = false;
   emit_status(QStringLiteral("已停止"), false, false);
@@ -208,11 +231,22 @@ void RuntimeWorker::setRemoteSide(app::RemoteSide side) {
                         .arg(QString::fromStdString(topology.error())));
     return;
   }
-  const auto updated = runtime_->set_topology(std::move(topology.value()));
-  if (!updated.ok()) {
-    emit errorOccurred(QString::fromStdString(updated.error()));
+  const auto next_revision = std::max(local_topology_revision_, local_topology_.has_value()
+                                                                  ? local_topology_->version()
+                                                                  : std::uint64_t{0}) + 1;
+  auto revised = topology_with_revision(topology.value(), next_revision);
+  if (!revised.ok()) {
+    emit errorOccurred(QString::fromStdString(revised.error()));
     return;
   }
+  auto revised_update = runtime_->set_topology(revised.value());
+  if (!revised_update.ok()) {
+    emit errorOccurred(QString::fromStdString(revised_update.error()));
+    return;
+  }
+  local_topology_ = revised.value();
+  local_topology_revision_ = next_revision;
+  if (!broadcast_local_topology()) return;
   topology_selected_ = true;
   emit logMessage(side == app::RemoteSide::kLeft ? QStringLiteral("拓扑已更新：对端在左侧")
                                                  : QStringLiteral("拓扑已更新：对端在右侧"));
@@ -294,6 +328,7 @@ void RuntimeWorker::pump() {
     emit logMessage(QStringLiteral("发现错误：%1").arg(QString::fromStdString(discovered.error())));
   } else {
     select_peer(discovered.value());
+    (void)apply_remote_topology_snapshots();
   }
 
   if (!runtime_) return;
@@ -315,6 +350,48 @@ void RuntimeWorker::pump() {
 
 bool RuntimeWorker::local_id_less(const DeviceId& peer) const {
   return peer.high == 0 && options_.device_id < peer.low;
+}
+
+bool RuntimeWorker::broadcast_local_topology() {
+  if (!discovery_.has_value() || !local_topology_.has_value()) return true;
+  const auto result = discovery_->broadcast_topology(
+      *local_topology_, local_topology_revision_);
+  if (!result.ok()) {
+    emit logMessage(QStringLiteral("拓扑广播失败：%1")
+                        .arg(QString::fromStdString(result.error())));
+    return false;
+  }
+  return true;
+}
+
+bool RuntimeWorker::apply_remote_topology_snapshots() {
+  if (!runtime_ || !discovery_.has_value()) return false;
+  const discovery::TopologySnapshot* newest = nullptr;
+  for (const auto& snapshot : discovery_->topology_snapshots()) {
+    if (snapshot.origin == app::numeric_id(options_.device_id)) continue;
+    const std::pair<std::uint64_t, DeviceId> key{snapshot.revision, snapshot.origin};
+    if (latest_remote_topology_.has_value() &&
+        !(latest_remote_topology_.value().first < key.first ||
+          (latest_remote_topology_.value().first == key.first &&
+           device_id_less(latest_remote_topology_.value().second, key.second)))) {
+      continue;
+    }
+    if (newest == nullptr || newest->revision < snapshot.revision ||
+        (newest->revision == snapshot.revision && device_id_less(newest->origin, snapshot.origin))) {
+      newest = &snapshot;
+    }
+  }
+  if (newest == nullptr) return false;
+  const auto updated = runtime_->set_topology(newest->topology);
+  if (!updated.ok()) {
+    emit logMessage(QStringLiteral("远端拓扑应用失败：%1")
+                        .arg(QString::fromStdString(updated.error())));
+    return false;
+  }
+  latest_remote_topology_ = std::pair<std::uint64_t, DeviceId>{newest->revision, newest->origin};
+  local_topology_revision_ = std::max(local_topology_revision_, newest->revision);
+  emit remoteTopologyChanged(*newest);
+  return true;
 }
 
 bool RuntimeWorker::select_peer(const std::vector<discovery::DiscoveryPeer>& peers) {
@@ -368,11 +445,22 @@ bool RuntimeWorker::update_topology_from_peer(const discovery::DiscoveryPeer&) {
     fail(QString::fromStdString(topology.error()));
     return false;
   }
-  const auto updated = runtime_->set_topology(std::move(topology.value()));
+  const auto next_revision = std::max(local_topology_revision_, local_topology_.has_value()
+                                                                  ? local_topology_->version()
+                                                                  : std::uint64_t{0}) + 1;
+  auto revised = topology_with_revision(topology.value(), next_revision);
+  if (!revised.ok()) {
+    fail(QString::fromStdString(revised.error()));
+    return false;
+  }
+  const auto updated = runtime_->set_topology(revised.value());
   if (!updated.ok()) {
     fail(QString::fromStdString(updated.error()));
     return false;
   }
+  local_topology_ = revised.value();
+  local_topology_revision_ = next_revision;
+  if (!broadcast_local_topology()) return false;
   return true;
 }
 
@@ -438,6 +526,8 @@ bool RuntimeWorker::start_runtime() {
     fail(QString::fromStdString(set_topology.error()));
     return false;
   }
+  local_topology_ = runtime_->topology();
+  local_topology_revision_ = local_topology_->version();
   auto started = runtime_->start();
   if (!started.ok()) {
     fail(QString::fromStdString(started.error()));
@@ -450,6 +540,7 @@ bool RuntimeWorker::start_runtime() {
     return false;
   }
   topology_selected_ = true;
+  if (!broadcast_local_topology()) return false;
   emit_status(QStringLiteral("正在监听 %1").arg(options_.listen_port), true, false);
 
   if (options_.connect.has_value()) {
@@ -491,6 +582,9 @@ void RuntimeWorker::fail(const QString& message) {
   backend_.reset();
   clipboard_backend_.reset();
   running_ = false;
+  local_topology_.reset();
+  local_topology_revision_ = 0;
+  latest_remote_topology_.reset();
   emit_status(QStringLiteral("错误"), false, false);
   emit finished();
 }

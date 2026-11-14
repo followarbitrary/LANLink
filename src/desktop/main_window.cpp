@@ -420,6 +420,8 @@ void MainWindow::startRuntime(const app::AppOptions& options) {
   connect(runtimeThread_, &QThread::finished, runtimeWorker_, &QObject::deleteLater);
   connect(runtimeWorker_, &RuntimeWorker::statusChanged, this, &MainWindow::onRuntimeStatusChanged);
   connect(runtimeWorker_, &RuntimeWorker::peerChanged, this, &MainWindow::onPeerChanged);
+  connect(runtimeWorker_, &RuntimeWorker::remoteTopologyChanged, this,
+          &MainWindow::onRemoteTopologyChanged);
   connect(runtimeWorker_, &RuntimeWorker::logMessage, this, &MainWindow::onRuntimeLog);
   connect(runtimeWorker_, &RuntimeWorker::errorOccurred, this, &MainWindow::onRuntimeError);
   connect(runtimeWorker_, &RuntimeWorker::fileTransferChanged, this,
@@ -592,6 +594,43 @@ void MainWindow::onPeerChanged(const QString& name, const QString& platform,
   if (!state_.options.peer_display_id_explicit) state_.options.peer_display_id = displayId;
   rebuildPages();
   syncTopologyDirection();
+}
+
+void MainWindow::onRemoteTopologyChanged(const discovery::TopologySnapshot& snapshot) {
+  if (state_.devices.size() < 2) return;
+  const auto local_device = app::numeric_id(state_.options.device_id);
+  const auto local_display = app::numeric_id(state_.options.display_id);
+  const Display* local = nullptr;
+  const Display* peer = nullptr;
+  for (const auto& display : snapshot.topology.displays()) {
+    if (display.device == local_device || display.id == local_display) {
+      local = &display;
+      continue;
+    }
+    if (peer == nullptr || display.device.low == state_.devices[1].deviceId ||
+        display.id.low == state_.devices[1].displayId) {
+      peer = &display;
+    }
+  }
+  if (local == nullptr || peer == nullptr) return;
+  const double local_center_x =
+      (local->logical_bounds.left + local->logical_bounds.right) / 2.0;
+  const double peer_center_x =
+      (peer->logical_bounds.left + peer->logical_bounds.right) / 2.0;
+  if (!std::isfinite(local_center_x) || !std::isfinite(peer_center_x) ||
+      std::abs(peer_center_x - local_center_x) < 0.001) {
+    return;
+  }
+  const bool peer_on_right = peer_center_x > local_center_x;
+  state_.devices[0].position = QPointF(40.0, 68.0);
+  state_.devices[1].position =
+      QPointF(peer_on_right ? 310.0 : -230.0, state_.devices[0].position.y());
+  state_.options.remote_side = peer_on_right ? app::RemoteSide::kRight : app::RemoteSide::kLeft;
+  state_.options.remote_side_explicit = true;
+  rebuildPages();
+  if (auto* direction = findChild<QLabel*>(QStringLiteral("topologyDirectionLabel"))) {
+    direction->setText(remote_side_text(state_.options.remote_side));
+  }
 }
 
 void MainWindow::onTopologyLayoutChanged() { syncTopologyDirection(); }

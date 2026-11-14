@@ -1,5 +1,6 @@
 #include "runtime_worker.hpp"
 
+#include "lanlink/discovery/discovery.hpp"
 #include "lanlink/platform/fake_clipboard_backend.hpp"
 #include "lanlink/platform/fake_input_backend.hpp"
 
@@ -12,6 +13,16 @@
 #include <gtest/gtest.h>
 
 #include <memory>
+#include <thread>
+
+#if defined(_WIN32)
+#include <winsock2.h>
+#else
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
 
 namespace {
 
@@ -51,6 +62,32 @@ lanlink::desktop::RuntimeWorker::BackendFactory fake_backend_factory() {
     backend->set_display_bounds(lanlink::Rect{0.0, 0.0, 100.0, 100.0});
     return backend;
   };
+}
+
+void inject_topology(std::uint16_t port, const lanlink::discovery::TopologySnapshot& snapshot) {
+  const auto encoded = lanlink::discovery::DiscoveryService::encode_topology(snapshot);
+  ASSERT_TRUE(encoded.ok());
+#if defined(_WIN32)
+  SOCKET socket = ::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+  ASSERT_NE(socket, INVALID_SOCKET);
+#else
+  int socket = ::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+  ASSERT_GE(socket, 0);
+#endif
+  sockaddr_in destination{};
+  destination.sin_family = AF_INET;
+  destination.sin_port = htons(port);
+  ASSERT_EQ(inet_pton(AF_INET, "127.0.0.1", &destination.sin_addr), 1);
+#if defined(_WIN32)
+  const auto sent = sendto(socket, encoded.value().data(), static_cast<int>(encoded.value().size()), 0,
+                           reinterpret_cast<sockaddr*>(&destination), sizeof(destination));
+  closesocket(socket);
+#else
+  const auto sent = sendto(socket, encoded.value().data(), encoded.value().size(), 0,
+                           reinterpret_cast<sockaddr*>(&destination), sizeof(destination));
+  close(socket);
+#endif
+  ASSERT_EQ(sent, static_cast<decltype(sent)>(encoded.value().size()));
 }
 
 struct ClipboardFactoryProbe {
@@ -248,6 +285,44 @@ TEST(RuntimeWorkerThreadTest, StartsClipboardBackendWithConfiguredPreferenceAndT
 
   ASSERT_TRUE(QMetaObject::invokeMethod(&worker, [&worker] { worker.stop(); },
                                        Qt::BlockingQueuedConnection));
+  thread.quit();
+  ASSERT_TRUE(thread.wait(2000));
+}
+
+TEST(RuntimeWorkerThreadTest, AppliesRemoteTopologyWhileRuntimeIsActive) {
+  lanlink::desktop::RuntimeWorker worker(nullptr, fake_backend_factory());
+  QThread thread;
+  worker.moveToThread(&thread);
+  QSignalSpy topology_spy(&worker, &lanlink::desktop::RuntimeWorker::remoteTopologyChanged);
+  QSignalSpy status_spy(&worker, &lanlink::desktop::RuntimeWorker::statusChanged);
+
+  thread.start();
+  auto options = worker_options();
+  options.connect = lanlink::transport::Endpoint{
+      "127.0.0.1", static_cast<std::uint16_t>(options.listen_port + 2)};
+  ASSERT_TRUE(QMetaObject::invokeMethod(
+      &worker, [&worker, options] { worker.start(options); }, Qt::QueuedConnection));
+  QTRY_VERIFY_WITH_TIMEOUT(status_spy.count() >= 2, 2000);
+
+  const lanlink::DeviceId local{0, 1};
+  const lanlink::DeviceId peer{0, 2};
+  const lanlink::DisplayId local_display{0, 1};
+  const lanlink::DisplayId peer_display{0, 2};
+  lanlink::ScreenTopology topology;
+  ASSERT_TRUE(topology
+                  .set_snapshot(2,
+                                {{local, local_display, {0, 0, 100, 100}, 1.0},
+                                 {peer, peer_display, {-200, 0, 0, 100}, 1.0}},
+                                {{local_display, lanlink::Edge::kLeft, peer_display,
+                                  lanlink::Edge::kRight, 0.0, 1.0, 2}})
+                  .ok());
+  inject_topology(options.discovery_port,
+                  lanlink::discovery::TopologySnapshot{peer, 2, topology, options.group});
+  QTRY_VERIFY_WITH_TIMEOUT(topology_spy.count() == 1, 2000);
+  EXPECT_EQ(worker.topology_revision(), 2u);
+
+  ASSERT_TRUE(QMetaObject::invokeMethod(&worker, [&worker] { worker.stop(); },
+                                        Qt::BlockingQueuedConnection));
   thread.quit();
   ASSERT_TRUE(thread.wait(2000));
 }
