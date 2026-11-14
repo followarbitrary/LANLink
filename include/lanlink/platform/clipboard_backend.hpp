@@ -17,6 +17,41 @@ inline constexpr std::size_t kMaxClipboardDataSize = 4U * 1024U * 1024U;
 inline constexpr std::array<std::uint8_t, 8> kPngSignature{
     0x89U, 0x50U, 0x4eU, 0x47U, 0x0dU, 0x0aU, 0x1aU, 0x0aU};
 
+inline bool valid_utf8(const std::string& value) noexcept {
+  const auto* bytes = reinterpret_cast<const std::uint8_t*>(value.data());
+  std::size_t index = 0;
+  while (index < value.size()) {
+    const auto lead = bytes[index++];
+    std::size_t continuation_count = 0;
+    std::uint32_t code_point = 0;
+    if (lead <= 0x7fU) {
+      continue;
+    } else if (lead >= 0xc2U && lead <= 0xdfU) {
+      continuation_count = 1;
+      code_point = lead & 0x1fU;
+    } else if (lead >= 0xe0U && lead <= 0xefU) {
+      continuation_count = 2;
+      code_point = lead & 0x0fU;
+    } else if (lead >= 0xf0U && lead <= 0xf4U) {
+      continuation_count = 3;
+      code_point = lead & 0x07U;
+    } else {
+      return false;
+    }
+    if (index + continuation_count > value.size()) return false;
+    for (std::size_t count = 0; count < continuation_count; ++count) {
+      const auto continuation = bytes[index++];
+      if ((continuation & 0xc0U) != 0x80U) return false;
+      code_point = (code_point << 6U) | (continuation & 0x3fU);
+    }
+    if ((continuation_count == 2 && code_point < 0x800U) ||
+        (continuation_count == 3 && code_point < 0x10000U) ||
+        (code_point >= 0xd800U && code_point <= 0xdfffU) || code_point > 0x10ffffU)
+      return false;
+  }
+  return true;
+}
+
 struct ClipboardData {
   std::optional<std::string> text;
   std::optional<std::string> html;
@@ -35,6 +70,8 @@ struct ClipboardData {
 inline Result<void> validate_clipboard_data(const ClipboardData& data) {
   if (data.byte_size() > kMaxClipboardDataSize)
     return Result<void>::failure("clipboard package exceeds 4 MiB");
+  if ((data.text && !valid_utf8(*data.text)) || (data.html && !valid_utf8(*data.html)))
+    return Result<void>::failure("clipboard text is not valid UTF-8");
   if (data.png.has_value()) {
     if (data.png->size() < kPngSignature.size() ||
         !std::equal(kPngSignature.begin(), kPngSignature.end(), data.png->begin()))

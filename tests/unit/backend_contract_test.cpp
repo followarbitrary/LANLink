@@ -225,5 +225,31 @@ TEST(ClipboardBackendContract, RejectsOversizedAndInvalidPngWrites) {
   EXPECT_FALSE(backend.write(invalid_png).ok());
 }
 
+TEST(ClipboardBackendContract, FakeRejectsInvalidChangesAndSeedData) {
+  FakeClipboardBackend backend;
+  ASSERT_TRUE(backend.start({}).ok());
+  ClipboardData original;
+  original.text = "original";
+  ASSERT_TRUE(backend.write(original).ok());
+
+  ClipboardData invalid;
+  invalid.text = std::string("\xc3\x28", 2);
+  backend.emit_change(invalid);
+  ASSERT_TRUE(backend.poll().ok());
+  EXPECT_EQ(backend.data(), original);
+
+  backend.set_data(invalid);
+  EXPECT_EQ(backend.data(), original);
+  EXPECT_FALSE(backend.last_error().empty());
+
+  ClipboardData oversized;
+  oversized.html = std::string(kMaxClipboardDataSize + 1, 'x');
+  backend.emit_change(oversized);
+  ASSERT_TRUE(backend.poll().ok());
+  EXPECT_EQ(backend.data(), original);
+  backend.set_data(oversized);
+  EXPECT_EQ(backend.data(), original);
+}
+
 }  // namespace
 }  // namespace lanlink::platform

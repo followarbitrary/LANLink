@@ -55,9 +55,23 @@ Result<void> FakeClipboardBackend::write(const ClipboardData& data) {
 Result<void> FakeClipboardBackend::clear() { return write(ClipboardData{}); }
 
 void FakeClipboardBackend::emit_change(ClipboardData data) {
+  const auto valid = validate_clipboard_data(data);
+  if (!valid.ok()) {
+    set_error(valid.error());
+    return;
+  }
   pending_changes_.push_back(std::move(data));
+  last_error_.clear();
 }
 
-void FakeClipboardBackend::set_data(ClipboardData data) { data_ = std::move(data); }
+void FakeClipboardBackend::set_data(ClipboardData data) {
+  const auto valid = validate_clipboard_data(data);
+  if (!valid.ok()) {
+    set_error(valid.error());
+    return;
+  }
+  data_ = std::move(data);
+  last_error_.clear();
+}
 
 }  // namespace lanlink::platform
