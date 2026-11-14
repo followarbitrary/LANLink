@@ -169,14 +169,22 @@ Result<std::string> DiscoveryService::encode_topology(const TopologySnapshot& sn
         << snapshot.topology.links().size();
     for (const auto& display : snapshot.topology.displays()) {
         const auto& r = display.logical_bounds;
+        const auto rotation = static_cast<int>(display.rotation);
         if (display.device == DeviceId{} || display.id == DisplayId{} || !finite_value(r.left) || !finite_value(r.top) ||
-            !finite_value(r.right) || !finite_value(r.bottom) || !finite_value(display.scale))
+            !finite_value(r.right) || !finite_value(r.bottom) || !finite_value(display.scale) ||
+            (rotation != 0 && rotation != 90 && rotation != 180 && rotation != 270))
             return Result<std::string>::failure("invalid topology display");
         out << ' ' << display.device.high << ' ' << display.device.low << ' ' << display.id.high << ' '
             << display.id.low << ' ' << r.left << ' ' << r.top << ' ' << r.right << ' ' << r.bottom << ' '
-            << display.scale << ' ' << static_cast<int>(display.rotation);
+            << display.scale << ' ' << rotation;
     }
     for (const auto& link : snapshot.topology.links()) {
+        if (link.source == DisplayId{} || link.target == DisplayId{} || link.source == link.target ||
+            !valid_edge_value(edge_value(link.source_edge)) || !valid_edge_value(edge_value(link.target_edge)) ||
+            !finite_value(link.tangent_min) || !finite_value(link.tangent_max) || link.tangent_min < 0.0 ||
+            link.tangent_max > 1.0 || !(link.tangent_min < link.tangent_max) ||
+            link.version != snapshot.revision)
+            return Result<std::string>::failure("invalid topology link");
         out << ' ' << link.source.high << ' ' << link.source.low << ' ' << link.target.high << ' ' << link.target.low
             << ' ' << edge_value(link.source_edge) << ' ' << edge_value(link.target_edge) << ' '
             << link.tangent_min << ' ' << link.tangent_max << ' ' << link.version;
@@ -374,6 +382,9 @@ Result<void> DiscoveryService::broadcast_topology(const TopologySnapshot& snapsh
     }
     if (snapshot.group != impl_->config.group || snapshot.origin != impl_->config.device_id)
         return Result<void>::failure("topology snapshot origin or group mismatch");
+    auto existing = impl_->topology_snapshots.find(snapshot.origin);
+    if (existing != impl_->topology_snapshots.end() && snapshot.revision <= existing->second.revision)
+        return Result<void>::success();
     auto encoded = encode_topology(snapshot);
     if (!encoded.ok()) return Result<void>::failure(encoded.error());
     if (!send_packet(impl_->socket, impl_->config.discovery_port, encoded.value()))

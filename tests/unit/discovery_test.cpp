@@ -193,3 +193,26 @@ TEST(Discovery, BroadcastTopologyStoresLocalSnapshot) {
     EXPECT_EQ(service.value().topology_snapshots()[0].origin, a.device_id);
     EXPECT_EQ(service.value().topology_snapshots()[0].revision, 9u);
 }
+
+TEST(Discovery, RejectsInvalidTopologyFieldsDuringEncoding) {
+    ScreenTopology invalid_rotation;
+    Display display{id(10), id(20), Rect{0, 0, 10, 10}, 1.0, static_cast<Rotation>(1)};
+    ASSERT_TRUE(invalid_rotation.set_snapshot(1, {display}, {}).ok());
+    EXPECT_FALSE(DiscoveryService::encode_topology(TopologySnapshot{id(2), 1, invalid_rotation, "test-group"}).ok());
+
+    ScreenTopology invalid_link;
+    Display a{id(10), id(20), Rect{0, 0, 10, 10}, 1.0, Rotation::k0};
+    Display b{id(11), id(21), Rect{10, 0, 20, 10}, 1.0, Rotation::k0};
+    ScreenLink link{a.id, Edge::kRight, b.id, Edge::kLeft, 0, 1, 1};
+    ASSERT_TRUE(invalid_link.set_snapshot(1, {a, b}, {link}).ok());
+    EXPECT_FALSE(DiscoveryService::encode_topology(TopologySnapshot{id(2), 2, invalid_link, "test-group"}).ok());
+}
+
+TEST(Discovery, BroadcastTopologyNeverDowngradesLocalRevision) {
+    auto service = DiscoveryService::bind(config(42006));
+    ASSERT_TRUE(service.ok());
+    ASSERT_TRUE(service.value().broadcast_topology(sample_topology(2), 2).ok());
+    ASSERT_TRUE(service.value().broadcast_topology(sample_topology(1), 1).ok());
+    ASSERT_EQ(service.value().topology_snapshots().size(), 1u);
+    EXPECT_EQ(service.value().topology_snapshots()[0].revision, 2u);
+}
