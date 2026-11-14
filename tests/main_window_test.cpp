@@ -6,6 +6,7 @@
 #include <QElapsedTimer>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMetaObject>
 #include <QPushButton>
 #include <QThread>
 
@@ -73,6 +74,14 @@ QLineEdit* field(MainWindow& window, const QString& name) {
   return window.findChild<QLineEdit*>(name);
 }
 
+int label_count(MainWindow& window, const QString& text) {
+  int count = 0;
+  for (auto* label : window.findChildren<QLabel*>()) {
+    if (label->text() == text) ++count;
+  }
+  return count;
+}
+
 std::uint16_t test_port() {
   return static_cast<std::uint16_t>(46000 +
                                     (QCoreApplication::applicationPid() % 1000) * 2);
@@ -100,6 +109,29 @@ TEST(MainWindowTest, StartsRuntimeAutomaticallyOnConstruction) {
             current_status->text().contains(QStringLiteral("监听")) ||
             current_status->text().contains(QStringLiteral("等待")));
   }));
+  EXPECT_EQ(label_count(window, QStringLiteral("等待对端设备")), 0);
+}
+
+TEST(MainWindowTest, DoesNotShowPlaceholderWithoutPeer) {
+  MainWindow window(nullptr, fake_backend_factory(), false);
+
+  EXPECT_EQ(label_count(window, QStringLiteral("等待对端设备")), 0);
+}
+
+TEST(MainWindowTest, AddsPeerOnlyAfterPeerSignal) {
+  MainWindow window(nullptr, fake_backend_factory(), false);
+
+  ASSERT_EQ(label_count(window, QStringLiteral("等待对端设备")), 0);
+  const bool invoked = QMetaObject::invokeMethod(
+      &window, "onPeerChanged", Qt::DirectConnection,
+      Q_ARG(QString, QStringLiteral("设备 2")),
+      Q_ARG(QString, QStringLiteral("LANLink 节点")),
+      Q_ARG(QString, QStringLiteral("192.168.1.2:41000")), Q_ARG(qulonglong, 2),
+      Q_ARG(qulonglong, 2), Q_ARG(bool, true));
+
+  ASSERT_TRUE(invoked);
+  EXPECT_GE(label_count(window, QStringLiteral("设备 2")), 1);
+  EXPECT_EQ(label_count(window, QStringLiteral("等待对端设备")), 0);
 }
 
 TEST(MainWindowTest, RejectsInvalidSettingsWithoutStartingWorker) {
@@ -165,6 +197,7 @@ TEST(MainWindowTest, StartsAndStopsRuntimeThroughSettingsButton) {
            current_toggle->text() == QStringLiteral("启动服务") &&
            current_header->text() == QStringLiteral("●  未运行");
   }));
+  EXPECT_EQ(label_count(window, QStringLiteral("等待对端设备")), 0);
 }
 
 TEST(MainWindowTest, ShowsWorkerStartupErrorAndRemainsRestartable) {

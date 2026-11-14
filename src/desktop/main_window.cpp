@@ -334,32 +334,29 @@ void MainWindow::startRuntime(const app::AppOptions& options) {
 }
 
 void MainWindow::stopRuntime() {
-  if (runtimeThread_ == nullptr || runtimeWorker_ == nullptr) {
-    state_.running = false;
-    state_.connected = false;
-    state_.status = QStringLiteral("已停止");
-    updateRuntimeControls();
-    return;
+  const bool rebuild = state_.running || state_.connected || state_.devices.size() > 1 ||
+                       !state_.peerEndpoint.isEmpty();
+  if (runtimeThread_ != nullptr && runtimeWorker_ != nullptr) {
+    QMetaObject::invokeMethod(runtimeWorker_, &RuntimeWorker::stop, Qt::BlockingQueuedConnection);
+    runtimeThread_->quit();
+    runtimeThread_->wait();
+    runtimeWorker_ = nullptr;
+    delete runtimeThread_;
+    runtimeThread_ = nullptr;
   }
-  QMetaObject::invokeMethod(runtimeWorker_, &RuntimeWorker::stop, Qt::BlockingQueuedConnection);
-  runtimeThread_->quit();
-  runtimeThread_->wait();
-  runtimeWorker_ = nullptr;
-  delete runtimeThread_;
-  runtimeThread_ = nullptr;
   state_.running = false;
   state_.connected = false;
   state_.status = QStringLiteral("已停止");
   state_.peerEndpoint.clear();
+  state_.peerName.clear();
+  if (!state_.devices.isEmpty()) state_.devices.resize(1);
+  state_.activeDevice = 0;
+  state_.selectedTransferTarget = 0;
   if (!state_.devices.isEmpty()) {
     state_.devices[0].online = false;
     state_.devices[0].address = QStringLiteral("未启动");
   }
-  if (state_.devices.size() > 1) {
-    state_.devices[1].online = false;
-    if (state_.devices[1].deviceId == 0) state_.devices[1].address = QStringLiteral("自动发现中");
-  }
-  rebuildPages();
+  if (rebuild) rebuildPages();
   updateRuntimeControls();
 }
 
@@ -406,10 +403,33 @@ void MainWindow::onRuntimeStatusChanged(const QString& status, bool running, boo
 void MainWindow::onPeerChanged(const QString& name, const QString& platform,
                                const QString& address, qulonglong deviceId,
                                qulonglong displayId, bool online) {
-  if (state_.devices.size() < 2) state_.devices.resize(2);
-  auto& peer = state_.devices[1];
-  const bool changed = peer.name != name || peer.platform != platform || peer.address != address ||
-                       peer.deviceId != deviceId || peer.displayId != displayId || peer.online != online;
+  int peerIndex = -1;
+  for (int index = 1; index < state_.devices.size(); ++index) {
+    if (state_.devices[index].deviceId == deviceId) {
+      peerIndex = index;
+      break;
+    }
+  }
+  bool changed = false;
+  if (peerIndex < 0) {
+    peerIndex = state_.devices.size();
+    state_.devices.append(DeviceState{
+        name,
+        platform,
+        address,
+        QColor(QStringLiteral("#4db69e")),
+        QPointF(310.0 + 270.0 * static_cast<double>(peerIndex - 1), 68.0),
+        QSizeF(220.0, 120.0),
+        false,
+        online,
+        deviceId,
+        displayId,
+    });
+    changed = true;
+  }
+  auto& peer = state_.devices[peerIndex];
+  changed = changed || peer.name != name || peer.platform != platform || peer.address != address ||
+            peer.deviceId != deviceId || peer.displayId != displayId || peer.online != online;
   if (!changed) return;
   captureSettingsFromUi();
   peer.name = name;
