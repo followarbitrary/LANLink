@@ -19,6 +19,11 @@ using namespace std::chrono_literals;
 
 Uuid128 id(std::uint64_t value) { return {value, value + 1000}; }
 
+std::vector<std::uint8_t> read_file(const std::filesystem::path& path) {
+    std::ifstream stream(path, std::ios::binary);
+    return {std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>()};
+}
+
 TEST(PeerSession, CompletesAcquireActivateInputAndReleaseOverTcp) {
     auto listener_result = Listener::bind(Endpoint{"127.0.0.1", 0});
     ASSERT_TRUE(listener_result.ok()) << listener_result.error();
@@ -741,6 +746,57 @@ TEST(PeerSession, FileTransferCancellationCleansReceiverAndKeepsSessionUsable) {
     EXPECT_TRUE(std::none_of(target_updates.begin(), target_updates.end(), [](const auto& status) {
         return status.state == FileStatusCode::kCompleted;
     }));
+    EXPECT_TRUE(source.connected());
+    EXPECT_TRUE(target.connected());
+    std::filesystem::remove_all(root, ec);
+}
+
+TEST(PeerSession, FileTransferRejectsExistingDestinationWithoutOverwrite) {
+    auto listener_result = Listener::bind(Endpoint{"127.0.0.1", 0});
+    ASSERT_TRUE(listener_result.ok());
+    auto listener = std::move(listener_result.value());
+    auto client_result = Connection::connect(Endpoint{"127.0.0.1", listener.local_endpoint().port});
+    ASSERT_TRUE(client_result.ok());
+    auto accepted = listener.accept(2s);
+    ASSERT_TRUE(accepted.ok());
+
+    const auto root = std::filesystem::temp_directory_path() / "lanlink-file-test-existing";
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
+    std::filesystem::create_directories(root / "downloads", ec);
+    ASSERT_FALSE(ec);
+    const auto source_path = root / "source.bin";
+    std::ofstream(source_path, std::ios::binary) << "new contents";
+    const auto destination = root / "downloads" / "existing.bin";
+    std::ofstream(destination, std::ios::binary) << "keep contents";
+
+    std::vector<FileTransferStatus> source_updates;
+    std::vector<FileTransferStatus> target_updates;
+    PeerSessionConfig source_config{id(321), AuthenticatedPeer{id(322)}};
+    source_config.file_status_callback = [&](const FileTransferStatus& update) {
+        source_updates.push_back(update);
+    };
+    PeerSessionConfig target_config{id(322), AuthenticatedPeer{id(321)}};
+    target_config.receive_directory = root / "downloads";
+    target_config.file_status_callback = [&](const FileTransferStatus& update) {
+        target_updates.push_back(update);
+    };
+    PeerSession source(std::move(client_result.value()), std::move(source_config));
+    PeerSession target(std::move(accepted.value()), std::move(target_config));
+    ASSERT_TRUE(source.start({}).ok());
+    ASSERT_TRUE(target.start({}).ok());
+    ASSERT_TRUE(source.pump({}).ok());
+    ASSERT_TRUE(target.pump({}).ok());
+
+    ASSERT_TRUE(source.send_file(source_path, "existing.bin").ok());
+    ASSERT_TRUE(target.pump({}, 5ms).ok());
+    ASSERT_TRUE(source.pump({}, 5ms).ok());
+    EXPECT_EQ(read_file(destination),
+              (std::vector<std::uint8_t>{'k', 'e', 'e', 'p', ' ', 'c', 'o', 'n', 't', 'e', 'n', 't', 's'}));
+    ASSERT_FALSE(source_updates.empty());
+    EXPECT_EQ(source_updates.back().state, FileStatusCode::kFailed);
+    ASSERT_FALSE(target_updates.empty());
+    EXPECT_EQ(target_updates.back().state, FileStatusCode::kFailed);
     EXPECT_TRUE(source.connected());
     EXPECT_TRUE(target.connected());
     std::filesystem::remove_all(root, ec);

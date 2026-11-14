@@ -432,30 +432,46 @@ Result<void> PeerSession::dispatch_file_begin(const protocol::FileBegin& begin,
     if (config_.peer.id != DeviceId{} && begin.source != config_.peer.id)
         return Result<void>::success();
     if (file_send_.has_value() || file_receive_.has_value()) {
+        const std::string message = "file transfer busy";
         (void)connection_.send(protocol::FileStatus{config_.local_device, begin.transfer,
                                                      protocol::FileStatusCode::kFailed, 0,
-                                                     begin.total_size, "file transfer busy"});
+                                                     begin.total_size, message});
+        emit_file_update(FileTransferStatus{begin.transfer, begin.name,
+                                            protocol::FileStatusCode::kFailed, 0,
+                                            begin.total_size, true, message});
         return Result<void>::success();
     }
     if (config_.receive_directory.empty()) {
+        const std::string message = "receive directory unavailable";
         (void)connection_.send(protocol::FileStatus{config_.local_device, begin.transfer,
                                                      protocol::FileStatusCode::kFailed, 0,
-                                                     begin.total_size, "receive directory unavailable"});
+                                                     begin.total_size, message});
+        emit_file_update(FileTransferStatus{begin.transfer, begin.name,
+                                            protocol::FileStatusCode::kFailed, 0,
+                                            begin.total_size, true, message});
         return Result<void>::success();
     }
     std::error_code ec;
     std::filesystem::create_directories(config_.receive_directory, ec);
     if (ec) {
+        const std::string message = "cannot create receive directory";
         (void)connection_.send(protocol::FileStatus{config_.local_device, begin.transfer,
                                                      protocol::FileStatusCode::kFailed, 0,
-                                                     begin.total_size, "cannot create receive directory"});
+                                                     begin.total_size, message});
+        emit_file_update(FileTransferStatus{begin.transfer, begin.name,
+                                            protocol::FileStatusCode::kFailed, 0,
+                                            begin.total_size, true, message});
         return Result<void>::success();
     }
     const auto target = config_.receive_directory / std::filesystem::path(begin.name);
     if (std::filesystem::exists(target, ec) || ec) {
+        const std::string message = "destination file exists";
         (void)connection_.send(protocol::FileStatus{config_.local_device, begin.transfer,
                                                      protocol::FileStatusCode::kFailed, 0,
-                                                     begin.total_size, "destination file exists"});
+                                                     begin.total_size, message});
+        emit_file_update(FileTransferStatus{begin.transfer, begin.name,
+                                            protocol::FileStatusCode::kFailed, 0,
+                                            begin.total_size, true, message});
         return Result<void>::success();
     }
     const auto temporary = config_.receive_directory /
@@ -463,9 +479,13 @@ Result<void> PeerSession::dispatch_file_begin(const protocol::FileBegin& begin,
                             std::to_string(begin.transfer.low) + ".part");
     std::ofstream stream(temporary, std::ios::binary | std::ios::trunc);
     if (!stream) {
+        const std::string message = "cannot open destination file";
         (void)connection_.send(protocol::FileStatus{config_.local_device, begin.transfer,
                                                      protocol::FileStatusCode::kFailed, 0,
-                                                     begin.total_size, "cannot open destination file"});
+                                                     begin.total_size, message});
+        emit_file_update(FileTransferStatus{begin.transfer, begin.name,
+                                            protocol::FileStatusCode::kFailed, 0,
+                                            begin.total_size, true, message});
         return Result<void>::success();
     }
     file_receive_ = FileReceiveState{begin.transfer, begin.name, temporary, target,
@@ -490,7 +510,8 @@ Result<void> PeerSession::dispatch_file_chunk(const protocol::FileChunk& chunk,
         fail_file("file chunk offset is invalid", true, now);
         return Result<void>::success();
     }
-    if (state.offset + chunk.data.size() > state.total_size) {
+    if (state.offset > state.total_size ||
+        chunk.data.size() > state.total_size - state.offset) {
         fail_file("file chunk exceeds file size", true, now);
         return Result<void>::success();
     }
@@ -1076,6 +1097,10 @@ Result<void> PeerSession::tick(IClock::time_point now) {
                    " sequence=", clipboard_receive_->sequence);
         clipboard_receive_.reset();
     }
+    if (file_receive_.has_value() &&
+        now - file_receive_->started_at >= m0::kConnectionTimeout) {
+        fail_file("file transfer timeout", true, now);
+    }
     (void)retry_pending_clipboard();
     if (now >= next_display_info_check_) {
         auto display = send_display_info_if_changed(false, now);
@@ -1103,6 +1128,9 @@ Result<void> PeerSession::tick(IClock::time_point now) {
                                                                    std::move(data)});
                 if (!sent.ok()) return fail_and_disconnect("file chunk send failed", now);
                 state.offset += length;
+                emit_file_update(FileTransferStatus{state.transfer, state.name,
+                                                    protocol::FileStatusCode::kProgress,
+                                                    state.offset, state.total_size, false, {}});
             }
         } else if (!state.end_sent) {
             auto sent = connection_.send(protocol::FileEnd{config_.local_device, state.transfer,

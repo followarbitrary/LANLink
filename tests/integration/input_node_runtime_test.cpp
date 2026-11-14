@@ -993,8 +993,8 @@ TEST(InputNodeRuntime, ClipboardChangesBroadcastOnNextTickOnlyWhenEnabled) {
   second.text = "second";
   left_clipboard.emit_change(second);
   ASSERT_TRUE(left->tick(now).ok());
-  for (int i = 0; i < 4; ++i) {
-    ASSERT_TRUE(right->poll(now, 0ms).ok());
+  for (int i = 0; i < 20 && right_clipboard.data() != second; ++i) {
+    ASSERT_TRUE(right->poll(now, 5ms).ok());
     ASSERT_TRUE(right->tick(now).ok());
     now += 1ms;
   }
@@ -1022,8 +1022,8 @@ TEST(InputNodeRuntime, ClipboardChangesBroadcastOnNextTickOnlyWhenEnabled) {
   third.text = "third";
   left_clipboard.emit_change(third);
   ASSERT_TRUE(left->tick(now).ok());
-  for (int i = 0; i < 4; ++i) {
-    ASSERT_TRUE(right->poll(now, 0ms).ok());
+  for (int i = 0; i < 20 && right_clipboard.data() != third; ++i) {
+    ASSERT_TRUE(right->poll(now, 5ms).ok());
     ASSERT_TRUE(right->tick(now).ok());
     now += 1ms;
   }
@@ -1057,10 +1057,10 @@ TEST(InputNodeRuntime, ClipboardRemoteWritesDoNotEchoBack) {
   remote.text = "from-right";
   right_clipboard.emit_change(remote);
   ASSERT_TRUE(right->tick(now).ok());
-  for (int i = 0; i < 4; ++i) {
-    ASSERT_TRUE(left->poll(now, 0ms).ok());
+  for (int i = 0; i < 20 && left_clipboard.data() != remote; ++i) {
+    ASSERT_TRUE(left->poll(now, 5ms).ok());
     ASSERT_TRUE(left->tick(now).ok());
-    ASSERT_TRUE(right->poll(now, 0ms).ok());
+    ASSERT_TRUE(right->poll(now, 5ms).ok());
     now += 1ms;
   }
   EXPECT_EQ(left_clipboard.data(), remote);

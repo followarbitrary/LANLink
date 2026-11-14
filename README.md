@@ -42,9 +42,13 @@ The help output lists these flags: `--device-id`, `--peer-id`, `--listen-port`, 
 
 Clipboard synchronization is opt-in with `--clipboard` and remains disabled by default for privacy. It supports UTF-8 text, HTML, and PNG data with a 4 MiB combined package limit including protocol metadata; a conservative metadata reserve keeps the payload below that wire limit. Native clipboard integration is available on macOS and Windows. The command-line and Qt desktop clients use the platform clipboard APIs. On macOS, Accessibility permission is required for input forwarding; clipboard synchronization itself does not add a separate permission requirement.
 
+The Qt6 control panel also supports single-file transfer over the authenticated peer session. Select a file or drop it onto **文件传输** after a real peer is online; the file is sent in bounded chunks and the page reports accepted, progress, completed, failed, or canceled states. The receiver writes to the platform Downloads directory (falling back to a temporary directory when Downloads is unavailable), refuses to overwrite an existing file, and removes partial files after failure or cancellation. Files are limited to 4 GiB and basename-only UTF-8 names; resume, multi-file queues, directories, and overwrite confirmation are not supported.
+
 ### Qt6 desktop control panel
 
 When Qt 6 is installed, the Debug preset also builds the optional `lanlink_desktop` Qt Widgets control panel. It starts the same discovery, transport, native input-forwarding, and optional clipboard-sync runtime as `lanlink_app` on a worker thread as soon as the window opens. Configure device/peer IDs, listen/discovery ports, group, optional `HOST:PORT`, display IDs, and left/right direction in **连接设置**; the same page can stop and restart the service. Clipboard synchronization is off by default and can be enabled from the settings page or tray menu. It transfers UTF-8 text, HTML, and PNG data within the 4 MiB package limit including protocol metadata per clipboard update.
+
+File transfer uses the same worker-thread runtime and TCP session; no separate core service or port needs to be started. The transfer controls stay disabled until discovery reports an online peer, and canceling a send removes the receiver's temporary `.lanlink-*.part` file.
 
 ```sh
 cmake --build cmake-build-debug --target lanlink_desktop

@@ -624,8 +624,9 @@ QWidget* buildSettingsPage(DesktopState* state, QWidget* parent,
                 QStringLiteral("同步文本、HTML 和 PNG，单次剪贴板包上限 4 MiB（含协议开销）"),
                 QStringLiteral("clipboardSyncCheck"), state->clipboardEnabled, true,
                 std::move(toggleClipboard));
-  addPreference(QStringLiteral("文件传输"), QStringLiteral("当前核心未提供文件传输协议"),
-                QStringLiteral("fileTransferCheck"), false, false, {});
+  addPreference(QStringLiteral("文件传输"),
+                QStringLiteral("支持单文件分块发送、接收、进度显示和取消"),
+                QStringLiteral("fileTransferCheck"), true, false, {});
   layout->addWidget(preferences);
 
   auto* m0 = panel(QStringLiteral("subpanel"));

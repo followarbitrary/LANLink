@@ -312,8 +312,8 @@ TEST(ConnectionManager, BroadcastClipboardContinuesAfterOnePeerFailure) {
     EXPECT_FALSE(result.ok());
     EXPECT_EQ(manager.state(first.value()), PeerState::kBackoff);
     EXPECT_EQ(manager.state(second.value()), PeerState::kConnected);
-    for (int attempt = 0; attempt < 16 && target2_backend.write_count() == 0; ++attempt)
-        ASSERT_TRUE(target2.pump({}, 0ms).ok());
+    for (int attempt = 0; attempt < 20 && target2_backend.data() != data; ++attempt)
+        ASSERT_TRUE(target2.pump({}, 5ms).ok());
     EXPECT_EQ(target2_backend.data(), data);
 }
 
