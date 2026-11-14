@@ -36,8 +36,32 @@ Result<std::unique_ptr<InputNodeRuntime>> InputNodeRuntime::create(InputRuntimeC
 }
 
 Result<void> InputNodeRuntime::set_topology(ScreenTopology topology) {
-  if (running_ && manager_.size() != 0)
-    return Result<void>::failure("cannot change topology while peer is active");
+  if (running_ && manager_.size() != 0) {
+    const auto now = IClock::Clock::now();
+    Result<void> cleanup = Result<void>::success();
+
+    if (arbiter_.has_lease()) {
+      const auto lease = *arbiter_.lease();
+      arbiter_.revoke_current(RevokeReason::kExplicitRelease, now);
+      config_.backend->release_injected_state(lease.session);
+    }
+
+    clear_remote_cursor();
+    edge_overflow_edge_.reset();
+    edge_overflow_ = 0.0;
+    {
+      std::lock_guard lock(queue_mutex_);
+      queued_events_.clear();
+      queue_overflowed_ = false;
+    }
+
+    auto actions = router_.on_revoke(RevokeReason::kExplicitRelease, now);
+    auto dispatched = dispatch_actions(actions, now);
+    if (!dispatched.ok()) cleanup = dispatched;
+    (void)router_.on_tick(now);
+    topology_ = std::move(topology);
+    return cleanup;
+  }
   topology_ = std::move(topology);
   return Result<void>::success();
 }

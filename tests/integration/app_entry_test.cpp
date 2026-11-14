@@ -248,9 +248,11 @@ bool running_topology_update_case() {
                                0.0, 1.0, 3}})
             .ok())
     return false;
-  const bool rejected_with_slot = !runtime->set_topology(std::move(blocked)).ok();
+  const bool updated_with_slot = runtime->set_topology(std::move(blocked)).ok();
+  const bool lease_state_cleared = !runtime->arbiter().has_lease();
   const bool stopped = runtime->stop(lanlink::IClock::Clock::now()).ok();
-  return updated && slot_added && endpoint_updated && rejected_with_slot && stopped;
+  return updated && slot_added && endpoint_updated && updated_with_slot && lease_state_cleared &&
+         stopped;
 }
 
 int run_case(const std::string& executable, const std::string& arguments,
