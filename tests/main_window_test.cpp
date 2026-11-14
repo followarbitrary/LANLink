@@ -134,6 +134,35 @@ TEST(MainWindowTest, AddsPeerOnlyAfterPeerSignal) {
   EXPECT_EQ(label_count(window, QStringLiteral("等待对端设备")), 0);
 }
 
+TEST(MainWindowTest, RemovesPeerAfterDiscoveryTimeoutOrDisconnect) {
+  MainWindow window(nullptr, fake_backend_factory(), false);
+
+  ASSERT_TRUE(QMetaObject::invokeMethod(
+      &window, "onPeerChanged", Qt::DirectConnection,
+      Q_ARG(QString, QStringLiteral("设备 2")),
+      Q_ARG(QString, QStringLiteral("LANLink 节点")),
+      Q_ARG(QString, QStringLiteral("192.168.1.2:41000")), Q_ARG(qulonglong, 2),
+      Q_ARG(qulonglong, 2), Q_ARG(bool, false)));
+  EXPECT_EQ(label_count(window, QStringLiteral("设备 2")), 0);
+
+  ASSERT_TRUE(QMetaObject::invokeMethod(
+      &window, "onPeerChanged", Qt::DirectConnection,
+      Q_ARG(QString, QStringLiteral("设备 2")),
+      Q_ARG(QString, QStringLiteral("LANLink 节点")),
+      Q_ARG(QString, QStringLiteral("192.168.1.2:41000")), Q_ARG(qulonglong, 2),
+      Q_ARG(qulonglong, 2), Q_ARG(bool, true)));
+  ASSERT_GE(label_count(window, QStringLiteral("设备 2")), 1);
+
+  ASSERT_TRUE(QMetaObject::invokeMethod(
+      &window, "onPeerChanged", Qt::DirectConnection,
+      Q_ARG(QString, QStringLiteral("设备 2")),
+      Q_ARG(QString, QStringLiteral("LANLink 节点")),
+      Q_ARG(QString, QStringLiteral("192.168.1.2:41000")), Q_ARG(qulonglong, 2),
+      Q_ARG(qulonglong, 2), Q_ARG(bool, false)));
+
+  EXPECT_EQ(label_count(window, QStringLiteral("设备 2")), 0);
+}
+
 TEST(MainWindowTest, RejectsInvalidSettingsWithoutStartingWorker) {
   MainWindow window(nullptr, fake_backend_factory(), false);
   auto* device_id = field(window, QStringLiteral("deviceIdEdit"));

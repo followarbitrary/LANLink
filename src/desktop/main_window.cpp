@@ -410,6 +410,23 @@ void MainWindow::onPeerChanged(const QString& name, const QString& platform,
       break;
     }
   }
+  if (!online) {
+    if (peerIndex < 0) return;
+    state_.devices.removeAt(peerIndex);
+    if (state_.activeDevice == peerIndex || state_.activeDevice >= state_.devices.size()) {
+      state_.activeDevice = 0;
+    }
+    if (state_.selectedTransferTarget == peerIndex ||
+        state_.selectedTransferTarget >= state_.devices.size()) {
+      state_.selectedTransferTarget = 0;
+    } else if (state_.selectedTransferTarget > peerIndex) {
+      --state_.selectedTransferTarget;
+    }
+    state_.peerName.clear();
+    state_.peerEndpoint.clear();
+    rebuildPages();
+    return;
+  }
   bool changed = false;
   if (peerIndex < 0) {
     peerIndex = state_.devices.size();
