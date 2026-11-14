@@ -136,3 +136,60 @@ TEST(Discovery, OrdersPeersByDeviceId) {
     EXPECT_EQ(peers.value()[2].device, id(5));
     EXPECT_TRUE(service.value().stop().ok());
 }
+
+namespace {
+ScreenTopology sample_topology(std::uint64_t version = 1) {
+    ScreenTopology topology;
+    Display a{id(10), id(20), Rect{0, 0, 100, 100}, 1.0, Rotation::k0};
+    Display b{id(11), id(21), Rect{100, 0, 200, 100}, 2.0, Rotation::k90};
+    ScreenLink link{a.id, Edge::kRight, b.id, Edge::kLeft, 0.1, 0.9, version};
+    EXPECT_TRUE(topology.set_snapshot(version, {a, b}, {link}).ok());
+    return topology;
+}
+}
+
+TEST(Discovery, TopologyRoundTripAndStrictValidation) {
+    TopologySnapshot snapshot{id(7), 4, sample_topology(4), "test-group"};
+    auto encoded = DiscoveryService::encode_topology(snapshot);
+    ASSERT_TRUE(encoded.ok()) << encoded.error();
+    auto decoded = DiscoveryService::decode_topology(encoded.value());
+    ASSERT_TRUE(decoded.ok()) << decoded.error();
+    EXPECT_EQ(decoded.value().origin, snapshot.origin);
+    EXPECT_EQ(decoded.value().revision, 4u);
+    ASSERT_EQ(decoded.value().topology.displays().size(), 2u);
+    EXPECT_EQ(decoded.value().topology.displays()[1].rotation, Rotation::k90);
+    EXPECT_FALSE(DiscoveryService::decode_topology("LANLINK2 test-group 0 0 4 0 0").ok());
+    EXPECT_FALSE(DiscoveryService::decode_topology("LANLINK2 test-group 0 7 4 1 0 0 0 1 1 0 0 10 10 1 0").ok());
+    auto oversized = encoded.value();
+    oversized.append(kMaxTopologyPacketSize, 'x');
+    EXPECT_FALSE(DiscoveryService::decode_topology(oversized).ok());
+}
+
+TEST(Discovery, TopologyPollKeepsNewestRevisionPerOrigin) {
+    auto a = config(42004);
+    auto service = DiscoveryService::bind(a);
+    ASSERT_TRUE(service.ok()) << service.error();
+    auto newer = DiscoveryService::encode_topology(TopologySnapshot{id(2), 2, sample_topology(2), a.group});
+    auto older = DiscoveryService::encode_topology(TopologySnapshot{id(2), 1, sample_topology(1), a.group});
+    ASSERT_TRUE(newer.ok());
+    ASSERT_TRUE(older.ok());
+    inject(a.discovery_port, newer.value());
+    inject(a.discovery_port, older.value());
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    ASSERT_TRUE(service.value().poll(IClock::time_point{} + std::chrono::milliseconds(1)).ok());
+    ASSERT_EQ(service.value().topology_snapshots().size(), 1u);
+    EXPECT_EQ(service.value().topology_snapshots()[0].revision, 2u);
+    inject(a.discovery_port, DiscoveryService::encode_topology(TopologySnapshot{id(3), 1, sample_topology(1), "other-group"}).value());
+    ASSERT_TRUE(service.value().poll(IClock::time_point{} + std::chrono::milliseconds(2)).ok());
+    EXPECT_EQ(service.value().topology_snapshots().size(), 1u);
+}
+
+TEST(Discovery, BroadcastTopologyStoresLocalSnapshot) {
+    auto a = config(42005);
+    auto service = DiscoveryService::bind(a);
+    ASSERT_TRUE(service.ok());
+    ASSERT_TRUE(service.value().broadcast_topology(sample_topology(9), 9).ok());
+    ASSERT_EQ(service.value().topology_snapshots().size(), 1u);
+    EXPECT_EQ(service.value().topology_snapshots()[0].origin, a.device_id);
+    EXPECT_EQ(service.value().topology_snapshots()[0].revision, 9u);
+}

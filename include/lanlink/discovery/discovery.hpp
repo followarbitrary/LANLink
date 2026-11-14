@@ -4,8 +4,10 @@
 #include "lanlink/common/ids.hpp"
 #include "lanlink/common/result.hpp"
 #include "lanlink/transport/connection.hpp"
+#include "lanlink/topology/topology.hpp"
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -22,6 +24,7 @@ struct DiscoveryConfig {
     std::uint16_t tcp_port{};
     std::chrono::milliseconds announce_interval{1000};
     std::chrono::milliseconds peer_ttl{3000};
+    std::chrono::milliseconds topology_announce_interval{1000};
 };
 
 struct DiscoveryAnnouncement {
@@ -30,6 +33,17 @@ struct DiscoveryAnnouncement {
     DisplayId display;
     std::uint16_t tcp_port{};
 };
+
+struct TopologySnapshot {
+    DeviceId origin;
+    std::uint64_t revision{};
+    ScreenTopology topology;
+    std::string group;
+};
+
+inline constexpr std::size_t kMaxTopologyPacketSize = 4096;
+inline constexpr std::size_t kMaxTopologyDisplays = 64;
+inline constexpr std::size_t kMaxTopologyLinks = 128;
 
 struct DiscoveryPeer {
     DeviceId device;
@@ -59,12 +73,18 @@ class DiscoveryService {
     static Result<std::string> encode_announcement(const DiscoveryConfig& config);
     static Result<std::string> encode_announcement(const DiscoveryAnnouncement& announcement);
     static Result<DiscoveryAnnouncement> decode_announcement(std::string_view packet);
+    static Result<std::string> encode_topology(const TopologySnapshot& snapshot);
+    static Result<TopologySnapshot> decode_topology(std::string_view packet);
+    Result<void> broadcast_topology(const TopologySnapshot& snapshot);
+    Result<void> broadcast_topology(const ScreenTopology& topology, std::uint64_t revision);
+    const std::vector<TopologySnapshot>& topology_snapshots() const noexcept { return topology_snapshots_; }
 
   private:
     struct Impl;
     explicit DiscoveryService(std::unique_ptr<Impl> impl);
     std::unique_ptr<Impl> impl_;
     std::vector<DiscoveryPeer> peers_;
+    std::vector<TopologySnapshot> topology_snapshots_;
 };
 
 } // namespace lanlink::discovery
