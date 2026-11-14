@@ -231,6 +231,9 @@ Result<Uuid128> ConnectionManager::send_file(PeerHandle handle, const std::files
     if (slot->state != PeerState::kConnected || !slot->session)
         return Result<Uuid128>::failure("peer is not connected");
     auto result = slot->session->send_file(path, std::move(display_name));
+    if (!result.ok() && !slot->session->connected()) {
+        (void)handle_failure(*slot, result.error(), now);
+    }
     if (!result.ok()) return result;
     (void)now;
     return result;
@@ -243,6 +246,9 @@ Result<void> ConnectionManager::cancel_file(PeerHandle handle, const Uuid128& tr
     if (slot->state != PeerState::kConnected || !slot->session)
         return Result<void>::failure("peer is not connected");
     auto result = slot->session->cancel_file(transfer);
+    if (!result.ok() && !slot->session->connected()) {
+        (void)handle_failure(*slot, result.error(), now);
+    }
     if (!result.ok()) return result;
     (void)now;
     return result;

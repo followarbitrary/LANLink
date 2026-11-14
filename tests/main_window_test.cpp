@@ -222,6 +222,12 @@ TEST(MainWindowTest, FileTransferControlsFollowOnlinePeerAndProgressSignals) {
   EXPECT_TRUE(status->text().contains(QStringLiteral("50.0%")));
 
   ASSERT_TRUE(QMetaObject::invokeMethod(
+      &window, "onFileTransferChanged", Qt::DirectConnection,
+      Q_ARG(QString, QStringLiteral("report.txt")), Q_ARG(qulonglong, 10),
+      Q_ARG(qulonglong, 10), Q_ARG(QString, QStringLiteral("已完成")), Q_ARG(bool, true)));
+  EXPECT_TRUE(status->text().contains(QStringLiteral("已完成")));
+
+  ASSERT_TRUE(QMetaObject::invokeMethod(
       &window, "onPeerChanged", Qt::DirectConnection,
       Q_ARG(QString, QStringLiteral("设备 2")),
       Q_ARG(QString, QStringLiteral("LANLink 节点")),

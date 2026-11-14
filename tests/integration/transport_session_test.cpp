@@ -661,7 +661,7 @@ TEST(PeerSession, FileTransferStreamsChunksAndRenamesAtomically) {
     {
         std::ofstream file(source_path, std::ios::binary);
         ASSERT_TRUE(file);
-        for (std::size_t i = 0; i < kMaxFileChunkDataSize * 2 + 17; ++i)
+        for (std::size_t i = 0; i < kMaxFileChunkDataSize * 5 + 17; ++i)
             file.put(static_cast<char>(i & 0xff));
     }
     std::vector<FileTransferStatus> source_updates;
@@ -684,12 +684,14 @@ TEST(PeerSession, FileTransferStreamsChunksAndRenamesAtomically) {
 
     auto transfer = source.send_file(source_path, "received.bin");
     ASSERT_TRUE(transfer.ok()) << transfer.error();
+    IClock::time_point now{};
     for (int attempt = 0; attempt < 32; ++attempt) {
-        ASSERT_TRUE(target.pump({}, 1ms).ok());
-        ASSERT_TRUE(source.pump({}, 1ms).ok());
-        ASSERT_TRUE(source.tick({}).ok());
-        ASSERT_TRUE(target.pump({}, 1ms).ok());
-        ASSERT_TRUE(source.pump({}, 1ms).ok());
+        ASSERT_TRUE(target.pump(now, 1ms).ok());
+        ASSERT_TRUE(source.pump(now, 1ms).ok());
+        ASSERT_TRUE(source.tick(now).ok());
+        ASSERT_TRUE(target.pump(now, 1ms).ok());
+        ASSERT_TRUE(source.pump(now, 1ms).ok());
+        now += 1s;
         if (std::filesystem::exists(root / "downloads" / "received.bin") &&
             !source_updates.empty() &&
             source_updates.back().state == FileStatusCode::kCompleted)

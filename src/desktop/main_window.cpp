@@ -569,12 +569,22 @@ void MainWindow::onFileTransferChanged(const QString& name, qulonglong done, qul
   if (content_ != nullptr && content_->currentIndex() == 3) {
     auto* label = findChild<QLabel*>(QStringLiteral("transferStatusLabel"));
     if (label != nullptr) {
+      const bool active = status == QStringLiteral("已接受") ||
+                          status == QStringLiteral("传输中") ||
+                          status.startsWith(QStringLiteral("传输中："));
       if (!name.isEmpty() && total > 0) {
-        label->setText(QStringLiteral("%1 · %2 / %3 (%4%)")
-                          .arg(name)
-                          .arg(done)
-                          .arg(total)
-                          .arg((100.0 * done) / total, 0, 'f', 1));
+        label->setText(active
+                          ? QStringLiteral("%1 · %2 / %3 (%4%)")
+                                .arg(name)
+                                .arg(done)
+                                .arg(total)
+                                .arg((100.0 * done) / total, 0, 'f', 1)
+                          : QStringLiteral("%1 · %2 · %3 / %4 (%5%)")
+                                .arg(name)
+                                .arg(status)
+                                .arg(done)
+                                .arg(total)
+                                .arg((100.0 * done) / total, 0, 'f', 1));
       } else {
         label->setText(status);
       }

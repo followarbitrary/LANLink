@@ -961,24 +961,20 @@ Result<std::vector<Message>> FrameDecoder::feed(std::span<const std::uint8_t> by
                 break;
             auto result = decode(std::span<const std::uint8_t>(buffer_.data(), total));
             if (!result.ok()) {
-                // A frame with valid LLNK framing and a clipboard or file
-                // message type is untrusted transfer data. Drop that frame and
-                // continue so malformed payloads cannot tear down keyboard/mouse
-                // forwarding. Corruption of framing or any other protocol
-                // message remains fatal to the connection.
+                // A frame with valid LLNK framing and a clipboard message type
+                // is untrusted clipboard data. Drop that frame and continue so
+                // malformed clipboard payloads cannot tear down keyboard/mouse
+                // forwarding. File frames remain fatal when their wire payload
+                // is malformed; valid file-state errors are handled by the
+                // PeerSession transfer state machine.
                 const auto type = static_cast<MessageType>(buffer_[5]);
                 const bool clipboard_type =
                     type == MessageType::kClipboardBegin ||
                     type == MessageType::kClipboardChunk ||
                     type == MessageType::kClipboardEnd;
-                const bool file_type = type == MessageType::kFileBegin ||
-                                       type == MessageType::kFileChunk ||
-                                       type == MessageType::kFileEnd ||
-                                       type == MessageType::kFileCancel ||
-                                       type == MessageType::kFileStatus;
                 buffer_.erase(buffer_.begin(),
                               buffer_.begin() + static_cast<std::ptrdiff_t>(total));
-                if (clipboard_type || file_type)
+                if (clipboard_type)
                     continue;
                 return Result<void>::failure(result.error());
             }

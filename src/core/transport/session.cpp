@@ -476,6 +476,9 @@ Result<void> PeerSession::dispatch_file_begin(const protocol::FileBegin& begin,
     }
     const auto temporary = config_.receive_directory /
                            (std::string{"."} + begin.name + ".lanlink-" +
+                            std::to_string(begin.source.high) + "-" +
+                            std::to_string(begin.source.low) + "-" +
+                            std::to_string(begin.transfer.high) + "-" +
                             std::to_string(begin.transfer.low) + ".part");
     std::ofstream stream(temporary, std::ios::binary | std::ios::trunc);
     if (!stream) {
@@ -522,6 +525,7 @@ Result<void> PeerSession::dispatch_file_chunk(const protocol::FileChunk& chunk,
         return Result<void>::success();
     }
     state.offset += chunk.data.size();
+    state.started_at = now;
     emit_file_update(FileTransferStatus{state.transfer, state.name,
                                         protocol::FileStatusCode::kProgress, state.offset,
                                         state.total_size, true, {}});

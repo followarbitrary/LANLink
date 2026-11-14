@@ -267,6 +267,15 @@ TEST(ProtocolWire, FinishRejectsPartialFrame) {
     EXPECT_EQ(decoder.buffered_bytes(), 0u);
 }
 
+TEST(ProtocolWire, FrameDecoderRejectsMalformedFilePayload) {
+    auto malformed = encode(FileBegin{id(4, 4), id(5, 5), "file.txt", 1});
+    ASSERT_TRUE(malformed.ok());
+    // FileBegin stores the UTF-8 name length after the two 16-byte IDs.
+    malformed.value()[kHeaderSize + 16 + 16] = 0xff;
+    FrameDecoder decoder;
+    EXPECT_FALSE(decoder.feed(malformed.value()).ok());
+}
+
 TEST(ProtocolWire, RoundTripsClipboardFrames) {
     expect_round_trip(ClipboardBegin{id(21, 22), 1, 0, 0, 0, 0, 0});
     expect_round_trip(ClipboardBegin{id(21, 22), 2, 0x07, 12, 3, 4, 5});
