@@ -193,6 +193,87 @@ TEST(InputNodeRuntime, CrossesAtExactThresholdAndForwardsSuppressedInput) {
   EXPECT_EQ(left->router().state(), RouterState::kLocal);
 }
 
+TEST(InputNodeRuntime, DisablingInputForwardingRecoversLocalInput) {
+  FakeInputBackend left_backend;
+  FakeInputBackend right_backend;
+  auto left_result = InputNodeRuntime::create(config(
+      id(41), id(42), AuthenticatedPeer{id(43)}, id(410), Endpoint{"127.0.0.1", 0},
+      &left_backend));
+  auto right_result = InputNodeRuntime::create(config(
+      id(43), id(44), AuthenticatedPeer{id(41)}, id(420), Endpoint{"127.0.0.1", 0},
+      &right_backend));
+  ASSERT_TRUE(left_result.ok()) << left_result.error();
+  ASSERT_TRUE(right_result.ok()) << right_result.error();
+  auto left = std::move(left_result.value());
+  auto right = std::move(right_result.value());
+  ASSERT_TRUE(left->set_topology(topology_for(id(410), id(420), true)).ok());
+  ASSERT_TRUE(right->set_topology(topology_for(id(420), id(410), false)).ok());
+  ASSERT_TRUE(left->start().ok());
+  ASSERT_TRUE(right->start().ok());
+  ASSERT_TRUE(left->connect_peer(right->local_endpoint()).ok());
+
+  IClock::time_point now{};
+  pump_pair(*left, *right, now, 20);
+  ASSERT_TRUE(left->connected());
+
+  left_backend.set_pointer_position(Point{100.0, 50.0});
+  left_backend.emit_physical(
+      InputEvent{{}, {}, 0, 0, MouseDelta{4.0, 0.0}, InputOrigin::kPhysical});
+  ASSERT_TRUE(left->poll(now, 0ms).ok());
+  pump_pair(*left, *right, now, 12);
+  ASSERT_EQ(left->router().state(), RouterState::kRemote);
+  ASSERT_TRUE(right->arbiter().has_active_lease());
+
+  ASSERT_TRUE(left->set_input_forwarding_enabled(false, now).ok());
+  EXPECT_EQ(left->router().state(), RouterState::kRecovering);
+  EXPECT_FALSE(left_backend.status().suppression);
+  pump_pair(*left, *right, now, 4);
+  EXPECT_EQ(left->router().state(), RouterState::kLocal);
+  EXPECT_FALSE(right->arbiter().has_lease());
+
+  const auto injected_count = right_backend.injected_events().size();
+  left_backend.emit_physical(
+      InputEvent{{}, {}, 0, 0, MouseDelta{4.0, 0.0}, InputOrigin::kPhysical});
+  ASSERT_TRUE(left->poll(now, 0ms).ok());
+  EXPECT_EQ(left->router().state(), RouterState::kLocal);
+  EXPECT_EQ(right_backend.injected_events().size(), injected_count);
+}
+
+TEST(InputNodeRuntime, DisablingInputForwardingRejectsIncomingHandoffs) {
+  FakeInputBackend left_backend;
+  FakeInputBackend right_backend;
+  auto left_result = InputNodeRuntime::create(config(
+      id(51), id(52), AuthenticatedPeer{id(53)}, id(510), Endpoint{"127.0.0.1", 0},
+      &left_backend));
+  auto right_result = InputNodeRuntime::create(config(
+      id(53), id(54), AuthenticatedPeer{id(51)}, id(520), Endpoint{"127.0.0.1", 0},
+      &right_backend));
+  ASSERT_TRUE(left_result.ok()) << left_result.error();
+  ASSERT_TRUE(right_result.ok()) << right_result.error();
+  auto left = std::move(left_result.value());
+  auto right = std::move(right_result.value());
+  ASSERT_TRUE(left->set_topology(topology_for(id(510), id(520), true)).ok());
+  ASSERT_TRUE(right->set_topology(topology_for(id(520), id(510), false)).ok());
+  ASSERT_TRUE(left->start().ok());
+  ASSERT_TRUE(right->start().ok());
+  ASSERT_TRUE(left->connect_peer(right->local_endpoint()).ok());
+
+  IClock::time_point now{};
+  pump_pair(*left, *right, now, 20);
+  ASSERT_TRUE(left->connected());
+  ASSERT_TRUE(right->connected());
+  ASSERT_TRUE(right->set_input_forwarding_enabled(false, now).ok());
+
+  left_backend.set_pointer_position(Point{100.0, 50.0});
+  left_backend.emit_physical(
+      InputEvent{{}, {}, 0, 0, MouseDelta{4.0, 0.0}, InputOrigin::kPhysical});
+  ASSERT_TRUE(left->poll(now, 0ms).ok());
+  pump_pair(*left, *right, now, 12);
+  EXPECT_EQ(left->router().state(), RouterState::kLocal);
+  EXPECT_FALSE(right->arbiter().has_lease());
+  EXPECT_TRUE(right_backend.injected_events().empty());
+}
+
 TEST(InputNodeRuntime, HoldsIncomingConnectionsUntilDiscoveryEnablesAcceptance) {
   FakeInputBackend left_backend;
   FakeInputBackend right_backend;

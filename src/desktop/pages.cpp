@@ -426,7 +426,8 @@ QWidget* buildTransferPage(DesktopState* state, QWidget* parent) {
 
 QWidget* buildSettingsPage(DesktopState* state, QWidget* parent,
                            StartRuntimeCallback startRuntime,
-                           StopRuntimeCallback stopRuntime) {
+                           StopRuntimeCallback stopRuntime,
+                           TogglePreferenceCallback toggleCrossScreen) {
   auto* page = pageBase(QStringLiteral("连接设置"),
                         QStringLiteral("配置本机身份、发现参数和对端连接方式。"), parent);
   auto* layout = pageLayout(page);
@@ -591,7 +592,7 @@ QWidget* buildSettingsPage(DesktopState* state, QWidget* parent,
     preferenceLayout->addWidget(row);
   };
   addPreference(QStringLiteral("跨屏键鼠转发"), QStringLiteral("由 LANLink runtime 自动处理输入租约"),
-                state->allowRemoteKeys, false, {});
+                state->crossScreenEnabled, true, std::move(toggleCrossScreen));
   addPreference(QStringLiteral("剪贴板同步"), QStringLiteral("当前核心未提供剪贴板协议"), false, false, {});
   addPreference(QStringLiteral("文件传输"), QStringLiteral("当前核心未提供文件传输协议"), false, false, {});
   layout->addWidget(preferences);

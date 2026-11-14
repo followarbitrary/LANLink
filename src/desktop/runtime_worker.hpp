@@ -21,13 +21,15 @@ class RuntimeWorker final : public QObject {
  public:
   using BackendFactory = std::function<std::unique_ptr<platform::IInputBackend>()>;
 
-  explicit RuntimeWorker(QObject* parent = nullptr, BackendFactory backend_factory = {});
+  explicit RuntimeWorker(QObject* parent = nullptr, BackendFactory backend_factory = {},
+                        bool input_forwarding_enabled = true);
 
   static Result<void> validate_options(const app::AppOptions& options);
 
  public slots:
   void start(app::AppOptions options);
   void stop();
+  void setInputForwardingEnabled(bool enabled);
   void recoverLocalInput();
 
  signals:
@@ -63,6 +65,7 @@ class RuntimeWorker final : public QObject {
   bool outgoing_requested_{false};
   bool running_{false};
   bool was_connected_{false};
+  bool input_forwarding_enabled_{true};
   QString last_status_;
   bool last_status_running_{false};
   bool last_status_connected_{false};

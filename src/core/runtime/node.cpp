@@ -43,13 +43,45 @@ Result<void> InputNodeRuntime::set_accept_incoming(bool accept) {
   return Result<void>::success();
 }
 
+Result<void> InputNodeRuntime::set_input_forwarding_enabled(bool enabled, TimePoint now) {
+  if (input_forwarding_enabled_ == enabled) return Result<void>::success();
+  input_forwarding_enabled_ = enabled;
+  if (enabled || !running_) return Result<void>::success();
+
+  if (arbiter_.has_lease()) {
+    const auto lease = *arbiter_.lease();
+    arbiter_.revoke_current(RevokeReason::kExplicitRelease, now);
+    config_.backend->release_injected_state(lease.session);
+    RouterAction revoke;
+    revoke.kind = RouterActionKind::kRevoke;
+    revoke.source = config_.source;
+    revoke.session = lease.session;
+    revoke.generation = lease.generation;
+    revoke.reason = RevokeReason::kExplicitRelease;
+    auto notified = dispatch_actions({revoke}, now);
+    if (!notified.ok()) return notified;
+  }
+
+  clear_remote_cursor();
+  edge_overflow_edge_.reset();
+  edge_overflow_ = 0.0;
+  {
+    std::lock_guard lock(queue_mutex_);
+    queued_events_.clear();
+    queue_overflowed_ = false;
+  }
+  auto cleanup = router_.on_disconnect(now);
+  return dispatch_actions(cleanup, now);
+}
+
 transport::PeerSessionConfig InputNodeRuntime::session_config() {
   return transport::PeerSessionConfig{config_.local_device, config_.peer, &router_, &arbiter_,
                                       config_.backend, config_.local_display,
                                       [this](SessionId session, std::uint64_t generation,
                                              Point position) {
                                         update_remote_cursor_position(session, generation, position);
-                                      }};
+                                      },
+                                      [this] { return input_forwarding_enabled_; }};
 }
 
 Result<void> InputNodeRuntime::start() {
@@ -402,6 +434,12 @@ std::optional<Edge> InputNodeRuntime::detect_remote_exit(const InputEvent& event
 }
 
 Result<void> InputNodeRuntime::drain_events(TimePoint now) {
+  if (!input_forwarding_enabled_) {
+    std::lock_guard lock(queue_mutex_);
+    queued_events_.clear();
+    queue_overflowed_ = false;
+    return Result<void>::success();
+  }
   if (!connected()) {
     peer_display_wait_started_.reset();
     warned_peer_display_fallback_ = false;

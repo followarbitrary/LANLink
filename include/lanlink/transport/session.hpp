@@ -25,6 +25,7 @@ struct PeerSessionConfig {
     platform::IInputBackend* backend{nullptr};
     DisplayId local_display{};
     std::function<void(SessionId, std::uint64_t, Point)> pointer_position_callback;
+    std::function<bool()> input_forwarding_enabled;
 };
 
 class PeerSession {

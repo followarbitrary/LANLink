@@ -216,7 +216,8 @@ void MainWindow::setupUi() {
   content_->addWidget(makePageContainer(
       buildSettingsPage(&state_, content_,
                          [this](const app::AppOptions& options) { startRuntime(options); },
-                         [this]() { stopRuntime(); })));
+                         [this]() { stopRuntime(); },
+                         [this](bool enabled) { toggleCrossScreen(enabled); })));
   bodyLayout->addWidget(content_, 1);
   rootLayout->addWidget(body, 1);
 
@@ -279,7 +280,9 @@ void MainWindow::setupTray() {
     activateWindow();
   });
   trayCrossScreen_ = menu->addAction(QStringLiteral("跨屏键鼠转发（由运行时管理）"));
-  trayCrossScreen_->setEnabled(false);
+  trayCrossScreen_->setCheckable(true);
+  trayCrossScreen_->setChecked(state_.crossScreenEnabled);
+  connect(trayCrossScreen_, &QAction::toggled, this, &MainWindow::toggleCrossScreen);
   trayClipboard_ = menu->addAction(QStringLiteral("剪贴板同步（未接入）"));
   trayClipboard_->setEnabled(false);
   menu->addAction(QStringLiteral("锁定当前设备"), this, &MainWindow::lockCurrentDevice);
@@ -296,7 +299,12 @@ void MainWindow::updateStatusMessage(const QString& message) {
 
 void MainWindow::toggleCrossScreen(bool enabled) {
   state_.crossScreenEnabled = enabled;
+  state_.allowRemoteKeys = enabled;
   if (trayCrossScreen_ != nullptr && trayCrossScreen_->isChecked() != enabled) trayCrossScreen_->setChecked(enabled);
+  if (runtimeWorker_ != nullptr && runtimeThread_ != nullptr && runtimeThread_->isRunning()) {
+    QMetaObject::invokeMethod(runtimeWorker_, &RuntimeWorker::setInputForwardingEnabled,
+                              Qt::BlockingQueuedConnection, enabled);
+  }
   updateStatusMessage(enabled ? QStringLiteral("LANLink v0.1 · 跨屏切换已启用")
                               : QStringLiteral("LANLink v0.1 · 跨屏切换已暂停"));
 }
@@ -347,7 +355,7 @@ void MainWindow::startRuntime(const app::AppOptions& options) {
   updateRuntimeControls();
 
   runtimeThread_ = new QThread(this);
-  runtimeWorker_ = new RuntimeWorker(nullptr, backend_factory_);
+  runtimeWorker_ = new RuntimeWorker(nullptr, backend_factory_, state_.crossScreenEnabled);
   runtimeWorker_->moveToThread(runtimeThread_);
   connect(runtimeThread_, &QThread::finished, runtimeWorker_, &QObject::deleteLater);
   connect(runtimeWorker_, &RuntimeWorker::statusChanged, this, &MainWindow::onRuntimeStatusChanged);
@@ -516,7 +524,8 @@ void MainWindow::rebuildPages() {
   content_->addWidget(makePageContainer(
       buildSettingsPage(&state_, content_,
                          [this](const app::AppOptions& options) { startRuntime(options); },
-                         [this]() { stopRuntime(); })));
+                         [this]() { stopRuntime(); },
+                         [this](bool enabled) { toggleCrossScreen(enabled); })));
   showPage(qBound(0, current, content_->count() - 1));
   updateRuntimeControls();
 }

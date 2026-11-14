@@ -12,6 +12,10 @@ namespace {
 
 bool is_timeout(const std::string& error) { return error == "read timeout"; }
 
+bool input_forwarding_enabled(const PeerSessionConfig& config) {
+    return !config.input_forwarding_enabled || config.input_forwarding_enabled();
+}
+
 } // namespace
 
 PeerSession::PeerSession(Connection connection, PeerSessionConfig config)
@@ -238,6 +242,13 @@ Result<void> PeerSession::dispatch_message(const protocol::Message& message,
     if (const auto* request = std::get_if<protocol::AcquireRequest>(&message)) {
         if (!config_.arbiter)
             return fail_and_disconnect("unexpected acquire request", now);
+        if (!input_forwarding_enabled(config_)) {
+            auto sent = connection_.send(protocol::AcquireResponse{
+                request->request, false, {}, 0, "input forwarding disabled"});
+            if (!sent.ok())
+                return fail_and_disconnect("acquire response failed", now);
+            return Result<void>::success();
+        }
         debug::log("receive acquire source=", request->source.low,
                    " target_display=", request->target_display.low,
                    " request=", request->request.low,
@@ -287,6 +298,19 @@ Result<void> PeerSession::dispatch_message(const protocol::Message& message,
     if (const auto* request = std::get_if<protocol::ActivateRequest>(&message)) {
         if (!config_.arbiter)
             return fail_and_disconnect("unexpected activate request", now);
+        if (!input_forwarding_enabled(config_)) {
+            if (config_.arbiter->has_lease()) {
+                config_.arbiter->revoke_current(RevokeReason::kExplicitRelease, now);
+                if (config_.backend)
+                    config_.backend->release_injected_state(request->session);
+            }
+            pending_target_acquire_.reset();
+            auto sent = connection_.send(protocol::ActivateAck{
+                request->session, request->generation, false, "input forwarding disabled"});
+            if (!sent.ok())
+                return fail_and_disconnect("activate response failed", now);
+            return Result<void>::success();
+        }
         debug::log("receive activate session=", request->session.low,
                    " generation=", request->generation);
         const auto result = config_.arbiter->activate(request->session, request->generation, now);
@@ -354,6 +378,18 @@ Result<void> PeerSession::dispatch_message(const protocol::Message& message,
     if (const auto* request = std::get_if<protocol::RenewRequest>(&message)) {
         if (!config_.arbiter)
             return fail_and_disconnect("unexpected renew request", now);
+        if (!input_forwarding_enabled(config_)) {
+            if (config_.arbiter->has_lease()) {
+                config_.arbiter->revoke_current(RevokeReason::kExplicitRelease, now);
+                if (config_.backend)
+                    config_.backend->release_injected_state(request->session);
+            }
+            auto sent = connection_.send(protocol::RenewAck{
+                request->session, request->generation, false, "input forwarding disabled"});
+            if (!sent.ok())
+                return fail_and_disconnect("renew response failed", now);
+            return Result<void>::success();
+        }
         debug::log("receive renew session=", request->session.low,
                    " generation=", request->generation);
         const auto result =
@@ -386,6 +422,18 @@ Result<void> PeerSession::dispatch_message(const protocol::Message& message,
     if (const auto* input = std::get_if<protocol::InputMessage>(&message)) {
         if (!config_.arbiter)
             return fail_and_disconnect("unexpected input message", now);
+        if (!input_forwarding_enabled(config_)) {
+            if (config_.arbiter->has_lease()) {
+                config_.arbiter->revoke_current(RevokeReason::kExplicitRelease, now);
+                if (config_.backend)
+                    config_.backend->release_injected_state(input->event.session);
+            }
+            auto sent = connection_.send(protocol::Revoke{
+                input->event.session, input->event.generation, RevokeReason::kExplicitRelease});
+            if (!sent.ok())
+                return fail_and_disconnect("revoke send failed", now);
+            return Result<void>::success();
+        }
         auto validation = config_.arbiter->validate(config_.peer, input->event, now);
         if (validation.revoked()) {
             debug::log("lease revoke on input session=", input->event.session.low,

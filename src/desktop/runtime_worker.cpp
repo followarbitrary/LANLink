@@ -33,8 +33,10 @@ QString endpoint_text(const transport::Endpoint& endpoint) {
 
 }  // namespace
 
-RuntimeWorker::RuntimeWorker(QObject* parent, BackendFactory backend_factory)
-    : QObject(parent), timer_(new QTimer(this)), backend_factory_(std::move(backend_factory)) {
+RuntimeWorker::RuntimeWorker(QObject* parent, BackendFactory backend_factory,
+                             bool input_forwarding_enabled)
+    : QObject(parent), timer_(new QTimer(this)), backend_factory_(std::move(backend_factory)),
+      input_forwarding_enabled_(input_forwarding_enabled) {
   if (!backend_factory_) {
     backend_factory_ = [] {
 #if defined(_WIN32)
@@ -170,6 +172,17 @@ void RuntimeWorker::stop() {
   emit finished();
 }
 
+void RuntimeWorker::setInputForwardingEnabled(bool enabled) {
+  input_forwarding_enabled_ = enabled;
+  if (!runtime_) return;
+  const auto updated = runtime_->set_input_forwarding_enabled(enabled, IClock::Clock::now());
+  if (!updated.ok()) {
+    const auto error = QString::fromStdString(updated.error());
+    emit errorOccurred(error);
+    emit logMessage(QStringLiteral("输入转发状态更新失败：%1").arg(error));
+  }
+}
+
 void RuntimeWorker::recoverLocalInput() {
   if (!backend_) return;
   const auto recovered = backend_->recover();
@@ -303,6 +316,12 @@ bool RuntimeWorker::start_runtime() {
   auto started = runtime_->start();
   if (!started.ok()) {
     fail(QString::fromStdString(started.error()));
+    return false;
+  }
+  auto forwarding = runtime_->set_input_forwarding_enabled(input_forwarding_enabled_,
+                                                            IClock::Clock::now());
+  if (!forwarding.ok()) {
+    fail(QString::fromStdString(forwarding.error()));
     return false;
   }
   topology_selected_ = true;

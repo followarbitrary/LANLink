@@ -40,6 +40,7 @@ class InputNodeRuntime {
 
   Result<void> set_topology(ScreenTopology topology);
   Result<void> set_accept_incoming(bool accept);
+  Result<void> set_input_forwarding_enabled(bool enabled, TimePoint now);
   Result<void> start();
   Result<transport::PeerHandle> connect_peer(const transport::Endpoint& endpoint);
   Result<void> update_peer_endpoint(const transport::Endpoint& endpoint);
@@ -111,6 +112,7 @@ class InputNodeRuntime {
   double local_display_scale_{1.0};
   bool warned_remote_without_suppression_{false};
   bool running_{false};
+  bool input_forwarding_enabled_{true};
 };
 
 }  // namespace lanlink::runtime
