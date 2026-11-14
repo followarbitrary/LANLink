@@ -1,8 +1,10 @@
 #include "main_window.hpp"
 
+#include "lanlink/platform/fake_clipboard_backend.hpp"
 #include "lanlink/platform/fake_input_backend.hpp"
 
 #include <QApplication>
+#include <QAction>
 #include <QCheckBox>
 #include <QElapsedTimer>
 #include <QLabel>
@@ -49,6 +51,10 @@ RuntimeWorker::BackendFactory fake_backend_factory() {
 
 RuntimeWorker::BackendFactory failing_backend_factory() {
   return [] { return std::unique_ptr<lanlink::platform::IInputBackend>{}; };
+}
+
+RuntimeWorker::ClipboardBackendFactory fake_clipboard_backend_factory() {
+  return [] { return std::make_unique<lanlink::platform::FakeClipboardBackend>(); };
 }
 
 template <typename Predicate>
@@ -274,7 +280,7 @@ TEST(MainWindowTest, CrossScreenPreferenceCanBeToggled) {
   ASSERT_TRUE(checks[3] != nullptr);
 
   EXPECT_TRUE(checks[1]->isEnabled());
-  EXPECT_FALSE(checks[2]->isEnabled());
+  EXPECT_TRUE(checks[2]->isEnabled());
   EXPECT_FALSE(checks[3]->isEnabled());
 
   auto* footer = window.findChild<QLabel*>(QStringLiteral("footerStatusLabel"));
@@ -288,4 +294,53 @@ TEST(MainWindowTest, CrossScreenPreferenceCanBeToggled) {
   checks[1]->click();
   EXPECT_TRUE(checks[1]->isChecked());
   EXPECT_TRUE(footer->text().contains(QStringLiteral("跨屏切换已启用")));
+}
+
+TEST(MainWindowTest, ClipboardPreferenceAndTrayActionAreEnabledAndDefaultOff) {
+  MainWindow window(nullptr, fake_backend_factory(), false, fake_clipboard_backend_factory());
+
+  const auto checks = window.findChildren<QCheckBox*>();
+  ASSERT_GE(checks.size(), 4);
+  EXPECT_TRUE(checks[2]->isEnabled());
+  EXPECT_FALSE(checks[2]->isChecked());
+  EXPECT_TRUE(label_contains(window, QStringLiteral("剪贴板同步")));
+  EXPECT_FALSE(label_contains(window, QStringLiteral("剪贴板同步（未接入）")));
+
+  QAction* clipboard_action = nullptr;
+  for (auto* action : window.findChildren<QAction*>()) {
+    if (action->text().contains(QStringLiteral("剪贴板同步"))) {
+      clipboard_action = action;
+      break;
+    }
+  }
+  ASSERT_NE(clipboard_action, nullptr);
+  EXPECT_TRUE(clipboard_action->isEnabled());
+  EXPECT_FALSE(clipboard_action->isChecked());
+}
+
+TEST(MainWindowTest, ClipboardToggleWhileRunningForwardsToRuntimeWorker) {
+  MainWindow window(nullptr, fake_backend_factory(), false, fake_clipboard_backend_factory());
+  const auto base_port = test_port();
+  field(window, QStringLiteral("listenPortEdit"))->setText(QString::number(base_port));
+  field(window, QStringLiteral("discoveryPortEdit"))
+      ->setText(QString::number(static_cast<std::uint16_t>(base_port + 1)));
+  field(window, QStringLiteral("peerIdEdit"))->setText(QStringLiteral("2"));
+  field(window, QStringLiteral("connectHostEdit"))->setText(QStringLiteral("127.0.0.1"));
+  field(window, QStringLiteral("connectPortEdit"))
+      ->setText(QString::number(static_cast<std::uint16_t>(base_port + 2)));
+  runtime_toggle(window)->click();
+  ASSERT_TRUE(wait_until([&] {
+    auto* toggle = runtime_toggle(window);
+    return toggle != nullptr && toggle->text() == QStringLiteral("停止服务");
+  }));
+
+  const auto checks = window.findChildren<QCheckBox*>();
+  ASSERT_GE(checks.size(), 4);
+  auto* footer = window.findChild<QLabel*>(QStringLiteral("footerStatusLabel"));
+  ASSERT_NE(footer, nullptr);
+  checks[2]->click();
+  ASSERT_TRUE(wait_until([&] {
+    return footer->text().contains(QStringLiteral("剪贴板同步已启用"));
+  }));
+  EXPECT_TRUE(checks[2]->isChecked());
 }

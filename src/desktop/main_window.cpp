@@ -19,6 +19,7 @@
 #include <QSizeGrip>
 #include <QScreen>
 #include <QScrollArea>
+#include <QSignalBlocker>
 #include <QStyle>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -84,8 +85,11 @@ QString local_endpoint_for_port(std::uint16_t port) {
 }  // namespace
 
 MainWindow::MainWindow(QWidget* parent, RuntimeWorker::BackendFactory backend_factory,
-                       bool auto_start)
-    : QMainWindow(parent), backend_factory_(std::move(backend_factory)) {
+                       bool auto_start,
+                       RuntimeWorker::ClipboardBackendFactory clipboard_backend_factory)
+    : QMainWindow(parent),
+      backend_factory_(std::move(backend_factory)),
+      clipboard_backend_factory_(std::move(clipboard_backend_factory)) {
   setWindowTitle(QStringLiteral("LANLink"));
   setWindowFlags(Qt::FramelessWindowHint | Qt::Window);
   setAttribute(Qt::WA_TranslucentBackground, false);
@@ -101,6 +105,12 @@ MainWindow::MainWindow(QWidget* parent, RuntimeWorker::BackendFactory backend_fa
     });
   }
 }
+
+MainWindow::MainWindow(QWidget* parent, RuntimeWorker::BackendFactory backend_factory,
+                       RuntimeWorker::ClipboardBackendFactory clipboard_backend_factory,
+                       bool auto_start)
+    : MainWindow(parent, std::move(backend_factory), auto_start,
+                 std::move(clipboard_backend_factory)) {}
 
 MainWindow::~MainWindow() { stopRuntime(); }
 
@@ -217,7 +227,8 @@ void MainWindow::setupUi() {
       buildSettingsPage(&state_, content_,
                          [this](const app::AppOptions& options) { startRuntime(options); },
                          [this]() { stopRuntime(); },
-                         [this](bool enabled) { toggleCrossScreen(enabled); })));
+                         [this](bool enabled) { toggleCrossScreen(enabled); },
+                         [this](bool enabled) { toggleClipboard(enabled); })));
   bodyLayout->addWidget(content_, 1);
   rootLayout->addWidget(body, 1);
 
@@ -283,8 +294,10 @@ void MainWindow::setupTray() {
   trayCrossScreen_->setCheckable(true);
   trayCrossScreen_->setChecked(state_.crossScreenEnabled);
   connect(trayCrossScreen_, &QAction::toggled, this, &MainWindow::toggleCrossScreen);
-  trayClipboard_ = menu->addAction(QStringLiteral("剪贴板同步（未接入）"));
-  trayClipboard_->setEnabled(false);
+  trayClipboard_ = menu->addAction(QStringLiteral("剪贴板同步"));
+  trayClipboard_->setCheckable(true);
+  trayClipboard_->setChecked(state_.clipboardEnabled);
+  connect(trayClipboard_, &QAction::toggled, this, &MainWindow::toggleClipboard);
   menu->addAction(QStringLiteral("锁定当前设备"), this, &MainWindow::lockCurrentDevice);
   menu->addAction(QStringLiteral("紧急恢复本地输入"), this, &MainWindow::recoverLocalInput);
   menu->addSeparator();
@@ -311,7 +324,17 @@ void MainWindow::toggleCrossScreen(bool enabled) {
 
 void MainWindow::toggleClipboard(bool enabled) {
   state_.clipboardEnabled = enabled;
+  state_.options.clipboard_enabled = enabled;
   if (trayClipboard_ != nullptr && trayClipboard_->isChecked() != enabled) trayClipboard_->setChecked(enabled);
+  if (auto* check = findChild<QCheckBox*>(QStringLiteral("clipboardSyncCheck"));
+      check != nullptr && check->isChecked() != enabled) {
+    const QSignalBlocker blocker(check);
+    check->setChecked(enabled);
+  }
+  if (runtimeWorker_ != nullptr && runtimeThread_ != nullptr && runtimeThread_->isRunning()) {
+    QMetaObject::invokeMethod(runtimeWorker_, &RuntimeWorker::setClipboardSyncEnabled,
+                              Qt::BlockingQueuedConnection, enabled);
+  }
   updateStatusMessage(enabled ? QStringLiteral("LANLink v0.1 · 剪贴板同步已启用")
                               : QStringLiteral("LANLink v0.1 · 剪贴板同步已暂停"));
 }
@@ -355,7 +378,8 @@ void MainWindow::startRuntime(const app::AppOptions& options) {
   updateRuntimeControls();
 
   runtimeThread_ = new QThread(this);
-  runtimeWorker_ = new RuntimeWorker(nullptr, backend_factory_, state_.crossScreenEnabled);
+  runtimeWorker_ = new RuntimeWorker(nullptr, backend_factory_, state_.crossScreenEnabled,
+                                     clipboard_backend_factory_);
   runtimeWorker_->moveToThread(runtimeThread_);
   connect(runtimeThread_, &QThread::finished, runtimeWorker_, &QObject::deleteLater);
   connect(runtimeWorker_, &RuntimeWorker::statusChanged, this, &MainWindow::onRuntimeStatusChanged);
@@ -525,7 +549,8 @@ void MainWindow::rebuildPages() {
       buildSettingsPage(&state_, content_,
                          [this](const app::AppOptions& options) { startRuntime(options); },
                          [this]() { stopRuntime(); },
-                         [this](bool enabled) { toggleCrossScreen(enabled); })));
+                         [this](bool enabled) { toggleCrossScreen(enabled); },
+                         [this](bool enabled) { toggleClipboard(enabled); })));
   showPage(qBound(0, current, content_->count() - 1));
   updateRuntimeControls();
 }

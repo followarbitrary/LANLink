@@ -1,5 +1,6 @@
 #include "runtime_worker.hpp"
 
+#include "lanlink/platform/fake_clipboard_backend.hpp"
 #include "lanlink/platform/fake_input_backend.hpp"
 
 #include <QCoreApplication>
@@ -51,6 +52,17 @@ lanlink::desktop::RuntimeWorker::BackendFactory fake_backend_factory() {
     return backend;
   };
 }
+
+struct ClipboardFactoryProbe {
+  lanlink::platform::FakeClipboardBackend* backend{};
+  lanlink::desktop::RuntimeWorker::ClipboardBackendFactory factory() {
+    return [this] {
+      auto backend = std::make_unique<lanlink::platform::FakeClipboardBackend>();
+      this->backend = backend.get();
+      return backend;
+    };
+  }
+};
 
 TEST(RuntimeWorkerTest, RejectsZeroDeviceIdBeforeStarting) {
   lanlink::app::AppOptions options;
@@ -190,6 +202,39 @@ TEST(RuntimeWorkerThreadTest, InvalidStartReportsErrorAndCanBeStopped) {
   QTRY_VERIFY_WITH_TIMEOUT(status_spy.count() == 1, 1000);
   EXPECT_FALSE(status_spy.last().at(1).toBool());
   EXPECT_EQ(status_spy.last().at(0).toString(), QStringLiteral("错误"));
+
+  ASSERT_TRUE(QMetaObject::invokeMethod(&worker, [&worker] { worker.stop(); },
+                                       Qt::BlockingQueuedConnection));
+  thread.quit();
+  ASSERT_TRUE(thread.wait(2000));
+}
+
+TEST(RuntimeWorkerThreadTest, StartsClipboardBackendWithConfiguredPreferenceAndTogglesAtRuntime) {
+  ClipboardFactoryProbe clipboard_probe;
+  lanlink::desktop::RuntimeWorker worker(nullptr, fake_backend_factory(), true,
+                                          clipboard_probe.factory());
+  QThread thread;
+  worker.moveToThread(&thread);
+  QSignalSpy error_spy(&worker, &lanlink::desktop::RuntimeWorker::errorOccurred);
+
+  thread.start();
+  auto options = worker_options();
+  options.clipboard_enabled = true;
+  options.connect = lanlink::transport::Endpoint{
+      "127.0.0.1", static_cast<std::uint16_t>(options.listen_port + 2)};
+  ASSERT_TRUE(QMetaObject::invokeMethod(
+      &worker, [&worker, options] { worker.start(options); }, Qt::QueuedConnection));
+  QTRY_VERIFY_WITH_TIMEOUT(clipboard_probe.backend != nullptr, 2000);
+  QTRY_VERIFY_WITH_TIMEOUT(error_spy.isEmpty(), 500);
+
+  ASSERT_TRUE(QMetaObject::invokeMethod(
+      &worker, [&worker] { worker.setClipboardSyncEnabled(false); },
+      Qt::BlockingQueuedConnection));
+  EXPECT_TRUE(error_spy.isEmpty());
+  ASSERT_TRUE(QMetaObject::invokeMethod(
+      &worker, [&worker] { worker.setClipboardSyncEnabled(true); },
+      Qt::BlockingQueuedConnection));
+  EXPECT_TRUE(error_spy.isEmpty());
 
   ASSERT_TRUE(QMetaObject::invokeMethod(&worker, [&worker] { worker.stop(); },
                                        Qt::BlockingQueuedConnection));

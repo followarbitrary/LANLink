@@ -9,8 +9,10 @@
 #include <utility>
 
 #if defined(_WIN32)
+#include "lanlink/platform/windows_clipboard_backend.hpp"
 #include "lanlink/platform/windows_input_backend.hpp"
 #elif defined(__APPLE__)
+#include "lanlink/platform/macos_clipboard_backend.hpp"
 #include "lanlink/platform/macos_input_backend.hpp"
 #endif
 
@@ -34,8 +36,10 @@ QString endpoint_text(const transport::Endpoint& endpoint) {
 }  // namespace
 
 RuntimeWorker::RuntimeWorker(QObject* parent, BackendFactory backend_factory,
-                             bool input_forwarding_enabled)
+                             bool input_forwarding_enabled,
+                             ClipboardBackendFactory clipboard_backend_factory)
     : QObject(parent), timer_(new QTimer(this)), backend_factory_(std::move(backend_factory)),
+      clipboard_backend_factory_(std::move(clipboard_backend_factory)),
       input_forwarding_enabled_(input_forwarding_enabled) {
   if (!backend_factory_) {
     backend_factory_ = [] {
@@ -47,6 +51,19 @@ RuntimeWorker::RuntimeWorker(QObject* parent, BackendFactory backend_factory,
           std::make_unique<platform::MacOSInputBackend>());
 #else
       return std::unique_ptr<platform::IInputBackend>{};
+#endif
+    };
+  }
+  if (!clipboard_backend_factory_) {
+    clipboard_backend_factory_ = [] {
+#if defined(_WIN32)
+      return std::unique_ptr<platform::IClipboardBackend>(
+          std::make_unique<platform::WindowsClipboardBackend>());
+#elif defined(__APPLE__)
+      return std::unique_ptr<platform::IClipboardBackend>(
+          std::make_unique<platform::MacOSClipboardBackend>());
+#else
+      return std::unique_ptr<platform::IClipboardBackend>{};
 #endif
     };
   }
@@ -107,6 +124,7 @@ void RuntimeWorker::start(app::AppOptions options) {
     fail(QStringLiteral("LANLink requires Windows or macOS for native input forwarding"));
     return;
   }
+  clipboard_backend_ = clipboard_backend_factory_();
 
   const auto bounds = backend_->display_bounds();
   if (!bounds.has_value()) {
@@ -163,6 +181,7 @@ void RuntimeWorker::stop() {
     discovery_.reset();
   }
   backend_.reset();
+  clipboard_backend_.reset();
   running_ = false;
   selected_peer_.reset();
   selected_device_id_.reset();
@@ -180,6 +199,18 @@ void RuntimeWorker::setInputForwardingEnabled(bool enabled) {
     const auto error = QString::fromStdString(updated.error());
     emit errorOccurred(error);
     emit logMessage(QStringLiteral("输入转发状态更新失败：%1").arg(error));
+  }
+}
+
+void RuntimeWorker::setClipboardSyncEnabled(bool enabled) {
+  options_.clipboard_enabled = enabled;
+  if (!runtime_) return;
+  const auto updated = runtime_->set_clipboard_sync_enabled(enabled, IClock::Clock::now());
+  if (!updated.ok()) {
+    const auto error = QString::fromStdString(updated.error());
+    options_.clipboard_enabled = !enabled;
+    emit errorOccurred(error);
+    emit logMessage(QStringLiteral("剪贴板同步状态更新失败：%1").arg(error));
   }
 }
 
@@ -300,6 +331,8 @@ bool RuntimeWorker::start_runtime() {
   config.local_display = app::numeric_id(options_.display_id);
   config.listen_endpoint = transport::Endpoint{"0.0.0.0", options_.listen_port};
   config.backend = backend_.get();
+  config.clipboard_backend = clipboard_backend_.get();
+  config.clipboard_sync_enabled = options_.clipboard_enabled;
   config.queue_capacity = 256;
   config.accept_incoming = options_.connect.has_value() || selected_peer_.has_value();
   auto created = runtime::InputNodeRuntime::create(std::move(config));
@@ -364,6 +397,7 @@ void RuntimeWorker::fail(const QString& message) {
     discovery_.reset();
   }
   backend_.reset();
+  clipboard_backend_.reset();
   running_ = false;
   emit_status(QStringLiteral("错误"), false, false);
   emit finished();

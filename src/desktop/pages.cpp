@@ -427,7 +427,8 @@ QWidget* buildTransferPage(DesktopState* state, QWidget* parent) {
 QWidget* buildSettingsPage(DesktopState* state, QWidget* parent,
                            StartRuntimeCallback startRuntime,
                            StopRuntimeCallback stopRuntime,
-                           TogglePreferenceCallback toggleCrossScreen) {
+                           TogglePreferenceCallback toggleCrossScreen,
+                           TogglePreferenceCallback toggleClipboard) {
   auto* page = pageBase(QStringLiteral("连接设置"),
                         QStringLiteral("配置本机身份、发现参数和对端连接方式。"), parent);
   auto* layout = pageLayout(page);
@@ -572,7 +573,7 @@ QWidget* buildSettingsPage(DesktopState* state, QWidget* parent,
   auto* preferenceLayout = new QVBoxLayout(preferences);
   preferenceLayout->setContentsMargins(18, 16, 18, 16);
   const auto addPreference = [preferenceLayout](const QString& title, const QString& subtitle,
-                                                 bool checked, bool enabled,
+                                                 const QString& objectName, bool checked, bool enabled,
                                                  std::function<void(bool)> callback) {
     auto* row = new QWidget;
     auto* rowLayout = new QHBoxLayout(row);
@@ -585,6 +586,7 @@ QWidget* buildSettingsPage(DesktopState* state, QWidget* parent,
     rowLayout->addLayout(text);
     rowLayout->addStretch();
     auto* check = new QCheckBox;
+    check->setObjectName(objectName);
     check->setChecked(checked);
     check->setEnabled(enabled);
     if (callback) QObject::connect(check, &QCheckBox::toggled, row, std::move(callback));
@@ -592,9 +594,14 @@ QWidget* buildSettingsPage(DesktopState* state, QWidget* parent,
     preferenceLayout->addWidget(row);
   };
   addPreference(QStringLiteral("跨屏键鼠转发"), QStringLiteral("由 LANLink runtime 自动处理输入租约"),
-                state->crossScreenEnabled, true, std::move(toggleCrossScreen));
-  addPreference(QStringLiteral("剪贴板同步"), QStringLiteral("当前核心未提供剪贴板协议"), false, false, {});
-  addPreference(QStringLiteral("文件传输"), QStringLiteral("当前核心未提供文件传输协议"), false, false, {});
+                QStringLiteral("crossScreenCheck"), state->crossScreenEnabled, true,
+                std::move(toggleCrossScreen));
+  addPreference(QStringLiteral("剪贴板同步"),
+                QStringLiteral("同步文本、HTML 和 PNG，单次内容上限 4 MiB"),
+                QStringLiteral("clipboardSyncCheck"), state->clipboardEnabled, true,
+                std::move(toggleClipboard));
+  addPreference(QStringLiteral("文件传输"), QStringLiteral("当前核心未提供文件传输协议"),
+                QStringLiteral("fileTransferCheck"), false, false, {});
   layout->addWidget(preferences);
 
   auto* m0 = panel(QStringLiteral("subpanel"));

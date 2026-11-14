@@ -9,6 +9,7 @@
 #include "lanlink/app/options.hpp"
 #include "lanlink/common/result.hpp"
 #include "lanlink/discovery/discovery.hpp"
+#include "lanlink/platform/clipboard_backend.hpp"
 #include "lanlink/runtime/node.hpp"
 
 class QTimer;
@@ -20,9 +21,12 @@ class RuntimeWorker final : public QObject {
 
  public:
   using BackendFactory = std::function<std::unique_ptr<platform::IInputBackend>()>;
+  using ClipboardBackendFactory =
+      std::function<std::unique_ptr<platform::IClipboardBackend>()>;
 
   explicit RuntimeWorker(QObject* parent = nullptr, BackendFactory backend_factory = {},
-                        bool input_forwarding_enabled = true);
+                        bool input_forwarding_enabled = true,
+                        ClipboardBackendFactory clipboard_backend_factory = {});
 
   static Result<void> validate_options(const app::AppOptions& options);
 
@@ -30,6 +34,7 @@ class RuntimeWorker final : public QObject {
   void start(app::AppOptions options);
   void stop();
   void setInputForwardingEnabled(bool enabled);
+  void setClipboardSyncEnabled(bool enabled);
   void recoverLocalInput();
 
  signals:
@@ -55,8 +60,10 @@ class RuntimeWorker final : public QObject {
 
   QTimer* timer_{nullptr};
   BackendFactory backend_factory_;
+  ClipboardBackendFactory clipboard_backend_factory_;
   app::AppOptions options_;
   std::unique_ptr<platform::IInputBackend> backend_;
+  std::unique_ptr<platform::IClipboardBackend> clipboard_backend_;
   std::optional<discovery::DiscoveryService> discovery_;
   std::unique_ptr<runtime::InputNodeRuntime> runtime_;
   std::optional<discovery::DiscoveryPeer> selected_peer_;

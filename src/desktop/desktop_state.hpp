@@ -42,6 +42,7 @@ struct DesktopState {
   int selectedTransferTarget{0};
   QString droppedFile;
   bool crossScreenEnabled{true};
+  // Clipboard synchronization is opt-in to keep local clipboard contents private by default.
   bool clipboardEnabled{false};
   bool allowRemoteKeys{true};
   bool allowReceiveFiles{false};

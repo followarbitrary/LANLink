@@ -21,7 +21,11 @@ class MainWindow final : public QMainWindow {
  public:
   explicit MainWindow(QWidget* parent = nullptr,
                       RuntimeWorker::BackendFactory backend_factory = {},
-                      bool auto_start = true);
+                      bool auto_start = true,
+                      RuntimeWorker::ClipboardBackendFactory clipboard_backend_factory = {});
+  MainWindow(QWidget* parent, RuntimeWorker::BackendFactory backend_factory,
+             RuntimeWorker::ClipboardBackendFactory clipboard_backend_factory,
+             bool auto_start = true);
   ~MainWindow() override;
 
   void showPage(int index);
@@ -70,6 +74,7 @@ class MainWindow final : public QMainWindow {
   QThread* runtimeThread_{nullptr};
   RuntimeWorker* runtimeWorker_{nullptr};
   RuntimeWorker::BackendFactory backend_factory_;
+  RuntimeWorker::ClipboardBackendFactory clipboard_backend_factory_;
   bool draggingWindow_{false};
   QPoint windowDragOffset_;
 };

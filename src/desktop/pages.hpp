@@ -18,6 +18,7 @@ using TogglePreferenceCallback = std::function<void(bool)>;
 QWidget* buildSettingsPage(DesktopState* state, QWidget* parent = nullptr,
                            StartRuntimeCallback startRuntime = {},
                            StopRuntimeCallback stopRuntime = {},
-                           TogglePreferenceCallback toggleCrossScreen = {});
+                           TogglePreferenceCallback toggleCrossScreen = {},
+                           TogglePreferenceCallback toggleClipboard = {});
 
 }  // namespace lanlink::desktop
