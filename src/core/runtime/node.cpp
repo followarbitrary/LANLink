@@ -44,6 +44,14 @@ Result<void> InputNodeRuntime::set_topology(ScreenTopology topology) {
       const auto lease = *arbiter_.lease();
       arbiter_.revoke_current(RevokeReason::kExplicitRelease, now);
       config_.backend->release_injected_state(lease.session);
+      RouterAction revoke;
+      revoke.kind = RouterActionKind::kRevoke;
+      revoke.source = config_.source;
+      revoke.session = lease.session;
+      revoke.generation = lease.generation;
+      revoke.reason = RevokeReason::kExplicitRelease;
+      auto notified = dispatch_actions({revoke}, now);
+      if (!notified.ok()) cleanup = notified;
     }
 
     clear_remote_cursor();
@@ -57,7 +65,7 @@ Result<void> InputNodeRuntime::set_topology(ScreenTopology topology) {
 
     auto actions = router_.on_revoke(RevokeReason::kExplicitRelease, now);
     auto dispatched = dispatch_actions(actions, now);
-    if (!dispatched.ok()) cleanup = dispatched;
+    if (cleanup.ok() && !dispatched.ok()) cleanup = dispatched;
     (void)router_.on_tick(now);
     topology_ = std::move(topology);
     return cleanup;

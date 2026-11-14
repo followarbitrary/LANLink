@@ -255,6 +255,48 @@ TEST(InputNodeRuntime, CrossesAtExactThresholdAndForwardsSuppressedInput) {
   EXPECT_EQ(left->router().state(), RouterState::kLocal);
 }
 
+TEST(InputNodeRuntime, TopologyUpdateRevokesActiveLeaseAcrossPeers) {
+  FakeInputBackend left_backend;
+  FakeInputBackend right_backend;
+  auto left_result = InputNodeRuntime::create(config(
+      id(1), id(2), AuthenticatedPeer{id(3)}, id(10), Endpoint{"127.0.0.1", 0}, &left_backend));
+  auto right_result = InputNodeRuntime::create(config(
+      id(3), id(4), AuthenticatedPeer{id(1)}, id(20), Endpoint{"127.0.0.1", 0},
+      &right_backend));
+  ASSERT_TRUE(left_result.ok()) << left_result.error();
+  ASSERT_TRUE(right_result.ok()) << right_result.error();
+  auto left = std::move(left_result.value());
+  auto right = std::move(right_result.value());
+  ASSERT_TRUE(left->set_topology(topology_for(id(10), id(20), true)).ok());
+  ASSERT_TRUE(right->set_topology(topology_for(id(20), id(10), false)).ok());
+  ASSERT_TRUE(left->start().ok());
+  ASSERT_TRUE(right->start().ok());
+  ASSERT_TRUE(left->connect_peer(right->local_endpoint()).ok());
+
+  IClock::time_point now{};
+  pump_pair(*left, *right, now, 20);
+  left_backend.set_pointer_position(Point{100.0, 50.0});
+  left_backend.emit_physical(
+      InputEvent{{}, {}, 0, 0, MouseDelta{4.0, 0.0}, InputOrigin::kPhysical});
+  ASSERT_TRUE(left->poll(now, 0ms).ok());
+  pump_pair(*left, *right, now, 12);
+  ASSERT_EQ(left->router().state(), RouterState::kRemote);
+  ASSERT_TRUE(right->arbiter().has_active_lease());
+
+  auto updated = topology_for(id(20), id(10), false);
+  ASSERT_TRUE(right->set_topology(std::move(updated)).ok());
+  EXPECT_FALSE(right->arbiter().has_lease());
+  EXPECT_EQ(right->router().state(), RouterState::kLocal);
+  pump_pair(*left, *right, now, 6);
+  EXPECT_FALSE(right->arbiter().has_lease());
+  EXPECT_EQ(left->router().state(), RouterState::kLocal);
+  EXPECT_TRUE(left->connected());
+  EXPECT_TRUE(right->connected());
+
+  ASSERT_TRUE(left->stop(now).ok());
+  ASSERT_TRUE(right->stop(now).ok());
+}
+
 TEST(InputNodeRuntime, DisablingInputForwardingRecoversLocalInput) {
   FakeInputBackend left_backend;
   FakeInputBackend right_backend;
