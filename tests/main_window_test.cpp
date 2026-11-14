@@ -82,6 +82,13 @@ int label_count(MainWindow& window, const QString& text) {
   return count;
 }
 
+bool label_contains(MainWindow& window, const QString& text) {
+  for (auto* label : window.findChildren<QLabel*>()) {
+    if (label->text().contains(text)) return true;
+  }
+  return false;
+}
+
 std::uint16_t test_port() {
   return static_cast<std::uint16_t>(46000 +
                                     (QCoreApplication::applicationPid() % 1000) * 2);
@@ -110,6 +117,11 @@ TEST(MainWindowTest, StartsRuntimeAutomaticallyOnConstruction) {
             current_status->text().contains(QStringLiteral("等待")));
   }));
   EXPECT_EQ(label_count(window, QStringLiteral("等待对端设备")), 0);
+  EXPECT_FALSE(label_contains(window, QStringLiteral("macOS / Windows")));
+#if defined(__APPLE__)
+  EXPECT_TRUE(label_contains(window, QStringLiteral("macOS · 监听 ")));
+  EXPECT_FALSE(label_contains(window, QStringLiteral("0.0.0.0:")));
+#endif
 }
 
 TEST(MainWindowTest, DoesNotShowPlaceholderWithoutPeer) {

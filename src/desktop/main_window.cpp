@@ -4,6 +4,10 @@
 #include "icons.hpp"
 
 #include <QAction>
+#if defined(LANLINK_HAS_QT_NETWORK)
+#include <QAbstractSocket>
+#include <QNetworkInterface>
+#endif
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
@@ -50,6 +54,31 @@ QPushButton* navButton(const QString& text, IconKind kind) {
   button->setCursor(Qt::PointingHandCursor);
   button->setMinimumHeight(48);
   return button;
+}
+
+QString local_endpoint_for_port(std::uint16_t port) {
+#if defined(LANLINK_HAS_QT_NETWORK)
+  QString linkLocalAddress;
+  for (const auto& interface : QNetworkInterface::allInterfaces()) {
+    const auto flags = interface.flags();
+    if (!(flags & QNetworkInterface::IsUp) || !(flags & QNetworkInterface::IsRunning) ||
+        (flags & QNetworkInterface::IsLoopBack)) {
+      continue;
+    }
+    for (const auto& entry : interface.addressEntries()) {
+      const auto address = entry.ip();
+      if (address.protocol() != QAbstractSocket::IPv4Protocol || address.isLoopback()) continue;
+      const auto text = address.toString();
+      if (text.startsWith(QStringLiteral("169.254."))) {
+        if (linkLocalAddress.isEmpty()) linkLocalAddress = text;
+        continue;
+      }
+      return QStringLiteral("%1:%2").arg(text).arg(port);
+    }
+  }
+  if (!linkLocalAddress.isEmpty()) return QStringLiteral("%1:%2").arg(linkLocalAddress).arg(port);
+#endif
+  return QStringLiteral("0.0.0.0:%1").arg(port);
 }
 
 }  // namespace
@@ -314,7 +343,7 @@ void MainWindow::startRuntime(const app::AppOptions& options) {
   state_.status = QStringLiteral("正在启动");
   state_.running = true;
   state_.connected = false;
-  state_.localEndpoint = QStringLiteral("0.0.0.0:%1").arg(options.listen_port);
+  state_.localEndpoint = local_endpoint_for_port(options.listen_port);
   updateRuntimeControls();
 
   runtimeThread_ = new QThread(this);
@@ -372,10 +401,12 @@ void MainWindow::onRuntimeStatusChanged(const QString& status, bool running, boo
   state_.connected = connected;
   bool rebuild = false;
   if (!state_.devices.isEmpty()) {
+    const QString localAddress = running ? QStringLiteral("监听 %1").arg(state_.localEndpoint)
+                                         : QStringLiteral("未启动");
     rebuild = state_.devices[0].online != running ||
-              state_.devices[0].address != (running ? state_.localEndpoint : QStringLiteral("未启动"));
+              state_.devices[0].address != localAddress;
     state_.devices[0].online = running;
-    state_.devices[0].address = running ? state_.localEndpoint : QStringLiteral("未启动");
+    state_.devices[0].address = localAddress;
   }
   if (statusLabel_ != nullptr) {
     statusLabel_->setText(connected ? QStringLiteral("●  已连接")

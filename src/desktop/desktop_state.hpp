@@ -12,6 +12,16 @@
 
 namespace lanlink::desktop {
 
+inline QString local_platform_name() {
+#if defined(__APPLE__)
+  return QStringLiteral("macOS");
+#elif defined(_WIN32)
+  return QStringLiteral("Windows");
+#else
+  return QStringLiteral("Linux");
+#endif
+}
+
 struct DeviceState {
   QString name;
   QString platform;
@@ -54,7 +64,7 @@ struct DesktopState {
     options.display_id = 1;
     options.peer_display_id = 2;
     devices = {
-        {QStringLiteral("本机"), QStringLiteral("macOS / Windows"), QStringLiteral("未启动"),
+        {QStringLiteral("本机"), local_platform_name(), QStringLiteral("未启动"),
          QColor(QStringLiteral("#6ea8ff")), QPointF(40.0, 68.0), QSizeF(220.0, 120.0), true,
          false, options.device_id, options.display_id},
     };

@@ -16,4 +16,17 @@ TEST(DesktopStateTest, ResetLayoutRestoresDefaultCanvasState) {
   EXPECT_DOUBLE_EQ(state.canvasZoom, 1.0);
 }
 
+TEST(DesktopStateTest, UsesActualLocalPlatformLabel) {
+  DesktopState state;
+
+  ASSERT_FALSE(state.devices.isEmpty());
+#if defined(__APPLE__)
+  EXPECT_EQ(state.devices[0].platform, QStringLiteral("macOS"));
+#elif defined(_WIN32)
+  EXPECT_EQ(state.devices[0].platform, QStringLiteral("Windows"));
+#else
+  EXPECT_EQ(state.devices[0].platform, QStringLiteral("Linux"));
+#endif
+}
+
 }  // namespace lanlink::desktop
