@@ -209,6 +209,21 @@ Result<void> ConnectionManager::send_actions(PeerHandle handle,
     return send_actions(handle, actions, IClock::Clock::now());
 }
 
+Result<void> ConnectionManager::broadcast_clipboard(const platform::ClipboardData& data,
+                                                    IClock::time_point now) {
+    Result<void> result = Result<void>::success();
+    for (auto& slot : slots_) {
+        if (slot.state != PeerState::kConnected || !slot.session || !slot.session->ready())
+            continue;
+        auto sent = slot.session->send_clipboard(data);
+        if (!sent.ok()) {
+            result = first_error(std::move(result), sent);
+            (void)handle_failure(slot, sent.error(), now);
+        }
+    }
+    return result;
+}
+
 Result<void> ConnectionManager::remove(PeerHandle handle, IClock::time_point now) {
     auto* slot = find(handle);
     if (!slot)

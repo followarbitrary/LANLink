@@ -1,9 +1,11 @@
 #include "lanlink/common/config.hpp"
+#include "lanlink/platform/fake_clipboard_backend.hpp"
 #include "lanlink/platform/fake_input_backend.hpp"
 #include "lanlink/transport/session.hpp"
 
 #include <chrono>
 #include <gtest/gtest.h>
+#include <memory>
 
 namespace {
 using namespace lanlink;
@@ -384,5 +386,202 @@ TEST(PeerSession, ReconnectUsesNewGenerationAndRejectsOldInput) {
     EXPECT_TRUE(arbiter.has_active_lease());
     EXPECT_EQ(target_backend.injected_events().size(), injected_before_stale);
 }
+
+namespace {
+
+struct ClipboardPair {
+    std::unique_ptr<PeerSession> source;
+    std::unique_ptr<PeerSession> target;
+    FakeClipboardBackend source_backend;
+    FakeClipboardBackend target_backend;
+};
+
+ClipboardPair make_clipboard_pair(std::uint64_t seed,
+                                  std::function<bool()> source_enabled = {},
+                                  std::function<bool()> target_enabled = {}) {
+    auto listener_result = Listener::bind(Endpoint{"127.0.0.1", 0});
+    EXPECT_TRUE(listener_result.ok());
+    auto listener = std::move(listener_result.value());
+    auto client_result = Connection::connect(
+        Endpoint{"127.0.0.1", listener.local_endpoint().port});
+    EXPECT_TRUE(client_result.ok());
+    auto accepted = listener.accept(2s);
+    EXPECT_TRUE(accepted.ok());
+
+    ClipboardPair pair;
+    EXPECT_TRUE(pair.source_backend.start({}).ok());
+    EXPECT_TRUE(pair.target_backend.start({}).ok());
+    pair.source = std::make_unique<PeerSession>(
+        std::move(client_result.value()),
+        PeerSessionConfig{id(seed), AuthenticatedPeer{id(seed + 2)}, nullptr, nullptr, nullptr,
+                          {}, {}, {}, &pair.source_backend, std::move(source_enabled)});
+    pair.target = std::make_unique<PeerSession>(
+        std::move(accepted.value()),
+        PeerSessionConfig{id(seed + 2), AuthenticatedPeer{id(seed)}, nullptr, nullptr, nullptr,
+                          {}, {}, {}, &pair.target_backend, std::move(target_enabled)});
+    EXPECT_TRUE(pair.source->start({}).ok());
+    EXPECT_TRUE(pair.target->start({}).ok());
+    EXPECT_TRUE(pair.source->pump({}).ok());
+    EXPECT_TRUE(pair.target->pump({}).ok());
+    return pair;
+}
+
+ClipboardData sample_clipboard() {
+    ClipboardData data;
+    data.text = std::string(70000, 't');
+    data.html = std::string(70000, 'h');
+    data.png = std::vector<std::uint8_t>{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a,
+                                         0x01, 0x02, 0x03};
+    return data;
+}
+
+void pump_clipboard(PeerSession& target, FakeClipboardBackend& backend,
+                    std::size_t writes_before = 0) {
+    for (int attempt = 0; attempt < 64 && backend.write_count() <= writes_before; ++attempt)
+        ASSERT_TRUE(target.pump({}, 0ms).ok());
+}
+
+TEST(PeerSession, ClipboardTransferAppliesAllFormatsAfterEnd) {
+    auto pair = make_clipboard_pair(100);
+    const auto data = sample_clipboard();
+
+    ASSERT_TRUE(pair.source->send_clipboard(data).ok());
+    EXPECT_EQ(pair.target_backend.write_count(), 0u);
+    pump_clipboard(*pair.target, pair.target_backend);
+    EXPECT_EQ(pair.target_backend.data(), data);
+    EXPECT_EQ(pair.target_backend.write_count(), 1u);
+}
+
+TEST(PeerSession, ClipboardAcceptsOutOfOrderChunksAndWritesOnlyAtEnd) {
+    auto listener_result = Listener::bind(Endpoint{"127.0.0.1", 0});
+    ASSERT_TRUE(listener_result.ok());
+    auto listener = std::move(listener_result.value());
+    auto client_result = Connection::connect(
+        Endpoint{"127.0.0.1", listener.local_endpoint().port});
+    ASSERT_TRUE(client_result.ok());
+    auto accepted = listener.accept(2s);
+    ASSERT_TRUE(accepted.ok());
+    FakeClipboardBackend target_backend;
+    ASSERT_TRUE(target_backend.start({}).ok());
+    PeerSession target(std::move(accepted.value()),
+                       PeerSessionConfig{id(202), AuthenticatedPeer{id(201)}, nullptr, nullptr,
+                                         nullptr, {}, {}, {}, &target_backend});
+    ASSERT_TRUE(target.start({}).ok());
+    auto client = std::move(client_result.value());
+    ASSERT_TRUE(client.send(Hello{id(201), kProtocolVersion}).ok());
+    ASSERT_TRUE(target.pump({}).ok());
+
+    ASSERT_TRUE(client.send(ClipboardBegin{id(201), 1, 0x01, 5, 5, 0, 0}).ok());
+    ASSERT_TRUE(client.send(ClipboardChunk{id(201), 1, ClipboardFormat::kText, 3, {'l', 'o'}})
+                    .ok());
+    ASSERT_TRUE(target.pump({}).ok());
+    EXPECT_EQ(target_backend.write_count(), 0u);
+    ASSERT_TRUE(client.send(ClipboardChunk{id(201), 1, ClipboardFormat::kText, 0,
+                                           {'h', 'e', 'l'}})
+                    .ok());
+    ASSERT_TRUE(target.pump({}).ok());
+    EXPECT_EQ(target_backend.write_count(), 0u);
+    ASSERT_TRUE(client.send(ClipboardEnd{id(201), 1}).ok());
+    ASSERT_TRUE(target.pump({}).ok());
+    EXPECT_EQ(target_backend.data().text, std::optional<std::string>{"hello"});
+    EXPECT_EQ(target_backend.write_count(), 1u);
+}
+
+TEST(PeerSession, ClipboardRejectsOverlappingChunks) {
+    auto listener_result = Listener::bind(Endpoint{"127.0.0.1", 0});
+    ASSERT_TRUE(listener_result.ok());
+    auto listener = std::move(listener_result.value());
+    auto client_result = Connection::connect(
+        Endpoint{"127.0.0.1", listener.local_endpoint().port});
+    ASSERT_TRUE(client_result.ok());
+    auto accepted = listener.accept(2s);
+    ASSERT_TRUE(accepted.ok());
+    FakeClipboardBackend backend;
+    ASSERT_TRUE(backend.start({}).ok());
+    PeerSession target(std::move(accepted.value()),
+                       PeerSessionConfig{id(212), AuthenticatedPeer{id(211)}, nullptr, nullptr,
+                                         nullptr, {}, {}, {}, &backend});
+    ASSERT_TRUE(target.start({}).ok());
+    auto client = std::move(client_result.value());
+    ASSERT_TRUE(client.send(Hello{id(211), kProtocolVersion}).ok());
+    ASSERT_TRUE(target.pump({}).ok());
+    ASSERT_TRUE(client.send(ClipboardBegin{id(211), 1, 0x01, 5, 5, 0, 0}).ok());
+    ASSERT_TRUE(client.send(ClipboardChunk{id(211), 1, ClipboardFormat::kText, 0, {'h', 'e', 'l'}})
+                    .ok());
+    ASSERT_TRUE(client.send(ClipboardChunk{id(211), 1, ClipboardFormat::kText, 2, {'l', 'o'}})
+                    .ok());
+    bool failed = false;
+    for (int attempt = 0; attempt < 8 && !failed; ++attempt)
+        failed = !target.pump({}, 0ms).ok();
+    EXPECT_TRUE(failed);
+    EXPECT_EQ(backend.write_count(), 0u);
+}
+
+TEST(PeerSession, ClipboardIgnoresIncompleteTransferAndReplacesItWithNextBegin) {
+    auto listener_result = Listener::bind(Endpoint{"127.0.0.1", 0});
+    ASSERT_TRUE(listener_result.ok());
+    auto listener = std::move(listener_result.value());
+    auto client_result = Connection::connect(
+        Endpoint{"127.0.0.1", listener.local_endpoint().port});
+    ASSERT_TRUE(client_result.ok());
+    auto accepted = listener.accept(2s);
+    ASSERT_TRUE(accepted.ok());
+    FakeClipboardBackend backend;
+    ASSERT_TRUE(backend.start({}).ok());
+    PeerSession target(std::move(accepted.value()),
+                       PeerSessionConfig{id(222), AuthenticatedPeer{id(221)}, nullptr, nullptr,
+                                         nullptr, {}, {}, {}, &backend});
+    ASSERT_TRUE(target.start({}).ok());
+    auto client = std::move(client_result.value());
+    ASSERT_TRUE(client.send(Hello{id(221), kProtocolVersion}).ok());
+    ASSERT_TRUE(target.pump({}).ok());
+    ASSERT_TRUE(client.send(ClipboardBegin{id(221), 1, 0x01, 5, 5, 0, 0}).ok());
+    ASSERT_TRUE(client.send(ClipboardChunk{id(221), 1, ClipboardFormat::kText, 0, {'o', 'l'}})
+                    .ok());
+    ASSERT_TRUE(target.pump({}).ok());
+    EXPECT_EQ(backend.write_count(), 0u);
+    ASSERT_TRUE(client.send(ClipboardBegin{id(221), 2, 0x01, 5, 5, 0, 0}).ok());
+    ASSERT_TRUE(client.send(ClipboardChunk{id(221), 2, ClipboardFormat::kText, 0,
+                                           {'n', 'e', 'w', '!', '?'}})
+                    .ok());
+    ASSERT_TRUE(client.send(ClipboardEnd{id(221), 2}).ok());
+    pump_clipboard(target, backend);
+    EXPECT_EQ(backend.data().text, std::optional<std::string>{"new!?"});
+    EXPECT_EQ(backend.write_count(), 1u);
+}
+
+TEST(PeerSession, ClipboardEmptyPackageClearsAndRemoteEchoIsDeduplicated) {
+    auto pair = make_clipboard_pair(230);
+    ClipboardData initial;
+    initial.text = "before";
+    ASSERT_TRUE(pair.target_backend.write(initial).ok());
+
+    const auto writes_before_clear = pair.target_backend.write_count();
+    ASSERT_TRUE(pair.source->send_clipboard(ClipboardData{}).ok());
+    pump_clipboard(*pair.target, pair.target_backend, writes_before_clear);
+    EXPECT_EQ(pair.target_backend.data(), ClipboardData{});
+    EXPECT_EQ(pair.target_backend.write_count(), 2u);
+
+    const auto data = sample_clipboard();
+    const auto writes_before_data = pair.target_backend.write_count();
+    ASSERT_TRUE(pair.source->send_clipboard(data).ok());
+    pump_clipboard(*pair.target, pair.target_backend, writes_before_data);
+    EXPECT_EQ(pair.target_backend.data(), data);
+    const auto source_writes = pair.source_backend.write_count();
+    ASSERT_TRUE(pair.target->send_clipboard(data).ok());
+    for (int attempt = 0; attempt < 16; ++attempt)
+        ASSERT_TRUE(pair.source->pump({}, 0ms).ok());
+    EXPECT_EQ(pair.source_backend.write_count(), source_writes);
+}
+
+TEST(PeerSession, ClipboardSendAndReceiveCanBeDisabled) {
+    auto pair = make_clipboard_pair(240, [] { return true; }, [] { return false; });
+    ASSERT_TRUE(pair.source->send_clipboard(sample_clipboard()).ok());
+    for (int attempt = 0; attempt < 16; ++attempt)
+        ASSERT_TRUE(pair.target->pump({}, 0ms).ok());
+    EXPECT_EQ(pair.target_backend.write_count(), 0u);
+}
+
+} // namespace
 
 } // namespace

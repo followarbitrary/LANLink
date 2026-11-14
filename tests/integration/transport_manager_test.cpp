@@ -1,4 +1,5 @@
 #include "lanlink/common/config.hpp"
+#include "lanlink/platform/fake_clipboard_backend.hpp"
 #include "lanlink/platform/fake_input_backend.hpp"
 #include "lanlink/transport/manager.hpp"
 
@@ -258,6 +259,62 @@ TEST(ConnectionManager, IncomingDisconnectAndRemoveAreIdempotent) {
     EXPECT_TRUE(manager.remove(handle_result.value(), {}).ok());
     EXPECT_TRUE(manager.remove(handle_result.value(), {}).ok());
     EXPECT_FALSE(backend.status().suppression);
+}
+
+TEST(ConnectionManager, BroadcastClipboardContinuesAfterOnePeerFailure) {
+    auto listener1_result = Listener::bind(Endpoint{"127.0.0.1", 0});
+    ASSERT_TRUE(listener1_result.ok());
+    auto listener1 = std::move(listener1_result.value());
+    auto listener2_result = Listener::bind(Endpoint{"127.0.0.1", 0});
+    ASSERT_TRUE(listener2_result.ok());
+    auto listener2 = std::move(listener2_result.value());
+
+    FakeClipboardBackend target1_backend;
+    FakeClipboardBackend target2_backend;
+    ASSERT_TRUE(target1_backend.start({}).ok());
+    ASSERT_TRUE(target2_backend.start({}).ok());
+    ConnectionManager manager;
+    const auto first = manager.add_outgoing(
+        outgoing(PeerSessionConfig{id(61), AuthenticatedPeer{id(63)}, nullptr, nullptr, nullptr,
+                                   {}, {}, {}, nullptr, [] { return false; }},
+                Endpoint{"127.0.0.1", listener1.local_endpoint().port}));
+    const auto second = manager.add_outgoing(
+        outgoing(PeerSessionConfig{id(65), AuthenticatedPeer{id(67)}, nullptr, nullptr, nullptr,
+                                   {}, {}, {}, nullptr, [] { return true; }},
+                Endpoint{"127.0.0.1", listener2.local_endpoint().port}));
+    ASSERT_TRUE(first.ok());
+    ASSERT_TRUE(second.ok());
+
+    ASSERT_TRUE(manager.poll({}, 10ms).ok());
+    auto accepted1 = listener1.accept(2s);
+    auto accepted2 = listener2.accept(2s);
+    ASSERT_TRUE(accepted1.ok());
+    ASSERT_TRUE(accepted2.ok());
+    PeerSession target1(std::move(accepted1.value()),
+                        PeerSessionConfig{id(63), AuthenticatedPeer{id(61)}, nullptr, nullptr,
+                                          nullptr, {}, {}, {}, &target1_backend,
+                                          [] { return true; }});
+    PeerSession target2(std::move(accepted2.value()),
+                        PeerSessionConfig{id(67), AuthenticatedPeer{id(65)}, nullptr, nullptr,
+                                          nullptr, {}, {}, {}, &target2_backend,
+                                          [] { return true; }});
+    ASSERT_TRUE(target1.start({}).ok());
+    ASSERT_TRUE(target2.start({}).ok());
+    ASSERT_TRUE(target1.pump({}).ok());
+    ASSERT_TRUE(target2.pump({}).ok());
+    ASSERT_TRUE(manager.poll({}, 10ms).ok());
+    ASSERT_TRUE(manager.ready(first.value()));
+    ASSERT_TRUE(manager.ready(second.value()));
+
+    ClipboardData data;
+    data.text = "broadcast";
+    const auto result = manager.broadcast_clipboard(data, {});
+    EXPECT_FALSE(result.ok());
+    EXPECT_EQ(manager.state(first.value()), PeerState::kBackoff);
+    EXPECT_EQ(manager.state(second.value()), PeerState::kConnected);
+    for (int attempt = 0; attempt < 16 && target2_backend.write_count() == 0; ++attempt)
+        ASSERT_TRUE(target2.pump({}, 0ms).ok());
+    EXPECT_EQ(target2_backend.data(), data);
 }
 
 } // namespace

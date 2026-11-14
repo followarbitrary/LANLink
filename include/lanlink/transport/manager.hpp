@@ -62,6 +62,8 @@ class ConnectionManager {
     Result<void> send_actions(PeerHandle handle, const std::vector<RouterAction>& actions,
                               IClock::time_point now);
     Result<void> send_actions(PeerHandle handle, const std::vector<RouterAction>& actions);
+    Result<void> broadcast_clipboard(const platform::ClipboardData& data,
+                                     IClock::time_point now);
     Result<void> remove(PeerHandle handle, IClock::time_point now);
 
     std::optional<PeerState> state(PeerHandle handle) const;

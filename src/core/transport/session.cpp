@@ -3,7 +3,9 @@
 #include "lanlink/common/config.hpp"
 #include "lanlink/common/debug.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <string>
 #include <utility>
 
@@ -14,6 +16,24 @@ bool is_timeout(const std::string& error) { return error == "read timeout"; }
 
 bool input_forwarding_enabled(const PeerSessionConfig& config) {
     return !config.input_forwarding_enabled || config.input_forwarding_enabled();
+}
+
+bool clipboard_sync_enabled(const PeerSessionConfig& config) {
+    return !config.clipboard_sync_enabled || config.clipboard_sync_enabled();
+}
+
+std::uint8_t clipboard_format_bit(protocol::ClipboardFormat format) {
+    return static_cast<std::uint8_t>(1U << (static_cast<std::uint8_t>(format) - 1U));
+}
+
+bool format_present(std::uint8_t mask, protocol::ClipboardFormat format) {
+    return (mask & clipboard_format_bit(format)) != 0;
+}
+
+bool complete(const std::vector<std::uint8_t>& coverage) {
+    return std::all_of(coverage.begin(), coverage.end(), [](std::uint8_t value) {
+        return value != 0;
+    });
 }
 
 } // namespace
@@ -95,6 +115,182 @@ Result<void> PeerSession::send_actions(const std::vector<RouterAction>& actions)
     if (!started_ || disconnected_)
         return Result<void>::failure("session is closed");
     return dispatch_actions(actions, IClock::time_point{});
+}
+
+Result<void> PeerSession::send_clipboard(const platform::ClipboardData& data) {
+    if (!started_ || disconnected_)
+        return Result<void>::failure("session is closed");
+    if (!clipboard_sync_enabled(config_))
+        return Result<void>::failure("clipboard synchronization disabled");
+    const auto valid = platform::validate_clipboard_data(data);
+    if (!valid.ok())
+        return valid;
+    if (clipboard_fingerprint_.has_value() && *clipboard_fingerprint_ == data)
+        return Result<void>::success();
+
+    auto sequence = next_clipboard_sequence_++;
+    if (sequence == 0) {
+        sequence = next_clipboard_sequence_++;
+    }
+    std::uint8_t format_mask = 0;
+    if (data.text.has_value()) format_mask |= clipboard_format_bit(protocol::ClipboardFormat::kText);
+    if (data.html.has_value()) format_mask |= clipboard_format_bit(protocol::ClipboardFormat::kHtml);
+    if (data.png.has_value()) format_mask |= clipboard_format_bit(protocol::ClipboardFormat::kPng);
+    const auto text_size = static_cast<std::uint32_t>(data.text ? data.text->size() : 0U);
+    const auto html_size = static_cast<std::uint32_t>(data.html ? data.html->size() : 0U);
+    const auto png_size = static_cast<std::uint32_t>(data.png ? data.png->size() : 0U);
+    const auto total_size = text_size + html_size + png_size;
+    auto sent = connection_.send(protocol::ClipboardBegin{
+        config_.local_device, sequence, format_mask, total_size, text_size, html_size, png_size});
+    if (!sent.ok())
+        return fail_and_disconnect("clipboard begin send failed", IClock::time_point{});
+
+    const auto send_format = [&](protocol::ClipboardFormat format,
+                                 const std::vector<std::uint8_t>& bytes) -> Result<void> {
+        for (std::size_t offset = 0; offset < bytes.size();) {
+            const auto length = std::min<std::size_t>(protocol::kMaxClipboardChunkDataSize,
+                                                       bytes.size() - offset);
+            std::vector<std::uint8_t> chunk(bytes.begin() + static_cast<std::ptrdiff_t>(offset),
+                                            bytes.begin() +
+                                                static_cast<std::ptrdiff_t>(offset + length));
+            auto result = connection_.send(protocol::ClipboardChunk{
+                config_.local_device, sequence, format,
+                static_cast<std::uint32_t>(offset), std::move(chunk)});
+            if (!result.ok())
+                return fail_and_disconnect("clipboard chunk send failed", IClock::time_point{});
+            offset += length;
+        }
+        return Result<void>::success();
+    };
+    if (data.text.has_value()) {
+        const std::vector<std::uint8_t> bytes(data.text->begin(), data.text->end());
+        sent = send_format(protocol::ClipboardFormat::kText, bytes);
+        if (!sent.ok()) return sent;
+    }
+    if (data.html.has_value()) {
+        const std::vector<std::uint8_t> bytes(data.html->begin(), data.html->end());
+        sent = send_format(protocol::ClipboardFormat::kHtml, bytes);
+        if (!sent.ok()) return sent;
+    }
+    if (data.png.has_value()) {
+        sent = send_format(protocol::ClipboardFormat::kPng, *data.png);
+        if (!sent.ok()) return sent;
+    }
+    sent = connection_.send(protocol::ClipboardEnd{config_.local_device, sequence});
+    if (!sent.ok())
+        return fail_and_disconnect("clipboard end send failed", IClock::time_point{});
+    clipboard_fingerprint_ = data;
+    return Result<void>::success();
+}
+
+Result<void> PeerSession::dispatch_clipboard_begin(const protocol::ClipboardBegin& begin,
+                                                   IClock::time_point now) {
+    if (config_.peer.id != DeviceId{} && begin.source != config_.peer.id)
+        return fail_and_disconnect("clipboard source identity mismatch", now);
+    const auto expected_total = static_cast<std::uint64_t>(begin.text_size) + begin.html_size +
+                                begin.png_size;
+    if ((begin.format_mask & ~0x07U) != 0 || expected_total != begin.total_size ||
+        begin.total_size > protocol::kMaxClipboardPackageSize ||
+        (!format_present(begin.format_mask, protocol::ClipboardFormat::kText) &&
+         begin.text_size != 0) ||
+        (!format_present(begin.format_mask, protocol::ClipboardFormat::kHtml) &&
+         begin.html_size != 0) ||
+        (!format_present(begin.format_mask, protocol::ClipboardFormat::kPng) &&
+         begin.png_size != 0)) {
+        return fail_and_disconnect("invalid clipboard begin", now);
+    }
+    ClipboardReceiveState transfer;
+    transfer.source = begin.source;
+    transfer.sequence = begin.sequence;
+    transfer.format_mask = begin.format_mask;
+    transfer.text_size = begin.text_size;
+    transfer.html_size = begin.html_size;
+    transfer.png_size = begin.png_size;
+    transfer.text.resize(begin.text_size);
+    transfer.html.resize(begin.html_size);
+    transfer.png.resize(begin.png_size);
+    transfer.text_coverage.resize(begin.text_size);
+    transfer.html_coverage.resize(begin.html_size);
+    transfer.png_coverage.resize(begin.png_size);
+    clipboard_receive_ = std::move(transfer);
+    return Result<void>::success();
+}
+
+Result<void> PeerSession::dispatch_clipboard_chunk(const protocol::ClipboardChunk& chunk,
+                                                   IClock::time_point now) {
+    if (config_.peer.id != DeviceId{} && chunk.source != config_.peer.id)
+        return fail_and_disconnect("clipboard source identity mismatch", now);
+    if (!clipboard_receive_.has_value() || clipboard_receive_->source != chunk.source ||
+        clipboard_receive_->sequence != chunk.sequence)
+        return fail_and_disconnect("clipboard chunk without active transfer", now);
+
+    auto& transfer = *clipboard_receive_;
+    std::vector<std::uint8_t>* bytes = nullptr;
+    std::vector<std::uint8_t>* coverage = nullptr;
+    std::uint32_t expected_size = 0;
+    switch (chunk.format) {
+    case protocol::ClipboardFormat::kText:
+        bytes = &transfer.text;
+        coverage = &transfer.text_coverage;
+        expected_size = transfer.text_size;
+        break;
+    case protocol::ClipboardFormat::kHtml:
+        bytes = &transfer.html;
+        coverage = &transfer.html_coverage;
+        expected_size = transfer.html_size;
+        break;
+    case protocol::ClipboardFormat::kPng:
+        bytes = &transfer.png;
+        coverage = &transfer.png_coverage;
+        expected_size = transfer.png_size;
+        break;
+    }
+    if (!format_present(transfer.format_mask, chunk.format) || bytes == nullptr ||
+        static_cast<std::uint64_t>(chunk.offset) + chunk.data.size() > expected_size)
+        return fail_and_disconnect("clipboard chunk range is invalid", now);
+    for (std::size_t index = 0; index < chunk.data.size(); ++index) {
+        if ((*coverage)[chunk.offset + index] != 0)
+            return fail_and_disconnect("clipboard chunk overlaps previous data", now);
+    }
+    std::copy(chunk.data.begin(), chunk.data.end(), bytes->begin() + chunk.offset);
+    std::fill(coverage->begin() + chunk.offset,
+              coverage->begin() + chunk.offset + chunk.data.size(), 1);
+    return Result<void>::success();
+}
+
+Result<void> PeerSession::dispatch_clipboard_end(const protocol::ClipboardEnd& end,
+                                                 IClock::time_point now) {
+    if (config_.peer.id != DeviceId{} && end.source != config_.peer.id)
+        return fail_and_disconnect("clipboard source identity mismatch", now);
+    if (!clipboard_receive_.has_value() || clipboard_receive_->source != end.source ||
+        clipboard_receive_->sequence != end.sequence)
+        return fail_and_disconnect("clipboard end without active transfer", now);
+    auto transfer = std::move(*clipboard_receive_);
+    clipboard_receive_.reset();
+    if (!complete(transfer.text_coverage) || !complete(transfer.html_coverage) ||
+        !complete(transfer.png_coverage))
+        return fail_and_disconnect("incomplete clipboard transfer", now);
+
+    platform::ClipboardData data;
+    if (format_present(transfer.format_mask, protocol::ClipboardFormat::kText))
+        data.text = std::string(transfer.text.begin(), transfer.text.end());
+    if (format_present(transfer.format_mask, protocol::ClipboardFormat::kHtml))
+        data.html = std::string(transfer.html.begin(), transfer.html.end());
+    if (format_present(transfer.format_mask, protocol::ClipboardFormat::kPng))
+        data.png = std::move(transfer.png);
+    const auto valid = platform::validate_clipboard_data(data);
+    if (!valid.ok())
+        return fail_and_disconnect("invalid clipboard content", now);
+    if (clipboard_fingerprint_.has_value() && *clipboard_fingerprint_ == data)
+        return Result<void>::success();
+    if (config_.clipboard_backend != nullptr) {
+        auto applied = transfer.format_mask == 0 ? config_.clipboard_backend->clear()
+                                                  : config_.clipboard_backend->write(data);
+        if (!applied.ok())
+            return fail_and_disconnect("clipboard backend apply failed", now);
+    }
+    clipboard_fingerprint_ = std::move(data);
+    return Result<void>::success();
 }
 
 Result<void> PeerSession::dispatch_actions(const std::vector<RouterAction>& actions,
@@ -236,6 +432,19 @@ Result<void> PeerSession::dispatch_message(const protocol::Message& message,
     if (!hello_received_)
         return fail_and_disconnect("hello required", now);
     liveness_.mark_alive(now);
+
+    if (std::holds_alternative<protocol::ClipboardBegin>(message) ||
+        std::holds_alternative<protocol::ClipboardChunk>(message) ||
+        std::holds_alternative<protocol::ClipboardEnd>(message)) {
+        if (!clipboard_sync_enabled(config_))
+            return Result<void>::success();
+        if (const auto* begin = std::get_if<protocol::ClipboardBegin>(&message))
+            return dispatch_clipboard_begin(*begin, now);
+        if (const auto* chunk = std::get_if<protocol::ClipboardChunk>(&message))
+            return dispatch_clipboard_chunk(*chunk, now);
+        return dispatch_clipboard_end(std::get<protocol::ClipboardEnd>(message), now);
+    }
+
     if (std::holds_alternative<protocol::ErrorMessage>(message))
         return fail_and_disconnect("peer reported protocol error", now);
 
