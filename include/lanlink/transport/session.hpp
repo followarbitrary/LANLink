@@ -12,11 +12,25 @@
 
 #include <chrono>
 #include <cstdint>
+#include <filesystem>
 #include <functional>
+#include <fstream>
 #include <optional>
 #include <vector>
 
 namespace lanlink::transport {
+
+struct FileTransferStatus {
+    using State = protocol::FileStatusCode;
+    Uuid128 transfer;
+    std::string name;
+    State state{State::kAccepted};
+    std::uint64_t bytes{};
+    std::uint64_t total_size{};
+    bool incoming{false};
+    std::string message;
+};
+using FileTransferUpdate = FileTransferStatus;
 
 struct PeerSessionConfig {
     DeviceId local_device;
@@ -29,6 +43,8 @@ struct PeerSessionConfig {
     std::function<bool()> input_forwarding_enabled;
     platform::IClipboardBackend* clipboard_backend{nullptr};
     std::function<bool()> clipboard_sync_enabled;
+    std::filesystem::path receive_directory;
+    std::function<void(const FileTransferStatus&)> file_status_callback;
 };
 
 class PeerSession {
@@ -38,6 +54,9 @@ class PeerSession {
     Result<void> start(IClock::time_point now);
     Result<void> send_actions(const std::vector<RouterAction>& actions);
     Result<void> send_clipboard(const platform::ClipboardData& data);
+    Result<Uuid128> send_file(const std::filesystem::path& path,
+                              std::string display_name = {});
+    Result<void> cancel_file(const Uuid128& transfer);
     void discard_clipboard_state() noexcept;
     Result<void> pump(IClock::time_point now,
                       std::chrono::milliseconds timeout = std::chrono::milliseconds{-1});
@@ -65,6 +84,14 @@ class PeerSession {
                                         IClock::time_point now);
     Result<void> drop_clipboard(const char* error);
     Result<void> retry_pending_clipboard();
+    Result<void> dispatch_file_begin(const protocol::FileBegin& begin, IClock::time_point now);
+    Result<void> dispatch_file_chunk(const protocol::FileChunk& chunk, IClock::time_point now);
+    Result<void> dispatch_file_end(const protocol::FileEnd& end, IClock::time_point now);
+    Result<void> dispatch_file_cancel(const protocol::FileCancel& cancel, IClock::time_point now);
+    Result<void> dispatch_file_status(const protocol::FileStatus& status, IClock::time_point now);
+    void emit_file_update(const FileTransferUpdate& update) const;
+    void fail_file(const std::string& message, bool notify_peer, IClock::time_point now);
+    void clear_file_state() noexcept;
 
     Connection connection_;
     PeerSessionConfig config_;
@@ -100,6 +127,29 @@ class PeerSession {
     };
     std::optional<ClipboardReceiveState> clipboard_receive_;
     std::optional<platform::ClipboardData> pending_clipboard_apply_;
+
+    struct FileSendState {
+        Uuid128 transfer;
+        std::filesystem::path path;
+        std::string name;
+        std::ifstream stream;
+        std::uint64_t total_size{};
+        std::uint64_t offset{};
+        bool end_sent{false};
+    };
+    struct FileReceiveState {
+        Uuid128 transfer;
+        std::string name;
+        std::filesystem::path temporary_path;
+        std::filesystem::path target_path;
+        std::ofstream stream;
+        std::uint64_t total_size{};
+        std::uint64_t offset{};
+        IClock::time_point started_at{};
+    };
+    std::optional<FileSendState> file_send_;
+    std::optional<FileReceiveState> file_receive_;
+    std::uint64_t next_file_transfer_{1};
 };
 
 } // namespace lanlink::transport

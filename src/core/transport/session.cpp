@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <string>
 #include <utility>
 
@@ -115,6 +117,106 @@ Result<void> PeerSession::send_actions(const std::vector<RouterAction>& actions)
     if (!started_ || disconnected_)
         return Result<void>::failure("session is closed");
     return dispatch_actions(actions, IClock::time_point{});
+}
+
+
+void PeerSession::emit_file_update(const FileTransferStatus& update) const {
+    if (config_.file_status_callback)
+        config_.file_status_callback(update);
+}
+
+void PeerSession::clear_file_state() noexcept {
+    if (file_receive_.has_value()) {
+        file_receive_->stream.close();
+        std::error_code ec;
+        std::filesystem::remove(file_receive_->temporary_path, ec);
+    }
+    if (file_send_.has_value())
+        file_send_->stream.close();
+    file_receive_.reset();
+    file_send_.reset();
+}
+
+void PeerSession::fail_file(const std::string& message, bool notify_peer, IClock::time_point now) {
+    if (file_send_.has_value()) {
+        const auto& state = *file_send_;
+        if (notify_peer && connection_.connected())
+            (void)connection_.send(protocol::FileStatus{config_.local_device, state.transfer,
+                                                         protocol::FileStatusCode::kFailed,
+                                                         state.offset, state.total_size, message});
+        emit_file_update(FileTransferStatus{state.transfer, state.name,
+                                            protocol::FileStatusCode::kFailed, state.offset,
+                                            state.total_size, false, message});
+    } else if (file_receive_.has_value()) {
+        const auto& state = *file_receive_;
+        if (notify_peer && connection_.connected())
+            (void)connection_.send(protocol::FileStatus{config_.local_device, state.transfer,
+                                                         protocol::FileStatusCode::kFailed,
+                                                         state.offset, state.total_size, message});
+        emit_file_update(FileTransferStatus{state.transfer, state.name,
+                                            protocol::FileStatusCode::kFailed, state.offset,
+                                            state.total_size, true, message});
+    }
+    (void)now;
+    clear_file_state();
+}
+
+Result<Uuid128> PeerSession::send_file(const std::filesystem::path& path,
+                                       std::string display_name) {
+    if (!started_ || disconnected_)
+        return Result<Uuid128>::failure("session is closed");
+    if (file_send_.has_value() || file_receive_.has_value())
+        return Result<Uuid128>::failure("file transfer already active");
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(path, ec) || ec)
+        return Result<Uuid128>::failure("file does not exist");
+    const auto size = std::filesystem::file_size(path, ec);
+    if (ec || size > protocol::kMaxFileSize)
+        return Result<Uuid128>::failure("file size is invalid");
+    if (display_name.empty()) display_name = path.filename().string();
+    if (display_name.empty() || display_name.size() > protocol::kMaxFileNameSize ||
+        display_name.find('/') != std::string::npos || display_name.find('\\') != std::string::npos)
+        return Result<Uuid128>::failure("file name is invalid");
+    std::ifstream stream(path, std::ios::binary);
+    if (!stream)
+        return Result<Uuid128>::failure("file cannot be opened");
+    Uuid128 transfer{config_.local_device.high, next_file_transfer_++};
+    if (transfer.low == 0) transfer.low = next_file_transfer_++;
+    file_send_ = FileSendState{transfer, path, std::move(display_name), std::move(stream), size, 0, false};
+    auto sent = connection_.send(protocol::FileBegin{config_.local_device, transfer,
+                                                      file_send_->name, size});
+    if (!sent.ok()) {
+        clear_file_state();
+        return Result<Uuid128>::failure(sent.error());
+    }
+    emit_file_update(FileTransferStatus{transfer, file_send_->name,
+                                        protocol::FileStatusCode::kAccepted, 0, size, false, {}});
+    return Result<Uuid128>::success(transfer);
+}
+
+Result<void> PeerSession::cancel_file(const Uuid128& transfer) {
+    if ((!file_send_.has_value() || file_send_->transfer != transfer) &&
+        (!file_receive_.has_value() || file_receive_->transfer != transfer))
+        return Result<void>::failure("file transfer is not active");
+    auto sent = connection_.send(protocol::FileCancel{config_.local_device, transfer, "canceled"});
+    if (file_send_.has_value() && file_send_->transfer == transfer) {
+        const auto name = file_send_->name;
+        const auto offset = file_send_->offset;
+        const auto total = file_send_->total_size;
+        clear_file_state();
+        emit_file_update(FileTransferStatus{transfer, name,
+                                            protocol::FileStatusCode::kCanceled, offset,
+                                            total, false, "canceled"});
+    } else {
+        const auto name = file_receive_->name;
+        const auto offset = file_receive_->offset;
+        const auto total = file_receive_->total_size;
+        clear_file_state();
+        emit_file_update(FileTransferStatus{transfer, name,
+                                            protocol::FileStatusCode::kCanceled, offset,
+                                            total, true, "canceled"});
+    }
+    return sent;
 }
 
 Result<void> PeerSession::send_clipboard(const platform::ClipboardData& data) {
@@ -324,6 +426,172 @@ Result<void> PeerSession::retry_pending_clipboard() {
     return Result<void>::success();
 }
 
+
+Result<void> PeerSession::dispatch_file_begin(const protocol::FileBegin& begin,
+                                              IClock::time_point now) {
+    if (config_.peer.id != DeviceId{} && begin.source != config_.peer.id)
+        return Result<void>::success();
+    if (file_send_.has_value() || file_receive_.has_value()) {
+        (void)connection_.send(protocol::FileStatus{config_.local_device, begin.transfer,
+                                                     protocol::FileStatusCode::kFailed, 0,
+                                                     begin.total_size, "file transfer busy"});
+        return Result<void>::success();
+    }
+    if (config_.receive_directory.empty()) {
+        (void)connection_.send(protocol::FileStatus{config_.local_device, begin.transfer,
+                                                     protocol::FileStatusCode::kFailed, 0,
+                                                     begin.total_size, "receive directory unavailable"});
+        return Result<void>::success();
+    }
+    std::error_code ec;
+    std::filesystem::create_directories(config_.receive_directory, ec);
+    if (ec) {
+        (void)connection_.send(protocol::FileStatus{config_.local_device, begin.transfer,
+                                                     protocol::FileStatusCode::kFailed, 0,
+                                                     begin.total_size, "cannot create receive directory"});
+        return Result<void>::success();
+    }
+    const auto target = config_.receive_directory / std::filesystem::path(begin.name);
+    if (std::filesystem::exists(target, ec) || ec) {
+        (void)connection_.send(protocol::FileStatus{config_.local_device, begin.transfer,
+                                                     protocol::FileStatusCode::kFailed, 0,
+                                                     begin.total_size, "destination file exists"});
+        return Result<void>::success();
+    }
+    const auto temporary = config_.receive_directory /
+                           (std::string{"."} + begin.name + ".lanlink-" +
+                            std::to_string(begin.transfer.low) + ".part");
+    std::ofstream stream(temporary, std::ios::binary | std::ios::trunc);
+    if (!stream) {
+        (void)connection_.send(protocol::FileStatus{config_.local_device, begin.transfer,
+                                                     protocol::FileStatusCode::kFailed, 0,
+                                                     begin.total_size, "cannot open destination file"});
+        return Result<void>::success();
+    }
+    file_receive_ = FileReceiveState{begin.transfer, begin.name, temporary, target,
+                                     std::move(stream), begin.total_size, 0, now};
+    emit_file_update(FileTransferStatus{begin.transfer, begin.name,
+                                        protocol::FileStatusCode::kAccepted, 0,
+                                        begin.total_size, true, {}});
+    auto sent = connection_.send(protocol::FileStatus{config_.local_device, begin.transfer,
+                                                      protocol::FileStatusCode::kAccepted, 0,
+                                                      begin.total_size, {}});
+    if (!sent.ok()) return sent;
+    return Result<void>::success();
+}
+
+Result<void> PeerSession::dispatch_file_chunk(const protocol::FileChunk& chunk,
+                                               IClock::time_point now) {
+    (void)now;
+    if (!file_receive_.has_value() || file_receive_->transfer != chunk.transfer)
+        return Result<void>::success();
+    auto& state = *file_receive_;
+    if (chunk.offset != state.offset || (chunk.data.empty() && state.offset != state.total_size)) {
+        fail_file("file chunk offset is invalid", true, now);
+        return Result<void>::success();
+    }
+    if (state.offset + chunk.data.size() > state.total_size) {
+        fail_file("file chunk exceeds file size", true, now);
+        return Result<void>::success();
+    }
+    state.stream.write(reinterpret_cast<const char*>(chunk.data.data()),
+                       static_cast<std::streamsize>(chunk.data.size()));
+    if (!state.stream) {
+        fail_file("file write failed", true, now);
+        return Result<void>::success();
+    }
+    state.offset += chunk.data.size();
+    emit_file_update(FileTransferStatus{state.transfer, state.name,
+                                        protocol::FileStatusCode::kProgress, state.offset,
+                                        state.total_size, true, {}});
+    auto sent = connection_.send(protocol::FileStatus{config_.local_device, state.transfer,
+                                                      protocol::FileStatusCode::kProgress,
+                                                      state.offset, state.total_size, {}});
+    if (!sent.ok()) return sent;
+    return Result<void>::success();
+}
+
+Result<void> PeerSession::dispatch_file_end(const protocol::FileEnd& end,
+                                             IClock::time_point now) {
+    if (!file_receive_.has_value() || file_receive_->transfer != end.transfer)
+        return Result<void>::success();
+    auto& state = *file_receive_;
+    if (end.total_size != state.total_size || state.offset != state.total_size) {
+        fail_file("file size mismatch", true, now);
+        return Result<void>::success();
+    }
+    state.stream.flush();
+    if (!state.stream) {
+        fail_file("file flush failed", true, now);
+        return Result<void>::success();
+    }
+    state.stream.close();
+    std::error_code ec;
+    std::filesystem::rename(state.temporary_path, state.target_path, ec);
+    if (ec) {
+        fail_file("file rename failed", true, now);
+        return Result<void>::success();
+    }
+    const auto completed = FileTransferStatus{state.transfer, state.name,
+                                              protocol::FileStatusCode::kCompleted,
+                                              state.offset, state.total_size, true, {}};
+    auto sent = connection_.send(protocol::FileStatus{config_.local_device, state.transfer,
+                                                      protocol::FileStatusCode::kCompleted,
+                                                      state.offset, state.total_size, {}});
+    emit_file_update(completed);
+    file_receive_.reset();
+    return sent;
+}
+
+Result<void> PeerSession::dispatch_file_cancel(const protocol::FileCancel& cancel,
+                                                IClock::time_point now) {
+    if (config_.peer.id != DeviceId{} && cancel.source != config_.peer.id)
+        return Result<void>::success();
+    if (file_receive_.has_value() && file_receive_->transfer == cancel.transfer) {
+        const auto transfer_id = file_receive_->transfer;
+        const auto name = file_receive_->name;
+        const auto offset = file_receive_->offset;
+        const auto total = file_receive_->total_size;
+        clear_file_state();
+        (void)connection_.send(protocol::FileStatus{config_.local_device, transfer_id,
+                                                     protocol::FileStatusCode::kCanceled,
+                                                     offset, total, cancel.reason});
+        emit_file_update(FileTransferStatus{transfer_id, name,
+                                            protocol::FileStatusCode::kCanceled, offset,
+                                            total, true, cancel.reason});
+    } else if (file_send_.has_value() && file_send_->transfer == cancel.transfer) {
+        const auto transfer_id = file_send_->transfer;
+        const auto name = file_send_->name;
+        const auto offset = file_send_->offset;
+        const auto total = file_send_->total_size;
+        clear_file_state();
+        emit_file_update(FileTransferStatus{transfer_id, name,
+                                            protocol::FileStatusCode::kCanceled, offset,
+                                            total, false, cancel.reason});
+    }
+    (void)now;
+    return Result<void>::success();
+}
+
+Result<void> PeerSession::dispatch_file_status(const protocol::FileStatus& status,
+                                                IClock::time_point now) {
+    if (config_.peer.id != DeviceId{} && status.source != config_.peer.id)
+        return Result<void>::success();
+    if (!file_send_.has_value() || file_send_->transfer != status.transfer)
+        return Result<void>::success();
+    auto& state = *file_send_;
+    if (status.total_size != state.total_size || status.bytes > state.total_size)
+        return Result<void>::success();
+    emit_file_update(FileTransferStatus{state.transfer, state.name, status.status,
+                                        status.bytes, status.total_size, false, status.message});
+    if (status.status == protocol::FileStatusCode::kFailed ||
+        status.status == protocol::FileStatusCode::kCanceled ||
+        status.status == protocol::FileStatusCode::kCompleted)
+        clear_file_state();
+    (void)now;
+    return Result<void>::success();
+}
+
 Result<void> PeerSession::dispatch_actions(const std::vector<RouterAction>& actions,
                                            IClock::time_point now) {
     for (const auto& action : actions) {
@@ -463,6 +731,22 @@ Result<void> PeerSession::dispatch_message(const protocol::Message& message,
     if (!hello_received_)
         return fail_and_disconnect("hello required", now);
     liveness_.mark_alive(now);
+
+    if (std::holds_alternative<protocol::FileBegin>(message) ||
+        std::holds_alternative<protocol::FileChunk>(message) ||
+        std::holds_alternative<protocol::FileEnd>(message) ||
+        std::holds_alternative<protocol::FileCancel>(message) ||
+        std::holds_alternative<protocol::FileStatus>(message)) {
+        if (const auto* begin = std::get_if<protocol::FileBegin>(&message))
+            return dispatch_file_begin(*begin, now);
+        if (const auto* chunk = std::get_if<protocol::FileChunk>(&message))
+            return dispatch_file_chunk(*chunk, now);
+        if (const auto* end = std::get_if<protocol::FileEnd>(&message))
+            return dispatch_file_end(*end, now);
+        if (const auto* cancel = std::get_if<protocol::FileCancel>(&message))
+            return dispatch_file_cancel(*cancel, now);
+        return dispatch_file_status(std::get<protocol::FileStatus>(message), now);
+    }
 
     if (std::holds_alternative<protocol::ClipboardBegin>(message) ||
         std::holds_alternative<protocol::ClipboardChunk>(message) ||
@@ -750,6 +1034,8 @@ Result<void> PeerSession::disconnect(IClock::time_point now) {
         return Result<void>::success();
     debug::log("session disconnect peer=", config_.peer.id.low);
     disconnected_ = true;
+    if (file_send_.has_value() || file_receive_.has_value())
+        fail_file("connection closed", false, now);
     connection_.close();
     if (config_.router) {
         config_.router->clear_peer_display_info();
@@ -800,6 +1086,35 @@ Result<void> PeerSession::tick(IClock::time_point now) {
     auto pointer = send_pointer_position_if_due(now);
     if (!pointer.ok())
         return pointer;
+    if (file_send_.has_value()) {
+        auto& state = *file_send_;
+        if (state.offset < state.total_size) {
+            const auto length = static_cast<std::size_t>(std::min<std::uint64_t>(
+                protocol::kMaxFileChunkDataSize, state.total_size - state.offset));
+            std::vector<std::uint8_t> data(length);
+            state.stream.read(reinterpret_cast<char*>(data.data()),
+                              static_cast<std::streamsize>(length));
+            const auto read = static_cast<std::size_t>(state.stream.gcount());
+            if (read != length) {
+                fail_file("file read failed", true, now);
+            } else {
+                auto sent = connection_.send(protocol::FileChunk{config_.local_device,
+                                                                   state.transfer, state.offset,
+                                                                   std::move(data)});
+                if (!sent.ok()) return fail_and_disconnect("file chunk send failed", now);
+                state.offset += length;
+            }
+        } else if (!state.end_sent) {
+            auto sent = connection_.send(protocol::FileEnd{config_.local_device, state.transfer,
+                                                             state.total_size});
+            if (!sent.ok()) return fail_and_disconnect("file end send failed", now);
+            emit_file_update(FileTransferStatus{state.transfer, state.name,
+                                                protocol::FileStatusCode::kProgress,
+                                                state.offset, state.total_size, false, {}});
+            // Keep the send state until the receiver acknowledges completion.
+            state.end_sent = true;
+        }
+    }
     if (now >= next_heartbeat_) {
         auto result = connection_.send(protocol::Heartbeat{++heartbeat_counter_});
         if (!result.ok())

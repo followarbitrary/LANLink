@@ -12,6 +12,8 @@
 #include <chrono>
 #include <cstddef>
 #include <deque>
+#include <filesystem>
+#include <string>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -29,6 +31,8 @@ struct InputRuntimeConfig {
   platform::IInputBackend* backend{nullptr};
   platform::IClipboardBackend* clipboard_backend{nullptr};
   bool clipboard_sync_enabled{false};
+  std::filesystem::path receive_directory;
+  std::function<void(const transport::FileTransferStatus&)> file_status_callback;
   std::size_t queue_capacity{256};
   bool accept_incoming{true};
 };
@@ -45,6 +49,8 @@ class InputNodeRuntime {
   Result<void> set_accept_incoming(bool accept);
   Result<void> set_input_forwarding_enabled(bool enabled, TimePoint now);
   Result<void> set_clipboard_sync_enabled(bool enabled, TimePoint now);
+  Result<Uuid128> send_file(const std::filesystem::path& path, std::string display_name = {});
+  Result<void> cancel_file(const Uuid128& transfer);
   Result<void> start();
   Result<transport::PeerHandle> connect_peer(const transport::Endpoint& endpoint);
   Result<void> update_peer_endpoint(const transport::Endpoint& endpoint);

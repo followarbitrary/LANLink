@@ -4,6 +4,9 @@
 #include "lanlink/transport/session.hpp"
 
 #include <chrono>
+#include <filesystem>
+#include <fstream>
+#include <vector>
 #include <gtest/gtest.h>
 #include <memory>
 
@@ -632,6 +635,115 @@ TEST(PeerSession, DisabledSyncDropsPendingBackendApply) {
     EXPECT_EQ(pair.target_backend->write_count(), 0u);
     EXPECT_EQ(pair.target_backend->data(), ClipboardData{});
     EXPECT_TRUE(pair.target->connected());
+}
+
+
+TEST(PeerSession, FileTransferStreamsChunksAndRenamesAtomically) {
+    auto listener_result = Listener::bind(Endpoint{"127.0.0.1", 0});
+    ASSERT_TRUE(listener_result.ok());
+    auto listener = std::move(listener_result.value());
+    auto client_result = Connection::connect(Endpoint{"127.0.0.1", listener.local_endpoint().port});
+    ASSERT_TRUE(client_result.ok());
+    auto accepted = listener.accept(2s);
+    ASSERT_TRUE(accepted.ok());
+
+    const auto root = std::filesystem::temp_directory_path() / "lanlink-file-test-stream";
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
+    std::filesystem::create_directories(root, ec);
+    ASSERT_FALSE(ec);
+    const auto source_path = root / "source.bin";
+    {
+        std::ofstream file(source_path, std::ios::binary);
+        ASSERT_TRUE(file);
+        for (std::size_t i = 0; i < kMaxFileChunkDataSize * 2 + 17; ++i)
+            file.put(static_cast<char>(i & 0xff));
+    }
+    std::vector<FileTransferStatus> source_updates;
+    std::vector<FileTransferStatus> target_updates;
+    PeerSessionConfig source_config{id(301), AuthenticatedPeer{id(302)}};
+    source_config.file_status_callback = [&](const FileTransferStatus& update) {
+        source_updates.push_back(update);
+    };
+    PeerSessionConfig target_config{id(302), AuthenticatedPeer{id(301)}};
+    target_config.receive_directory = root / "downloads";
+    target_config.file_status_callback = [&](const FileTransferStatus& update) {
+        target_updates.push_back(update);
+    };
+    PeerSession source(std::move(client_result.value()), std::move(source_config));
+    PeerSession target(std::move(accepted.value()), std::move(target_config));
+    ASSERT_TRUE(source.start({}).ok());
+    ASSERT_TRUE(target.start({}).ok());
+    ASSERT_TRUE(source.pump({}).ok());
+    ASSERT_TRUE(target.pump({}).ok());
+
+    auto transfer = source.send_file(source_path, "received.bin");
+    ASSERT_TRUE(transfer.ok()) << transfer.error();
+    for (int attempt = 0; attempt < 32; ++attempt) {
+        ASSERT_TRUE(target.pump({}, 1ms).ok());
+        ASSERT_TRUE(source.pump({}, 1ms).ok());
+        ASSERT_TRUE(source.tick({}).ok());
+        ASSERT_TRUE(target.pump({}, 1ms).ok());
+        ASSERT_TRUE(source.pump({}, 1ms).ok());
+        if (std::filesystem::exists(root / "downloads" / "received.bin") &&
+            !source_updates.empty() &&
+            source_updates.back().state == FileStatusCode::kCompleted)
+            break;
+    }
+    const auto destination = root / "downloads" / "received.bin";
+    ASSERT_TRUE(std::filesystem::exists(destination));
+    std::ifstream expected(source_path, std::ios::binary);
+    std::ifstream actual(destination, std::ios::binary);
+    ASSERT_TRUE(expected && actual);
+    EXPECT_EQ(std::vector<char>((std::istreambuf_iterator<char>(expected)), {}),
+              std::vector<char>((std::istreambuf_iterator<char>(actual)), {}));
+    EXPECT_GE(target_updates.size(), 4u);
+    EXPECT_FALSE(source_updates.empty());
+    EXPECT_EQ(source_updates.back().state, FileStatusCode::kCompleted);
+    EXPECT_TRUE(source.connected());
+    EXPECT_TRUE(target.connected());
+    std::filesystem::remove_all(root, ec);
+}
+
+TEST(PeerSession, FileTransferCancellationCleansReceiverAndKeepsSessionUsable) {
+    auto listener_result = Listener::bind(Endpoint{"127.0.0.1", 0});
+    ASSERT_TRUE(listener_result.ok());
+    auto listener = std::move(listener_result.value());
+    auto client_result = Connection::connect(Endpoint{"127.0.0.1", listener.local_endpoint().port});
+    ASSERT_TRUE(client_result.ok());
+    auto accepted = listener.accept(2s);
+    ASSERT_TRUE(accepted.ok());
+    const auto root = std::filesystem::temp_directory_path() / "lanlink-file-test-cancel";
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
+    std::filesystem::create_directories(root, ec);
+    const auto source_path = root / "source.bin";
+    std::ofstream(source_path, std::ios::binary) << std::string(kMaxFileChunkDataSize * 2, 'x');
+    std::vector<FileTransferStatus> target_updates;
+    PeerSessionConfig source_config{id(311), AuthenticatedPeer{id(312)}};
+    PeerSessionConfig target_config{id(312), AuthenticatedPeer{id(311)}};
+    target_config.receive_directory = root / "downloads";
+    target_config.file_status_callback = [&](const FileTransferStatus& update) {
+        target_updates.push_back(update);
+    };
+    PeerSession source(std::move(client_result.value()), std::move(source_config));
+    PeerSession target(std::move(accepted.value()), std::move(target_config));
+    ASSERT_TRUE(source.start({}).ok());
+    ASSERT_TRUE(target.start({}).ok());
+    ASSERT_TRUE(source.pump({}).ok());
+    ASSERT_TRUE(target.pump({}).ok());
+    auto transfer = source.send_file(source_path);
+    ASSERT_TRUE(transfer.ok());
+    ASSERT_TRUE(target.pump({}, 1ms).ok());
+    ASSERT_TRUE(source.cancel_file(transfer.value()).ok());
+    ASSERT_TRUE(target.pump({}, 1ms).ok());
+    EXPECT_FALSE(std::filesystem::exists(root / "downloads" / "source.bin"));
+    EXPECT_TRUE(std::none_of(target_updates.begin(), target_updates.end(), [](const auto& status) {
+        return status.state == FileStatusCode::kCompleted;
+    }));
+    EXPECT_TRUE(source.connected());
+    EXPECT_TRUE(target.connected());
+    std::filesystem::remove_all(root, ec);
 }
 
 } // namespace

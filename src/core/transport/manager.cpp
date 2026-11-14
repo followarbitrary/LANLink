@@ -224,6 +224,30 @@ Result<void> ConnectionManager::broadcast_clipboard(const platform::ClipboardDat
     return result;
 }
 
+Result<Uuid128> ConnectionManager::send_file(PeerHandle handle, const std::filesystem::path& path,
+                                               std::string display_name, IClock::time_point now) {
+    auto* slot = find(handle);
+    if (!slot) return Result<Uuid128>::failure("unknown peer handle");
+    if (slot->state != PeerState::kConnected || !slot->session)
+        return Result<Uuid128>::failure("peer is not connected");
+    auto result = slot->session->send_file(path, std::move(display_name));
+    if (!result.ok()) return result;
+    (void)now;
+    return result;
+}
+
+Result<void> ConnectionManager::cancel_file(PeerHandle handle, const Uuid128& transfer,
+                                              IClock::time_point now) {
+    auto* slot = find(handle);
+    if (!slot) return Result<void>::failure("unknown peer handle");
+    if (slot->state != PeerState::kConnected || !slot->session)
+        return Result<void>::failure("peer is not connected");
+    auto result = slot->session->cancel_file(transfer);
+    if (!result.ok()) return result;
+    (void)now;
+    return result;
+}
+
 void ConnectionManager::discard_clipboard_state() noexcept {
     for (auto& slot : slots_) {
         if (slot.session) slot.session->discard_clipboard_state();

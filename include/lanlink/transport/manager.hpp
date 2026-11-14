@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <filesystem>
 #include <optional>
 #include <memory>
 #include <string>
@@ -64,6 +65,9 @@ class ConnectionManager {
     Result<void> send_actions(PeerHandle handle, const std::vector<RouterAction>& actions);
     Result<void> broadcast_clipboard(const platform::ClipboardData& data,
                                      IClock::time_point now);
+    Result<Uuid128> send_file(PeerHandle handle, const std::filesystem::path& path,
+                              std::string display_name, IClock::time_point now);
+    Result<void> cancel_file(PeerHandle handle, const Uuid128& transfer, IClock::time_point now);
     void discard_clipboard_state() noexcept;
     Result<void> remove(PeerHandle handle, IClock::time_point now);
 

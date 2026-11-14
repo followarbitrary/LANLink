@@ -110,7 +110,9 @@ transport::PeerSessionConfig InputNodeRuntime::session_config() {
                                       },
                                       [this] { return input_forwarding_enabled_; },
                                       config_.clipboard_backend,
-                                      [this] { return config_.clipboard_sync_enabled; }};
+                                      [this] { return config_.clipboard_sync_enabled; },
+                                      config_.receive_directory,
+                                      config_.file_status_callback};
 }
 
 Result<void> InputNodeRuntime::start() {
@@ -170,6 +172,27 @@ Result<void> InputNodeRuntime::update_peer_endpoint(const transport::Endpoint& e
   if (!outgoing_peer_handle_.has_value())
     return Result<void>::failure("outgoing peer is not configured");
   return manager_.update_outgoing_endpoint(*outgoing_peer_handle_, endpoint);
+}
+
+Result<Uuid128> InputNodeRuntime::send_file(const std::filesystem::path& path,
+                                            std::string display_name) {
+  if (!running_) return Result<Uuid128>::failure("runtime is not started");
+  for (const auto handle : peer_handles_) {
+    if (manager_.ready(handle))
+      return manager_.send_file(handle, path, std::move(display_name), IClock::Clock::now());
+  }
+  return Result<Uuid128>::failure("peer is not connected");
+}
+
+Result<void> InputNodeRuntime::cancel_file(const Uuid128& transfer) {
+  if (!running_) return Result<void>::failure("runtime is not started");
+  for (const auto handle : peer_handles_) {
+    if (manager_.ready(handle)) {
+      auto result = manager_.cancel_file(handle, transfer, IClock::Clock::now());
+      if (result.ok()) return result;
+    }
+  }
+  return Result<void>::failure("file transfer is not active");
 }
 
 Result<void> InputNodeRuntime::queue_event(const InputEvent& event) {
