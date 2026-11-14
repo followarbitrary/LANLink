@@ -62,6 +62,7 @@ class PeerSession {
                                           IClock::time_point now);
     Result<void> dispatch_clipboard_end(const protocol::ClipboardEnd& end,
                                         IClock::time_point now);
+    Result<void> drop_clipboard(const char* error);
 
     Connection connection_;
     PeerSessionConfig config_;

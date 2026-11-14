@@ -392,8 +392,8 @@ namespace {
 struct ClipboardPair {
     std::unique_ptr<PeerSession> source;
     std::unique_ptr<PeerSession> target;
-    FakeClipboardBackend source_backend;
-    FakeClipboardBackend target_backend;
+    std::unique_ptr<FakeClipboardBackend> source_backend;
+    std::unique_ptr<FakeClipboardBackend> target_backend;
 };
 
 ClipboardPair make_clipboard_pair(std::uint64_t seed,
@@ -409,16 +409,18 @@ ClipboardPair make_clipboard_pair(std::uint64_t seed,
     EXPECT_TRUE(accepted.ok());
 
     ClipboardPair pair;
-    EXPECT_TRUE(pair.source_backend.start({}).ok());
-    EXPECT_TRUE(pair.target_backend.start({}).ok());
+    pair.source_backend = std::make_unique<FakeClipboardBackend>();
+    pair.target_backend = std::make_unique<FakeClipboardBackend>();
+    EXPECT_TRUE(pair.source_backend->start({}).ok());
+    EXPECT_TRUE(pair.target_backend->start({}).ok());
     pair.source = std::make_unique<PeerSession>(
         std::move(client_result.value()),
         PeerSessionConfig{id(seed), AuthenticatedPeer{id(seed + 2)}, nullptr, nullptr, nullptr,
-                          {}, {}, {}, &pair.source_backend, std::move(source_enabled)});
+                          {}, {}, {}, pair.source_backend.get(), std::move(source_enabled)});
     pair.target = std::make_unique<PeerSession>(
         std::move(accepted.value()),
         PeerSessionConfig{id(seed + 2), AuthenticatedPeer{id(seed)}, nullptr, nullptr, nullptr,
-                          {}, {}, {}, &pair.target_backend, std::move(target_enabled)});
+                          {}, {}, {}, pair.target_backend.get(), std::move(target_enabled)});
     EXPECT_TRUE(pair.source->start({}).ok());
     EXPECT_TRUE(pair.target->start({}).ok());
     EXPECT_TRUE(pair.source->pump({}).ok());
@@ -438,7 +440,7 @@ ClipboardData sample_clipboard() {
 void pump_clipboard(PeerSession& target, FakeClipboardBackend& backend,
                     std::size_t writes_before = 0) {
     for (int attempt = 0; attempt < 64 && backend.write_count() <= writes_before; ++attempt)
-        ASSERT_TRUE(target.pump({}, 0ms).ok());
+        ASSERT_TRUE(target.pump({}, 10ms).ok());
 }
 
 TEST(PeerSession, ClipboardTransferAppliesAllFormatsAfterEnd) {
@@ -446,10 +448,10 @@ TEST(PeerSession, ClipboardTransferAppliesAllFormatsAfterEnd) {
     const auto data = sample_clipboard();
 
     ASSERT_TRUE(pair.source->send_clipboard(data).ok());
-    EXPECT_EQ(pair.target_backend.write_count(), 0u);
-    pump_clipboard(*pair.target, pair.target_backend);
-    EXPECT_EQ(pair.target_backend.data(), data);
-    EXPECT_EQ(pair.target_backend.write_count(), 1u);
+    EXPECT_EQ(pair.target_backend->write_count(), 0u);
+    pump_clipboard(*pair.target, *pair.target_backend);
+    EXPECT_EQ(pair.target_backend->data(), data);
+    EXPECT_EQ(pair.target_backend->write_count(), 1u);
 }
 
 TEST(PeerSession, ClipboardAcceptsOutOfOrderChunksAndWritesOnlyAtEnd) {
@@ -482,7 +484,7 @@ TEST(PeerSession, ClipboardAcceptsOutOfOrderChunksAndWritesOnlyAtEnd) {
     ASSERT_TRUE(target.pump({}).ok());
     EXPECT_EQ(target_backend.write_count(), 0u);
     ASSERT_TRUE(client.send(ClipboardEnd{id(201), 1}).ok());
-    ASSERT_TRUE(target.pump({}).ok());
+    pump_clipboard(target, target_backend);
     EXPECT_EQ(target_backend.data().text, std::optional<std::string>{"hello"});
     EXPECT_EQ(target_backend.write_count(), 1u);
 }
@@ -510,11 +512,18 @@ TEST(PeerSession, ClipboardRejectsOverlappingChunks) {
                     .ok());
     ASSERT_TRUE(client.send(ClipboardChunk{id(211), 1, ClipboardFormat::kText, 2, {'l', 'o'}})
                     .ok());
-    bool failed = false;
-    for (int attempt = 0; attempt < 8 && !failed; ++attempt)
-        failed = !target.pump({}, 0ms).ok();
-    EXPECT_TRUE(failed);
+    for (int attempt = 0; attempt < 8; ++attempt)
+        ASSERT_TRUE(target.pump({}, 0ms).ok());
     EXPECT_EQ(backend.write_count(), 0u);
+
+    ASSERT_TRUE(client.send(ClipboardBegin{id(211), 2, 0x01, 5, 5, 0, 0}).ok());
+    ASSERT_TRUE(client.send(ClipboardChunk{id(211), 2, ClipboardFormat::kText, 0,
+                                           {'v', 'a', 'l', 'i', 'd'}})
+                    .ok());
+    ASSERT_TRUE(client.send(ClipboardEnd{id(211), 2}).ok());
+    pump_clipboard(target, backend);
+    EXPECT_EQ(backend.data().text, std::optional<std::string>{"valid"});
+    EXPECT_TRUE(target.connected());
 }
 
 TEST(PeerSession, ClipboardIgnoresIncompleteTransferAndReplacesItWithNextBegin) {
@@ -554,24 +563,24 @@ TEST(PeerSession, ClipboardEmptyPackageClearsAndRemoteEchoIsDeduplicated) {
     auto pair = make_clipboard_pair(230);
     ClipboardData initial;
     initial.text = "before";
-    ASSERT_TRUE(pair.target_backend.write(initial).ok());
+    ASSERT_TRUE(pair.target_backend->write(initial).ok());
 
-    const auto writes_before_clear = pair.target_backend.write_count();
+    const auto writes_before_clear = pair.target_backend->write_count();
     ASSERT_TRUE(pair.source->send_clipboard(ClipboardData{}).ok());
-    pump_clipboard(*pair.target, pair.target_backend, writes_before_clear);
-    EXPECT_EQ(pair.target_backend.data(), ClipboardData{});
-    EXPECT_EQ(pair.target_backend.write_count(), 2u);
+    pump_clipboard(*pair.target, *pair.target_backend, writes_before_clear);
+    EXPECT_EQ(pair.target_backend->data(), ClipboardData{});
+    EXPECT_EQ(pair.target_backend->write_count(), 2u);
 
     const auto data = sample_clipboard();
-    const auto writes_before_data = pair.target_backend.write_count();
+    const auto writes_before_data = pair.target_backend->write_count();
     ASSERT_TRUE(pair.source->send_clipboard(data).ok());
-    pump_clipboard(*pair.target, pair.target_backend, writes_before_data);
-    EXPECT_EQ(pair.target_backend.data(), data);
-    const auto source_writes = pair.source_backend.write_count();
+    pump_clipboard(*pair.target, *pair.target_backend, writes_before_data);
+    EXPECT_EQ(pair.target_backend->data(), data);
+    const auto source_writes = pair.source_backend->write_count();
     ASSERT_TRUE(pair.target->send_clipboard(data).ok());
     for (int attempt = 0; attempt < 16; ++attempt)
         ASSERT_TRUE(pair.source->pump({}, 0ms).ok());
-    EXPECT_EQ(pair.source_backend.write_count(), source_writes);
+    EXPECT_EQ(pair.source_backend->write_count(), source_writes);
 }
 
 TEST(PeerSession, ClipboardSendAndReceiveCanBeDisabled) {
@@ -579,7 +588,28 @@ TEST(PeerSession, ClipboardSendAndReceiveCanBeDisabled) {
     ASSERT_TRUE(pair.source->send_clipboard(sample_clipboard()).ok());
     for (int attempt = 0; attempt < 16; ++attempt)
         ASSERT_TRUE(pair.target->pump({}, 0ms).ok());
-    EXPECT_EQ(pair.target_backend.write_count(), 0u);
+    EXPECT_EQ(pair.target_backend->write_count(), 0u);
+}
+
+TEST(PeerSession, ClipboardBackendFailureDoesNotDisconnectPeer) {
+    auto pair = make_clipboard_pair(250);
+    pair.target_backend->stop();
+    ClipboardData failed_data;
+    failed_data.text = "backend unavailable";
+    ASSERT_TRUE(pair.source->send_clipboard(failed_data).ok());
+    for (int attempt = 0; attempt < 16; ++attempt)
+        ASSERT_TRUE(pair.target->pump({}, 10ms).ok());
+    EXPECT_TRUE(pair.target->connected());
+    EXPECT_EQ(pair.target_backend->write_count(), 0u);
+
+    ASSERT_TRUE(pair.target_backend->start({}).ok());
+    ClipboardData recovered_data;
+    recovered_data.text = "backend recovered";
+    ASSERT_TRUE(pair.source->send_clipboard(recovered_data).ok());
+    pump_clipboard(*pair.target, *pair.target_backend);
+    EXPECT_EQ(pair.target_backend->write_count(), 1u);
+    EXPECT_EQ(pair.target_backend->data(), recovered_data);
+    EXPECT_TRUE(pair.target->connected());
 }
 
 } // namespace
