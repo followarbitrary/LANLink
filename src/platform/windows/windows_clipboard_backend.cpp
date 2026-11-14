@@ -425,6 +425,15 @@ Result<void> WindowsClipboardBackend::write(const ClipboardData& data) {
     last_error_ = "clipboard backend is not running";
     return Result<void>::failure(last_error_);
   }
+  std::optional<std::vector<std::uint8_t>> normalized_png;
+  if (data.png) {
+    auto normalized = normalize_png_with_wic(*data.png);
+    if (!normalized.ok()) {
+      last_error_ = normalized.error();
+      return Result<void>::failure(last_error_);
+    }
+    normalized_png = std::move(normalized.value());
+  }
   {
     std::lock_guard lock(impl_->mutex);
     impl_->suppress_next = true;
@@ -473,14 +482,7 @@ Result<void> WindowsClipboardBackend::write(const ClipboardData& data) {
     }
   }
   if (data.png) {
-    auto normalized = normalize_png_with_wic(*data.png);
-    if (!normalized.ok()) {
-      CloseClipboard();
-      clear_suppression();
-      last_error_ = normalized.error();
-      return Result<void>::failure(last_error_);
-    }
-    HGLOBAL handle = make_global_bytes(normalized.value().data(), normalized.value().size());
+    HGLOBAL handle = make_global_bytes(normalized_png->data(), normalized_png->size());
     if (handle == nullptr || SetClipboardData(impl_->png_format, handle) == nullptr) {
       if (handle != nullptr) GlobalFree(handle);
       CloseClipboard();

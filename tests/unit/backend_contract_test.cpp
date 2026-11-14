@@ -1,5 +1,6 @@
 #include "lanlink/platform/fake_input_backend.hpp"
 #include "lanlink/platform/fake_clipboard_backend.hpp"
+#include "lanlink/platform/windows_clipboard_backend.hpp"
 
 #include <gtest/gtest.h>
 
@@ -250,6 +251,24 @@ TEST(ClipboardBackendContract, FakeRejectsInvalidChangesAndSeedData) {
   backend.set_data(oversized);
   EXPECT_EQ(backend.data(), original);
 }
+
+#if defined(_WIN32)
+TEST(ClipboardBackendContract, WindowsRejectsMalformedPngBeforeClearingClipboard) {
+  WindowsClipboardBackend backend;
+  ASSERT_TRUE(backend.start({}).ok());
+  ClipboardData original;
+  original.text = "keep this";
+  ASSERT_TRUE(backend.write(original).ok());
+
+  ClipboardData malformed;
+  malformed.png = std::vector<std::uint8_t>{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 0x00};
+  EXPECT_FALSE(backend.write(malformed).ok());
+  const auto read_back = backend.read();
+  ASSERT_TRUE(read_back.ok());
+  EXPECT_EQ(read_back.value().text, original.text);
+  backend.stop();
+}
+#endif
 
 }  // namespace
 }  // namespace lanlink::platform
