@@ -9,7 +9,10 @@ std::vector<char*> args(std::initializer_list<const char*> values) { std::vector
 }
 TEST(AppOptions, ParseOptionsAcceptsRequiredValuesAndDefaults) {
  auto a=args({"lanlink_app","--device-id","11","--peer-id","22","--listen-port","4000"}); auto r=parse_options((int)a.size(),a.data()); ASSERT_TRUE(r.ok())<<r.error(); EXPECT_EQ(r.value().device_id,11u); EXPECT_EQ(r.value().peer_id,22u); EXPECT_EQ(r.value().listen_port,4000); EXPECT_EQ(r.value().remote_side,RemoteSide::kRight); EXPECT_DOUBLE_EQ(r.value().width,0.0); EXPECT_DOUBLE_EQ(r.value().height,0.0); EXPECT_FALSE(r.value().width_explicit); EXPECT_FALSE(r.value().height_explicit); EXPECT_FALSE(r.value().connect.has_value());
- EXPECT_EQ(r.value().group, "lanlink"); EXPECT_EQ(r.value().discovery_port, 41001); EXPECT_FALSE(r.value().peer_display_id_explicit); EXPECT_FALSE(r.value().remote_side_explicit);
+ EXPECT_EQ(r.value().group, "lanlink"); EXPECT_FALSE(r.value().clipboard_enabled); EXPECT_EQ(r.value().discovery_port, 41001); EXPECT_FALSE(r.value().peer_display_id_explicit); EXPECT_FALSE(r.value().remote_side_explicit);
+}
+TEST(AppOptions, ParseOptionsAcceptsClipboardFlag) {
+ auto a=args({"x","--device-id","11","--listen-port","4000","--clipboard"}); auto r=parse_options((int)a.size(),a.data()); ASSERT_TRUE(r.ok())<<r.error(); EXPECT_TRUE(r.value().clipboard_enabled);
 }
 TEST(AppOptions, ParseOptionsAcceptsDiscoveryModeWithoutPeerId) {
  auto a=args({"x","--device-id","11","--listen-port","4000"}); auto r=parse_options((int)a.size(),a.data()); ASSERT_TRUE(r.ok())<<r.error(); EXPECT_FALSE(r.value().peer_id.has_value());
@@ -33,7 +36,7 @@ TEST(AppOptions, ParseOptionsRejectsInvalidDiscoveryPort) {
 TEST(AppOptions, ParseOptionsAcceptsConnectAndTopologyValues) {
  auto a=args({"x","--device-id","1","--peer-id","2","--listen-port","65535","--connect","host.example:1234","--display-id","3","--peer-display-id","4","--remote-side","left","--width","800.5","--height","600","--peer-width","1920","--peer-height","1080"}); auto r=parse_options((int)a.size(),a.data()); ASSERT_TRUE(r.ok())<<r.error(); EXPECT_EQ(r.value().connect, (transport::Endpoint{"host.example",1234})); EXPECT_EQ(r.value().display_id,3u); EXPECT_EQ(r.value().peer_display_id,4u); EXPECT_EQ(r.value().remote_side,RemoteSide::kLeft); EXPECT_DOUBLE_EQ(r.value().width,800.5); EXPECT_DOUBLE_EQ(r.value().height,600.0); EXPECT_DOUBLE_EQ(r.value().peer_width,1920.0); EXPECT_DOUBLE_EQ(r.value().peer_height,1080.0);
 }
-TEST(AppOptions, UsageContainsAllSupportedFlags) { auto u=usage(); for(auto f:{"--device-id","--peer-id","--listen-port","--connect","--group","--discovery-port","--display-id","--peer-display-id","--remote-side","--width","--height","--peer-width","--peer-height","--help"}) EXPECT_NE(u.find(f),std::string::npos); }
+TEST(AppOptions, UsageContainsAllSupportedFlags) { auto u=usage(); for(auto f:{"--device-id","--peer-id","--listen-port","--connect","--group","--discovery-port","--display-id","--peer-display-id","--remote-side","--width","--height","--peer-width","--peer-height","--clipboard","--help"}) EXPECT_NE(u.find(f),std::string::npos); }
 TEST(AppOptions, DiscoverySelectionIgnoresUnsupportedHighParts) {
  std::vector<discovery::DiscoveryPeer> peers{
    {{1, 9}, {0, 90}, {"127.0.0.1", 41009}, {}},

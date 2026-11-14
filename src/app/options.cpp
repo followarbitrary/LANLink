@@ -14,12 +14,13 @@ bool supported_numeric_peer(const discovery::DiscoveryPeer& peer) {
  return peer.device.high == 0 && peer.display.high == 0 && peer.device.low != 0 && peer.display.low != 0;
 }
 }
-std::string usage() { return "Usage: lanlink_app --device-id N --listen-port P [options]\n--device-id --peer-id --listen-port --connect --group --discovery-port --display-id --peer-display-id --remote-side --width --height --peer-width --peer-height --help\nDiscovery defaults to group lanlink on UDP port 41001; --peer-id is optional unless --connect is supplied.\nDisplay dimensions are detected automatically; width/height flags are optional overrides.\n"; }
+std::string usage() { return "Usage: lanlink_app --device-id N --listen-port P [options]\n--device-id --peer-id --listen-port --connect --group --discovery-port --display-id --peer-display-id --remote-side --width --height --peer-width --peer-height --clipboard --help\nDiscovery defaults to group lanlink on UDP port 41001; --peer-id is optional unless --connect is supplied.\nDisplay dimensions are detected automatically; width/height flags are optional overrides.\n"; }
 Result<AppOptions> parse_options(int argc,char* const argv[]) {
  AppOptions o;
  for(int i=1;i<argc;++i) {
   std::string_view f=argv[i]?argv[i]:"";
   if(f=="--help") return Result<AppOptions>::failure(usage());
+  if(f=="--clipboard") { o.clipboard_enabled = true; continue; }
   if(f=="--device-id"||f=="--peer-id"||f=="--listen-port"||f=="--discovery-port"||f=="--display-id"||f=="--peer-display-id") {
    auto s=next(i,argc,argv,f); if(!s.ok()) return Result<AppOptions>::failure(s.error());
    auto n=uintval(s.value(),f); if(!n.ok()) return Result<AppOptions>::failure(n.error());

@@ -1,5 +1,6 @@
 #include "lanlink/common/config.hpp"
 #include "lanlink/platform/fake_input_backend.hpp"
+#include "lanlink/platform/fake_clipboard_backend.hpp"
 #include "lanlink/runtime/node.hpp"
 
 #include <gtest/gtest.h>
@@ -28,7 +29,9 @@ ScreenTopology topology_for(DisplayId local, DisplayId remote, bool local_left) 
 
 InputRuntimeConfig config(DeviceId local_device, SourceId source, AuthenticatedPeer peer,
                           DisplayId local_display, Endpoint listen,
-                          IInputBackend* backend, std::size_t queue_capacity = 256) {
+                          IInputBackend* backend, std::size_t queue_capacity = 256,
+                          IClipboardBackend* clipboard_backend = nullptr,
+                          bool clipboard_sync_enabled = false) {
   InputRuntimeConfig value;
   value.local_device = local_device;
   value.source = source;
@@ -37,6 +40,8 @@ InputRuntimeConfig config(DeviceId local_device, SourceId source, AuthenticatedP
   value.listen_endpoint = std::move(listen);
   value.backend = backend;
   value.queue_capacity = queue_capacity;
+  value.clipboard_backend = clipboard_backend;
+  value.clipboard_sync_enabled = clipboard_sync_enabled;
   return value;
 }
 
@@ -884,6 +889,121 @@ TEST(InputNodeRuntime, KeyEventAtStaleOutsidePointerDoesNotTriggerCrossing) {
   backend.emit_physical(InputEvent{{}, {}, 0, 0, Key{0x04, true}, InputOrigin::kPhysical});
   ASSERT_TRUE(runtime->poll(IClock::time_point{}, 0ms).ok());
   EXPECT_EQ(runtime->router().state(), RouterState::kLocal);
+}
+
+
+TEST(InputNodeRuntime, ClipboardChangesBroadcastOnNextTickOnlyWhenEnabled) {
+  FakeInputBackend left_input;
+  FakeInputBackend right_input;
+  FakeClipboardBackend left_clipboard;
+  FakeClipboardBackend right_clipboard;
+  auto left_result = InputNodeRuntime::create(config(
+      id(151), id(152), AuthenticatedPeer{id(153)}, id(154), Endpoint{"127.0.0.1", 0},
+      &left_input, 256, &left_clipboard, false));
+  auto right_result = InputNodeRuntime::create(config(
+      id(153), id(155), AuthenticatedPeer{id(151)}, id(156), Endpoint{"127.0.0.1", 0},
+      &right_input, 256, &right_clipboard, true));
+  ASSERT_TRUE(left_result.ok()) << left_result.error();
+  ASSERT_TRUE(right_result.ok()) << right_result.error();
+  auto left = std::move(left_result.value());
+  auto right = std::move(right_result.value());
+  ASSERT_TRUE(left->set_topology(topology_for(id(154), id(156), true)).ok());
+  ASSERT_TRUE(right->set_topology(topology_for(id(156), id(154), false)).ok());
+  ASSERT_TRUE(left->start().ok());
+  ASSERT_TRUE(right->start().ok());
+  ASSERT_TRUE(left->connect_peer(right->local_endpoint()).ok());
+  IClock::time_point now{};
+  pump_pair(*left, *right, now, 20);
+  ASSERT_TRUE(left->connected());
+  ASSERT_TRUE(right->connected());
+
+  ClipboardData first;
+  first.text = "first";
+  left_clipboard.emit_change(first);
+  ASSERT_TRUE(left->poll(now, 0ms).ok());
+  ASSERT_TRUE(right->poll(now, 0ms).ok());
+  EXPECT_EQ(right_clipboard.data(), ClipboardData{});
+  ASSERT_TRUE(left->tick(now).ok());
+  ASSERT_TRUE(right->poll(now, 0ms).ok());
+  EXPECT_EQ(right_clipboard.data(), ClipboardData{});
+
+  ASSERT_TRUE(left->set_clipboard_sync_enabled(true, now).ok());
+  ASSERT_TRUE(left->tick(now).ok());
+  ASSERT_TRUE(right->poll(now, 0ms).ok());
+  EXPECT_EQ(right_clipboard.data(), ClipboardData{});
+
+  ClipboardData second;
+  second.text = "second";
+  left_clipboard.emit_change(second);
+  ASSERT_TRUE(left->tick(now).ok());
+  ASSERT_TRUE(right->poll(now, 0ms).ok());
+  EXPECT_EQ(right_clipboard.data(), second);
+
+  left_clipboard.emit_change(second);
+  ASSERT_TRUE(left->tick(now).ok());
+  ASSERT_TRUE(right->poll(now, 0ms).ok());
+  EXPECT_EQ(right_clipboard.write_count(), 1u);
+
+  ASSERT_TRUE(left->set_clipboard_sync_enabled(false, now).ok());
+  ClipboardData disabled;
+  disabled.text = "disabled";
+  left_clipboard.emit_change(disabled);
+  ASSERT_TRUE(left->tick(now).ok());
+  ASSERT_TRUE(right->poll(now, 0ms).ok());
+  EXPECT_EQ(right_clipboard.data(), second);
+
+  ASSERT_TRUE(left->set_clipboard_sync_enabled(true, now).ok());
+  ASSERT_TRUE(left->tick(now).ok());
+  ASSERT_TRUE(right->poll(now, 0ms).ok());
+  EXPECT_EQ(right_clipboard.data(), second);
+
+  ClipboardData third;
+  third.text = "third";
+  left_clipboard.emit_change(third);
+  ASSERT_TRUE(left->tick(now).ok());
+  ASSERT_TRUE(right->poll(now, 0ms).ok());
+  EXPECT_EQ(right_clipboard.data(), third);
+}
+
+TEST(InputNodeRuntime, ClipboardRemoteWritesDoNotEchoBack) {
+  FakeInputBackend left_input;
+  FakeInputBackend right_input;
+  FakeClipboardBackend left_clipboard;
+  FakeClipboardBackend right_clipboard;
+  auto left_result = InputNodeRuntime::create(config(
+      id(161), id(162), AuthenticatedPeer{id(163)}, id(164), Endpoint{"127.0.0.1", 0},
+      &left_input, 256, &left_clipboard, true));
+  auto right_result = InputNodeRuntime::create(config(
+      id(163), id(165), AuthenticatedPeer{id(161)}, id(166), Endpoint{"127.0.0.1", 0},
+      &right_input, 256, &right_clipboard, true));
+  ASSERT_TRUE(left_result.ok()) << left_result.error();
+  ASSERT_TRUE(right_result.ok()) << right_result.error();
+  auto left = std::move(left_result.value());
+  auto right = std::move(right_result.value());
+  ASSERT_TRUE(left->set_topology(topology_for(id(164), id(166), true)).ok());
+  ASSERT_TRUE(right->set_topology(topology_for(id(166), id(164), false)).ok());
+  ASSERT_TRUE(left->start().ok());
+  ASSERT_TRUE(right->start().ok());
+  ASSERT_TRUE(left->connect_peer(right->local_endpoint()).ok());
+  IClock::time_point now{};
+  pump_pair(*left, *right, now, 20);
+
+  ClipboardData remote;
+  remote.text = "from-right";
+  right_clipboard.emit_change(remote);
+  ASSERT_TRUE(right->tick(now).ok());
+  for (int i = 0; i < 4; ++i) {
+    ASSERT_TRUE(left->poll(now, 0ms).ok());
+    ASSERT_TRUE(left->tick(now).ok());
+    ASSERT_TRUE(right->poll(now, 0ms).ok());
+    now += 1ms;
+  }
+  EXPECT_EQ(left_clipboard.data(), remote);
+  EXPECT_EQ(right_clipboard.write_count(), 0u);
+  ASSERT_TRUE(right->tick(now).ok());
+  ASSERT_TRUE(left->poll(now, 0ms).ok());
+  EXPECT_EQ(left_clipboard.data(), remote);
+  EXPECT_EQ(right_clipboard.write_count(), 0u);
 }
 
 }  // namespace

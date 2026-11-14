@@ -15,8 +15,10 @@
 #include <vector>
 
 #if defined(_WIN32)
+#include "lanlink/platform/windows_clipboard_backend.hpp"
 #include "lanlink/platform/windows_input_backend.hpp"
 #elif defined(__APPLE__)
+#include "lanlink/platform/macos_clipboard_backend.hpp"
 #include "lanlink/platform/macos_input_backend.hpp"
 #endif
 
@@ -53,10 +55,13 @@ int main(int argc, char** argv) {
   auto options = parsed.value();
 
   std::unique_ptr<lanlink::platform::IInputBackend> backend;
+  std::unique_ptr<lanlink::platform::IClipboardBackend> clipboard_backend;
 #if defined(_WIN32)
   backend = std::make_unique<lanlink::platform::WindowsInputBackend>();
+  clipboard_backend = std::make_unique<lanlink::platform::WindowsClipboardBackend>();
 #elif defined(__APPLE__)
   backend = std::make_unique<lanlink::platform::MacOSInputBackend>();
+  clipboard_backend = std::make_unique<lanlink::platform::MacOSClipboardBackend>();
 #else
   std::cerr << "error: unsupported platform; LANLink requires Windows or macOS\n";
   return 3;
@@ -156,6 +161,8 @@ int main(int argc, char** argv) {
   config.listen_endpoint = lanlink::transport::Endpoint{"0.0.0.0", options.listen_port};
   config.connection = lanlink::transport::ConnectionOptions{};
   config.backend = backend.get();
+  config.clipboard_backend = clipboard_backend.get();
+  config.clipboard_sync_enabled = options.clipboard_enabled;
   config.queue_capacity = 256;
   config.accept_incoming = options.connect.has_value() || !options.peer_id.has_value() ||
                            selected_peer.has_value();

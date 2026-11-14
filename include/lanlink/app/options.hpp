@@ -19,6 +19,7 @@ struct AppOptions {
   std::string group{"lanlink"};
   std::uint16_t discovery_port{41001};
   std::optional<transport::Endpoint> connect;
+  bool clipboard_enabled{false};
   RemoteSide remote_side{RemoteSide::kRight};
   bool peer_display_id_explicit{false};
   bool remote_side_explicit{false};

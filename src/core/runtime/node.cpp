@@ -24,6 +24,10 @@ Result<std::unique_ptr<InputNodeRuntime>> InputNodeRuntime::create(InputRuntimeC
   if (config.backend == nullptr) {
     return Result<std::unique_ptr<InputNodeRuntime>>::failure("input backend is required");
   }
+  if (config.clipboard_sync_enabled && config.clipboard_backend == nullptr) {
+    return Result<std::unique_ptr<InputNodeRuntime>>::failure(
+        "clipboard backend is required when clipboard sync is enabled");
+  }
   if (config.queue_capacity == 0) {
     return Result<std::unique_ptr<InputNodeRuntime>>::failure("queue capacity must be positive");
   }
@@ -74,6 +78,20 @@ Result<void> InputNodeRuntime::set_input_forwarding_enabled(bool enabled, TimePo
   return dispatch_actions(cleanup, now);
 }
 
+Result<void> InputNodeRuntime::set_clipboard_sync_enabled(bool enabled, TimePoint) {
+  if (enabled && config_.clipboard_backend == nullptr) {
+    return Result<void>::failure("clipboard backend is required when clipboard sync is enabled");
+  }
+  if (config_.clipboard_sync_enabled == enabled) return Result<void>::success();
+  config_.clipboard_sync_enabled = enabled;
+  if (!enabled) {
+    std::lock_guard lock(queue_mutex_);
+    queued_clipboard_changes_.clear();
+    clipboard_fingerprint_.reset();
+  }
+  return Result<void>::success();
+}
+
 transport::PeerSessionConfig InputNodeRuntime::session_config() {
   return transport::PeerSessionConfig{config_.local_device, config_.peer, &router_, &arbiter_,
                                       config_.backend, config_.local_display,
@@ -81,7 +99,9 @@ transport::PeerSessionConfig InputNodeRuntime::session_config() {
                                              Point position) {
                                         update_remote_cursor_position(session, generation, position);
                                       },
-                                      [this] { return input_forwarding_enabled_; }};
+                                      [this] { return input_forwarding_enabled_; },
+                                      config_.clipboard_backend,
+                                      [this] { return config_.clipboard_sync_enabled; }};
 }
 
 Result<void> InputNodeRuntime::start() {
@@ -89,6 +109,8 @@ Result<void> InputNodeRuntime::start() {
   {
     std::lock_guard lock(queue_mutex_);
     queued_events_.clear();
+    queued_clipboard_changes_.clear();
+    clipboard_fingerprint_.reset();
     queue_overflowed_ = false;
   }
   edge_overflow_edge_.reset();
@@ -112,6 +134,17 @@ Result<void> InputNodeRuntime::start() {
     listener_->close();
     listener_.reset();
     return started;
+  }
+  if (config_.clipboard_backend != nullptr) {
+    auto clipboard_started = config_.clipboard_backend->start(
+        [this](platform::ClipboardData data) { queue_clipboard_change(std::move(data)); });
+    if (!clipboard_started.ok()) {
+      config_.clipboard_backend->stop();
+      config_.backend->stop();
+      listener_->close();
+      listener_.reset();
+      return clipboard_started;
+    }
   }
   running_ = true;
   return Result<void>::success();
@@ -145,6 +178,11 @@ Result<void> InputNodeRuntime::queue_event(const InputEvent& event) {
   }
   queued_events_.push_back(QueuedEvent{event, config_.backend->pointer_position()});
   return Result<void>::success();
+}
+
+void InputNodeRuntime::queue_clipboard_change(platform::ClipboardData data) {
+  std::lock_guard lock(queue_mutex_);
+  queued_clipboard_changes_.push_back(std::move(data));
 }
 
 Result<void> InputNodeRuntime::dispatch_actions(const std::vector<RouterAction>& actions,
@@ -696,16 +734,44 @@ Result<void> InputNodeRuntime::poll(TimePoint now, std::chrono::milliseconds tim
 
 Result<void> InputNodeRuntime::tick(TimePoint now) {
   if (!running_) return Result<void>::failure("runtime is not started");
+  Result<void> result = Result<void>::success();
+  if (config_.clipboard_backend != nullptr) {
+    auto polled = config_.clipboard_backend->poll();
+    if (!polled.ok()) {
+      debug::warn("clipboard backend poll failed error=", polled.error());
+      result = Result<void>::failure(polled.error());
+    }
+  }
+  std::deque<platform::ClipboardData> clipboard_changes;
+  {
+    std::lock_guard lock(queue_mutex_);
+    clipboard_changes.swap(queued_clipboard_changes_);
+  }
+  if (config_.clipboard_sync_enabled) {
+    for (const auto& data : clipboard_changes) {
+      if (clipboard_fingerprint_.has_value() && *clipboard_fingerprint_ == data) continue;
+      clipboard_fingerprint_ = data;
+      auto broadcasted = manager_.broadcast_clipboard(data, now);
+      if (!broadcasted.ok()) {
+        debug::warn("clipboard broadcast failed error=", broadcasted.error());
+        if (result.ok()) result = broadcasted;
+      }
+    }
+  }
   auto actions = router_.on_tick(now);
   auto dispatched = dispatch_actions(actions, now);
-  if (!dispatched.ok()) return dispatched;
-  return manager_.tick(now);
+  if (!dispatched.ok() && result.ok()) result = dispatched;
+  auto ticked = manager_.tick(now);
+  if (!ticked.ok() && result.ok()) result = ticked;
+  return result;
 }
 
 Result<void> InputNodeRuntime::stop(TimePoint now) {
   if (!running_) {
     std::lock_guard lock(queue_mutex_);
     queued_events_.clear();
+    queued_clipboard_changes_.clear();
+    clipboard_fingerprint_.reset();
     queue_overflowed_ = false;
     return Result<void>::success();
   }
@@ -722,6 +788,7 @@ Result<void> InputNodeRuntime::stop(TimePoint now) {
     listener_.reset();
   }
   config_.backend->stop();
+  if (config_.clipboard_backend != nullptr) config_.clipboard_backend->stop();
   running_ = false;
   edge_overflow_edge_.reset();
   edge_overflow_ = 0.0;
@@ -732,6 +799,8 @@ Result<void> InputNodeRuntime::stop(TimePoint now) {
   {
     std::lock_guard lock(queue_mutex_);
     queued_events_.clear();
+    queued_clipboard_changes_.clear();
+    clipboard_fingerprint_.reset();
     queue_overflowed_ = false;
   }
   return result;

@@ -4,6 +4,7 @@
 #include "lanlink/common/result.hpp"
 #include "lanlink/input/arbiter.hpp"
 #include "lanlink/input/router.hpp"
+#include "lanlink/platform/clipboard_backend.hpp"
 #include "lanlink/platform/input_backend.hpp"
 #include "lanlink/topology/topology.hpp"
 #include "lanlink/transport/manager.hpp"
@@ -26,6 +27,8 @@ struct InputRuntimeConfig {
   transport::Endpoint listen_endpoint;
   transport::ConnectionOptions connection;
   platform::IInputBackend* backend{nullptr};
+  platform::IClipboardBackend* clipboard_backend{nullptr};
+  bool clipboard_sync_enabled{false};
   std::size_t queue_capacity{256};
   bool accept_incoming{true};
 };
@@ -41,6 +44,7 @@ class InputNodeRuntime {
   Result<void> set_topology(ScreenTopology topology);
   Result<void> set_accept_incoming(bool accept);
   Result<void> set_input_forwarding_enabled(bool enabled, TimePoint now);
+  Result<void> set_clipboard_sync_enabled(bool enabled, TimePoint now);
   Result<void> start();
   Result<transport::PeerHandle> connect_peer(const transport::Endpoint& endpoint);
   Result<void> update_peer_endpoint(const transport::Endpoint& endpoint);
@@ -91,6 +95,7 @@ class InputNodeRuntime {
                                      Point position) noexcept;
   void clear_remote_cursor() noexcept { remote_cursor_.reset(); }
   Result<void> queue_event(const InputEvent& event);
+  void queue_clipboard_change(platform::ClipboardData data);
 
   InputRuntimeConfig config_;
   InputRouter router_;
@@ -101,6 +106,8 @@ class InputNodeRuntime {
   std::vector<transport::PeerHandle> peer_handles_;
   std::optional<transport::PeerHandle> outgoing_peer_handle_;
   std::deque<QueuedEvent> queued_events_;
+  std::deque<platform::ClipboardData> queued_clipboard_changes_;
+  std::optional<platform::ClipboardData> clipboard_fingerprint_;
   mutable std::mutex queue_mutex_;
   bool queue_overflowed_{false};
   std::optional<Edge> edge_overflow_edge_;

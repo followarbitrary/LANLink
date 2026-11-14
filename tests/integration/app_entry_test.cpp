@@ -295,7 +295,7 @@ int main(int argc, char** argv) {
   }
   const std::string executable = argv[1];
   const std::string mode = argv[2];
-  if (mode == "help") return run_case(executable, "--help", true, "--discovery-port");
+  if (mode == "help") return run_case(executable, "--help", true, "--clipboard");
   if (mode == "invalid-port") {
     return run_case(executable,
                     "--device-id 1 --peer-id 2 --listen-port 0",
