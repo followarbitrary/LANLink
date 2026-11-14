@@ -3,6 +3,7 @@
 #include "lanlink/platform/fake_input_backend.hpp"
 
 #include <QApplication>
+#include <QCheckBox>
 #include <QElapsedTimer>
 #include <QLabel>
 #include <QLineEdit>
@@ -259,4 +260,32 @@ TEST(MainWindowTest, ShowsWorkerStartupErrorAndRemainsRestartable) {
   EXPECT_TRUE(window.findChild<QLabel*>(QStringLiteral("footerStatusLabel"))
                   ->text()
                   .contains(QStringLiteral("错误")));
+}
+
+TEST(MainWindowTest, CrossScreenPreferenceCanBeToggled) {
+  MainWindow window(nullptr, fake_backend_factory(), false);
+
+  const auto checks = window.findChildren<QCheckBox*>();
+  // The first check box belongs to the connection form's auto-topology
+  // setting; the next three are the preference rows shown in the screenshot.
+  ASSERT_GE(checks.size(), 4);
+  ASSERT_TRUE(checks[1] != nullptr);
+  ASSERT_TRUE(checks[2] != nullptr);
+  ASSERT_TRUE(checks[3] != nullptr);
+
+  EXPECT_TRUE(checks[1]->isEnabled());
+  EXPECT_FALSE(checks[2]->isEnabled());
+  EXPECT_FALSE(checks[3]->isEnabled());
+
+  auto* footer = window.findChild<QLabel*>(QStringLiteral("footerStatusLabel"));
+  ASSERT_NE(footer, nullptr);
+  EXPECT_TRUE(checks[1]->isChecked());
+
+  checks[1]->click();
+  EXPECT_FALSE(checks[1]->isChecked());
+  EXPECT_TRUE(footer->text().contains(QStringLiteral("跨屏切换已暂停")));
+
+  checks[1]->click();
+  EXPECT_TRUE(checks[1]->isChecked());
+  EXPECT_TRUE(footer->text().contains(QStringLiteral("跨屏切换已启用")));
 }
