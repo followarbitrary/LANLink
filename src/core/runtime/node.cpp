@@ -84,6 +84,7 @@ Result<void> InputNodeRuntime::set_clipboard_sync_enabled(bool enabled, TimePoin
   }
   if (config_.clipboard_sync_enabled == enabled) return Result<void>::success();
   config_.clipboard_sync_enabled = enabled;
+  manager_.discard_clipboard_state();
   {
     std::lock_guard lock(queue_mutex_);
     queued_clipboard_changes_.clear();

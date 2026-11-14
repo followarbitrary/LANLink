@@ -224,6 +224,12 @@ Result<void> ConnectionManager::broadcast_clipboard(const platform::ClipboardDat
     return result;
 }
 
+void ConnectionManager::discard_clipboard_state() noexcept {
+    for (auto& slot : slots_) {
+        if (slot.session) slot.session->discard_clipboard_state();
+    }
+}
+
 Result<void> ConnectionManager::remove(PeerHandle handle, IClock::time_point now) {
     auto* slot = find(handle);
     if (!slot)

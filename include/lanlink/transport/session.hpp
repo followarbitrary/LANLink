@@ -38,6 +38,7 @@ class PeerSession {
     Result<void> start(IClock::time_point now);
     Result<void> send_actions(const std::vector<RouterAction>& actions);
     Result<void> send_clipboard(const platform::ClipboardData& data);
+    void discard_clipboard_state() noexcept;
     Result<void> pump(IClock::time_point now,
                       std::chrono::milliseconds timeout = std::chrono::milliseconds{-1});
     Result<void> tick(IClock::time_point now);

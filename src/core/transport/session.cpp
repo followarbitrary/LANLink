@@ -183,6 +183,11 @@ Result<void> PeerSession::send_clipboard(const platform::ClipboardData& data) {
     return Result<void>::success();
 }
 
+void PeerSession::discard_clipboard_state() noexcept {
+    clipboard_receive_.reset();
+    pending_clipboard_apply_.reset();
+}
+
 Result<void> PeerSession::dispatch_clipboard_begin(const protocol::ClipboardBegin& begin,
                                                    IClock::time_point now) {
     (void)now;

@@ -1105,6 +1105,43 @@ TEST(InputNodeRuntime, ReenableBeforeTickDoesNotBroadcastFakeQueuedDisabledChang
   EXPECT_EQ(right_clipboard.write_count(), 0u);
 }
 
+TEST(InputNodeRuntime, ReenableBeforeTickDropsPendingRemoteClipboardApply) {
+  FakeInputBackend left_input;
+  FakeInputBackend right_input;
+  FakeClipboardBackend left_clipboard;
+  FakeClipboardBackend right_clipboard;
+  auto left_result = InputNodeRuntime::create(config(
+      id(175), id(176), AuthenticatedPeer{id(177)}, id(178), Endpoint{"127.0.0.1", 0},
+      &left_input, 256, &left_clipboard, true));
+  auto right_result = InputNodeRuntime::create(config(
+      id(177), id(179), AuthenticatedPeer{id(175)}, id(180), Endpoint{"127.0.0.1", 0},
+      &right_input, 256, &right_clipboard, true));
+  ASSERT_TRUE(left_result.ok()) << left_result.error();
+  ASSERT_TRUE(right_result.ok()) << right_result.error();
+  auto left = std::move(left_result.value());
+  auto right = std::move(right_result.value());
+  ASSERT_TRUE(left->set_topology(topology_for(id(178), id(180), true)).ok());
+  ASSERT_TRUE(right->set_topology(topology_for(id(180), id(178), false)).ok());
+  ASSERT_TRUE(left->start().ok());
+  ASSERT_TRUE(right->start().ok());
+  ASSERT_TRUE(left->connect_peer(right->local_endpoint()).ok());
+  IClock::time_point now{};
+  pump_pair(*left, *right, now, 20);
+
+  right_clipboard.stop();
+  ClipboardData pending;
+  pending.text = "pending remote clipboard";
+  left_clipboard.emit_change(pending);
+  ASSERT_TRUE(left->tick(now).ok());
+  ASSERT_TRUE(right->poll(now, 0ms).ok());
+  ASSERT_TRUE(right->set_clipboard_sync_enabled(false, now).ok());
+  ASSERT_TRUE(right->set_clipboard_sync_enabled(true, now).ok());
+  ASSERT_TRUE(right_clipboard.start({}).ok());
+  ASSERT_TRUE(right->tick(now).ok());
+  EXPECT_EQ(right_clipboard.write_count(), 0u);
+  EXPECT_EQ(right_clipboard.data(), ClipboardData{});
+}
+
 TEST(InputNodeRuntime, ClipboardStartupFailureDoesNotStopInputBackend) {
   FakeInputBackend input;
   FailingClipboardBackend clipboard;
