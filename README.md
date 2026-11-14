@@ -40,7 +40,7 @@ Check the command-line interface with:
 
 The help output lists these flags: `--device-id`, `--peer-id`, `--listen-port`, `--connect`, `--group`, `--discovery-port`, `--display-id`, `--peer-display-id`, `--remote-side`, `--width`, `--height`, `--peer-width`, `--peer-height`, `--clipboard`, and `--help`. Device and display IDs are numeric; `--remote-side` accepts only `left` or `right`; `--connect` takes `HOST:PORT`. LANLink reads the local display bounds from the native backend at startup: macOS uses Quartz logical points and Windows uses the DPI-aware monitor coordinate space. The width and height flags remain optional overrides for diagnostics. Peer dimensions are no longer required because the handoff sends an edge ratio and the target maps it into its own detected display bounds.
 
-Clipboard synchronization is opt-in with `--clipboard` and remains disabled by default for privacy. It supports UTF-8 text, HTML, and PNG data with a 4 MiB combined package limit including protocol metadata; a conservative metadata reserve keeps the payload below that wire limit. Native clipboard integration is available on macOS and Windows. The command-line and Qt desktop clients use the platform clipboard APIs, so the same Accessibility permission required for input forwarding applies on macOS.
+Clipboard synchronization is opt-in with `--clipboard` and remains disabled by default for privacy. It supports UTF-8 text, HTML, and PNG data with a 4 MiB combined package limit including protocol metadata; a conservative metadata reserve keeps the payload below that wire limit. Native clipboard integration is available on macOS and Windows. The command-line and Qt desktop clients use the platform clipboard APIs. On macOS, Accessibility permission is required for input forwarding; clipboard synchronization itself does not add a separate permission requirement.
 
 ### Qt6 desktop control panel
 
@@ -64,7 +64,7 @@ chmod +x scripts/package-macos.sh
 ./scripts/package-macos.sh
 ```
 
-The script uses the host architecture reported by `uname -m` and writes `dist/lanlink-macos-<architecture>.tar.gz`. The archive always contains the CLI runtime (`lanlink_app`). When Qt6 and `macdeployqt` are available, it also contains a self-contained `lanlink_desktop.app` bundle with the Qt6 control panel, and creates `dist/lanlink-macos-<architecture>.dmg`. Double-click the DMG, then drag `LANLink.app` onto the `Applications` shortcut. The desktop app starts the Core runtime automatically when it opens; the device-management page reports the actual local platform and an active LAN IPv4 endpoint when one is available. The settings page's **跨屏键鼠转发** switch pauses or resumes forwarding in the runtime and restores local input when paused. Clipboard synchronization is opt-in and supports text, HTML, and PNG data within the 4 MiB package limit including protocol metadata. Both the app and the CLI still need Accessibility permission under **System Settings → Privacy & Security → Accessibility**.
+The script uses the host architecture reported by `uname -m` and writes `dist/lanlink-macos-<architecture>.tar.gz`. The archive always contains the CLI runtime (`lanlink_app`). When Qt6 and `macdeployqt` are available, it also contains a self-contained `lanlink_desktop.app` bundle with the Qt6 control panel, and creates `dist/lanlink-macos-<architecture>.dmg`. Double-click the DMG, then drag `LANLink.app` onto the `Applications` shortcut. The desktop app starts the Core runtime automatically when it opens; the device-management page reports the actual local platform and an active LAN IPv4 endpoint when one is available. The settings page's **跨屏键鼠转发** switch pauses or resumes forwarding in the runtime and restores local input when paused. Clipboard synchronization is opt-in and supports text, HTML, and PNG data within the 4 MiB package limit including protocol metadata. Input forwarding in both the app and CLI needs Accessibility permission under **System Settings → Privacy & Security → Accessibility**; clipboard synchronization itself does not add a separate permission requirement.
 
 The macOS archive uses local ad-hoc signatures only; it is not Developer ID signed or notarized. Verify the package before copying it to another Mac:
 
@@ -95,7 +95,7 @@ If the PowerShell execution policy blocks local scripts, use:
 powershell -ExecutionPolicy Bypass -File .\scripts\package-windows.ps1
 ```
 
-The script writes `dist\lanlink-windows-x64.zip`. Extract it, then run `.\lanlink_app.exe --help` from the extracted directory. Allow the packaged executable through Windows Defender Firewall on the Private network profile when prompted so peers can connect.
+The script writes `dist\lanlink-windows-x64.zip`. Extract it, then run `.\lanlink_app.exe --help` from the extracted directory. Add `--clipboard` on both peers to enable UTF-8 text, HTML, and PNG synchronization (4 MiB combined package limit including protocol metadata). Allow the packaged executable through Windows Defender Firewall on the Private network profile when prompted so peers can connect.
 
 ## Automatic LAN discovery
 
@@ -111,6 +111,8 @@ When `--peer-id` and `--connect` are omitted, LANLink announces itself on the `l
 
 Use `--peer-id` to restrict discovery to one device. Explicit `--display-id`, `--peer-display-id`, and `--remote-side` values take precedence over discovered defaults. Use `--connect HOST:PORT` for an explicit two-node connection. Discovery continues to poll while the node runs, while an outgoing endpoint selected from discovery remains pinned for reconnects.
 
+To exercise clipboard synchronization during a two-device test, pass `--clipboard` to both processes. The setting is local to each process, so leaving it off on either peer keeps that peer from publishing or applying clipboard updates.
+
 ## Two-device LAN test
 
 Use two computers on the same LAN. Replace `192.168.1.20` below with **device B's real LAN IPv4 address** (for example, from `ipconfig` on Windows or `ifconfig`/`networksetup` on macOS). Keep TCP port `41000` available on both devices and allow it through the Windows firewall where applicable. Run both commands after building.
@@ -125,14 +127,14 @@ Device A listens on all local interfaces and actively connects to device B. The 
   --device-id 1 --peer-id 2 \
   --listen-port 41000 --connect 192.168.1.20:41000 \
   --display-id 10 --peer-display-id 20 \
-  --remote-side right
+  --remote-side right --clipboard
 
 # Windows PowerShell
 .\build\debug\lanlink_app.exe `
   --device-id 1 --peer-id 2 `
   --listen-port 41000 --connect 192.168.1.20:41000 `
   --display-id 10 --peer-display-id 20 `
-  --remote-side right
+  --remote-side right --clipboard
 ```
 
 ### Device B (ID 2, display 20)
@@ -145,14 +147,14 @@ Device B listens on the same port and does not pass `--connect`. Its reciprocal 
   --device-id 2 --peer-id 1 \
   --listen-port 41000 \
   --display-id 20 --peer-display-id 10 \
-  --remote-side left
+  --remote-side left --clipboard
 
 # Windows PowerShell
 .\build\debug\lanlink_app.exe `
   --device-id 2 --peer-id 1 `
   --listen-port 41000 `
   --display-id 20 --peer-display-id 10 `
-  --remote-side left
+  --remote-side left --clipboard
 ```
 
 Each process should print `LANLink listening on 0.0.0.0:41000`. When the peer session becomes active, both terminals print `LANLink connected`. Device A's `--connect` initiates the session; device B accepts it while listening. After the connection is established, move the pointer across the configured edge to exercise input forwarding. Connection failures are printed as `error:` or `runtime error:` messages. Press **Ctrl+C** in each terminal to stop the node and clean up input state.
