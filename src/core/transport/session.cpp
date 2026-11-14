@@ -191,7 +191,7 @@ Result<void> PeerSession::dispatch_clipboard_begin(const protocol::ClipboardBegi
     const auto expected_total = static_cast<std::uint64_t>(begin.text_size) + begin.html_size +
                                 begin.png_size;
     if ((begin.format_mask & ~0x07U) != 0 || expected_total != begin.total_size ||
-        begin.total_size > protocol::kMaxClipboardPackageSize ||
+        begin.total_size > protocol::kMaxClipboardPayloadSize ||
         (!format_present(begin.format_mask, protocol::ClipboardFormat::kText) &&
          begin.text_size != 0) ||
         (!format_present(begin.format_mask, protocol::ClipboardFormat::kHtml) &&
@@ -213,6 +213,7 @@ Result<void> PeerSession::dispatch_clipboard_begin(const protocol::ClipboardBegi
     transfer.text_coverage.resize(begin.text_size);
     transfer.html_coverage.resize(begin.html_size);
     transfer.png_coverage.resize(begin.png_size);
+    transfer.started_at = now;
     clipboard_receive_ = std::move(transfer);
     return Result<void>::success();
 }
@@ -286,22 +287,31 @@ Result<void> PeerSession::dispatch_clipboard_end(const protocol::ClipboardEnd& e
         return drop_clipboard(valid.error().c_str());
     if (clipboard_fingerprint_.has_value() && *clipboard_fingerprint_ == data)
         return Result<void>::success();
+    pending_clipboard_apply_ = std::move(data);
+    return retry_pending_clipboard();
+}
+
+Result<void> PeerSession::drop_clipboard(const char* error) {
+    debug::log("drop clipboard transfer peer=", config_.peer.id.low, " error=", error);
+    clipboard_receive_.reset();
+    return Result<void>::success();
+}
+
+Result<void> PeerSession::retry_pending_clipboard() {
+    if (!pending_clipboard_apply_.has_value()) return Result<void>::success();
+    const auto& data = *pending_clipboard_apply_;
     if (config_.clipboard_backend != nullptr) {
-        auto applied = transfer.format_mask == 0 ? config_.clipboard_backend->clear()
-                                                  : config_.clipboard_backend->write(data);
+        auto applied = data.text.has_value() || data.html.has_value() || data.png.has_value()
+                           ? config_.clipboard_backend->write(data)
+                           : config_.clipboard_backend->clear();
         if (!applied.ok()) {
             debug::log("clipboard backend apply failed peer=", config_.peer.id.low,
                        " error=", applied.error());
             return Result<void>::success();
         }
     }
-    clipboard_fingerprint_ = std::move(data);
-    return Result<void>::success();
-}
-
-Result<void> PeerSession::drop_clipboard(const char* error) {
-    debug::log("drop clipboard transfer peer=", config_.peer.id.low, " error=", error);
-    clipboard_receive_.reset();
+    clipboard_fingerprint_ = data;
+    pending_clipboard_apply_.reset();
     return Result<void>::success();
 }
 
@@ -764,6 +774,13 @@ Result<void> PeerSession::tick(IClock::time_point now) {
         return fail_and_disconnect("hello timeout", now);
     if (hello_received_ && liveness_.expired(now))
         return fail_and_disconnect("connection timeout", now);
+    if (clipboard_receive_.has_value() &&
+        now - clipboard_receive_->started_at >= m0::kConnectionTimeout) {
+        debug::log("clipboard transfer timed out peer=", config_.peer.id.low,
+                   " sequence=", clipboard_receive_->sequence);
+        clipboard_receive_.reset();
+    }
+    (void)retry_pending_clipboard();
     if (now >= next_display_info_check_) {
         auto display = send_display_info_if_changed(false, now);
         if (!display.ok())

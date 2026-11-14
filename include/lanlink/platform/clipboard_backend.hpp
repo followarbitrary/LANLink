@@ -1,6 +1,7 @@
 #pragma once
 
 #include "lanlink/common/result.hpp"
+#include "lanlink/protocol/wire.hpp"
 
 #include <array>
 #include <algorithm>
@@ -13,7 +14,10 @@
 
 namespace lanlink::platform {
 
-inline constexpr std::size_t kMaxClipboardDataSize = 4U * 1024U * 1024U;
+// The protocol reserves a conservative metadata budget so this payload limit
+// enforces the 4 MiB cap for the complete on-wire package.
+inline constexpr std::size_t kMaxClipboardDataSize = protocol::kMaxClipboardPayloadSize;
+inline constexpr std::size_t kMaxClipboardNotificationQueue = 64;
 inline constexpr std::array<std::uint8_t, 8> kPngSignature{
     0x89U, 0x50U, 0x4eU, 0x47U, 0x0dU, 0x0aU, 0x1aU, 0x0aU};
 
@@ -88,6 +92,10 @@ class IClipboardBackend {
   virtual Result<void> start(ChangeCallback callback) = 0;
   virtual void stop() = 0;
   virtual Result<void> poll() = 0;
+  // Discard notifications queued before a fresh enable baseline. Native
+  // backends override this; the default is suitable for callback-free custom
+  // backends.
+  virtual Result<void> discard_pending_notifications() { return Result<void>::success(); }
   virtual Result<ClipboardData> read() const = 0;
   virtual Result<void> write(const ClipboardData& data) = 0;
   virtual Result<void> clear() = 0;

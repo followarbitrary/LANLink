@@ -13,6 +13,7 @@ class FakeClipboardBackend final : public IClipboardBackend {
   Result<void> start(ChangeCallback callback) override;
   void stop() override;
   Result<void> poll() override;
+  Result<void> discard_pending_notifications() override;
   Result<ClipboardData> read() const override;
   Result<void> write(const ClipboardData& data) override;
   Result<void> clear() override;

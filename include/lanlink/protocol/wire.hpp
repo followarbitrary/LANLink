@@ -26,6 +26,12 @@ constexpr std::size_t kHeaderSize = 12;
 constexpr std::size_t kMaxFrameSize = 64 * 1024;
 constexpr std::size_t kMaxErrorText = 4 * 1024;
 constexpr std::uint32_t kMaxClipboardPackageSize = 4 * 1024 * 1024;
+// Reserve space for the begin/end frames and per-chunk wire metadata. This
+// conservative budget keeps the complete transfer below the 4 MiB package
+// cap even when a payload is split into many frames.
+constexpr std::uint32_t kClipboardMetadataBudget = 64 * 1024;
+constexpr std::uint32_t kMaxClipboardPayloadSize =
+    kMaxClipboardPackageSize - kClipboardMetadataBudget;
 // ClipboardChunk payload overhead is source (16), sequence (8), format (1),
 // offset (4), and data length (4) bytes.
 constexpr std::uint32_t kMaxClipboardChunkDataSize =

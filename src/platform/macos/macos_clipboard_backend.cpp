@@ -88,6 +88,14 @@ Result<void> MacOSClipboardBackend::poll() {
   }
 }
 
+Result<void> MacOSClipboardBackend::discard_pending_notifications() {
+  @autoreleasepool {
+    if (!running_) return Result<void>::success();
+    impl_->change_count = [impl_->pasteboard changeCount];
+    return Result<void>::success();
+  }
+}
+
 Result<void> MacOSClipboardBackend::write(const ClipboardData& data) {
   @autoreleasepool {
     const auto valid = validate_clipboard_data(data);
@@ -163,6 +171,9 @@ void MacOSClipboardBackend::stop() {
 }
 Result<void> MacOSClipboardBackend::poll() {
   return Result<void>::failure(last_error_);
+}
+Result<void> MacOSClipboardBackend::discard_pending_notifications() {
+  return Result<void>::success();
 }
 Result<ClipboardData> MacOSClipboardBackend::read() const {
   return Result<ClipboardData>::failure(last_error_);

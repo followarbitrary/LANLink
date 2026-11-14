@@ -102,7 +102,7 @@ bool valid_png_chunk(std::uint32_t offset, std::span<const std::uint8_t> data) {
 
 bool valid_clipboard_begin(const ClipboardBegin& value) {
     if (zero(value.source) || value.sequence == 0 || (value.format_mask & ~0x07U) != 0 ||
-        value.total_size > kMaxClipboardPackageSize)
+        value.total_size > kMaxClipboardPayloadSize)
         return false;
     if ((value.format_mask & clipboard_bit(ClipboardFormat::kText)) == 0 && value.text_size != 0)
         return false;
@@ -781,8 +781,23 @@ Result<std::vector<Message>> FrameDecoder::feed(std::span<const std::uint8_t> by
             if (buffer_.size() < total)
                 break;
             auto result = decode(std::span<const std::uint8_t>(buffer_.data(), total));
-            if (!result.ok())
+            if (!result.ok()) {
+                // A frame with valid LLNK framing and a clipboard message type
+                // is untrusted clipboard data. Drop that frame and continue so
+                // malformed clipboard payloads cannot tear down keyboard/mouse
+                // forwarding. Corruption of framing or any other protocol
+                // message remains fatal to the connection.
+                const auto type = static_cast<MessageType>(buffer_[5]);
+                const bool clipboard_type =
+                    type == MessageType::kClipboardBegin ||
+                    type == MessageType::kClipboardChunk ||
+                    type == MessageType::kClipboardEnd;
+                buffer_.erase(buffer_.begin(),
+                              buffer_.begin() + static_cast<std::ptrdiff_t>(total));
+                if (clipboard_type)
+                    continue;
                 return Result<void>::failure(result.error());
+            }
             messages.push_back(std::move(result.value()));
             buffer_.erase(buffer_.begin(), buffer_.begin() + static_cast<std::ptrdiff_t>(total));
         }

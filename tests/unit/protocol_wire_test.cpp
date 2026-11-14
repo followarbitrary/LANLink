@@ -203,6 +203,24 @@ TEST(ProtocolWire, FrameDecoderClearsAfterOversizedOrMalformedFrame) {
     EXPECT_TRUE(decoder.finish().ok());
 }
 
+TEST(ProtocolWire, FrameDecoderDropsMalformedClipboardButKeepsFollowingInput) {
+    auto malformed = encode(ClipboardBegin{id(4, 4), 1, 0x01, 1, 1, 0, 0});
+    ASSERT_TRUE(malformed.ok());
+    // Keep the LLNK header/type valid but make the format mask invalid.
+    malformed.value()[kHeaderSize + 16 + 8] = 0x80;
+    auto following = encode(Heartbeat{99});
+    ASSERT_TRUE(following.ok());
+    malformed.value().insert(malformed.value().end(), following.value().begin(),
+                             following.value().end());
+
+    FrameDecoder decoder;
+    auto result = decoder.feed(malformed.value());
+    ASSERT_TRUE(result.ok()) << result.error();
+    ASSERT_EQ(result.value().size(), 1u);
+    EXPECT_EQ(std::get<Heartbeat>(result.value().front()).counter, 99u);
+    EXPECT_EQ(decoder.buffered_bytes(), 0u);
+}
+
 TEST(ProtocolWire, FrameDecoderBoundsLargeInputBeforeBuffering) {
     FrameDecoder decoder;
     std::vector<std::uint8_t> input(kMaxFrameSize + 1, 0);

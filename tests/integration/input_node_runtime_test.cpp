@@ -17,11 +17,15 @@ using namespace lanlink::transport;
 
 class FailingClipboardBackend final : public IClipboardBackend {
  public:
-  Result<void> start(ChangeCallback) override {
+  Result<void> start(ChangeCallback callback) override {
     started = true;
-    return Result<void>::failure("clipboard startup failed");
+    ++start_attempts;
+    callback_ = std::move(callback);
+    if (fail_first && start_attempts == 1)
+      return Result<void>::failure("clipboard startup failed");
+    return Result<void>::success();
   }
-  void stop() override { stopped = true; }
+  void stop() override { stopped = true; callback_ = {}; }
   Result<void> poll() override { return Result<void>::success(); }
   Result<ClipboardData> read() const override { return Result<ClipboardData>::success({}); }
   Result<void> write(const ClipboardData&) override { return Result<void>::success(); }
@@ -30,7 +34,12 @@ class FailingClipboardBackend final : public IClipboardBackend {
 
   bool started{false};
   bool stopped{false};
+  bool fail_first{false};
+  int start_attempts{0};
   std::string error{"clipboard startup failed"};
+
+ private:
+  ChangeCallback callback_;
 };
 
 class ManualClipboardBackend final : public IClipboardBackend {
@@ -1062,10 +1071,10 @@ TEST(InputNodeRuntime, ClipboardRemoteWritesDoNotEchoBack) {
   EXPECT_EQ(right_clipboard.write_count(), 0u);
 }
 
-TEST(InputNodeRuntime, ReenableBeforeTickDoesNotBroadcastDisabledChange) {
+TEST(InputNodeRuntime, ReenableBeforeTickDoesNotBroadcastFakeQueuedDisabledChange) {
   FakeInputBackend left_input;
   FakeInputBackend right_input;
-  ManualClipboardBackend left_clipboard;
+  FakeClipboardBackend left_clipboard;
   FakeClipboardBackend right_clipboard;
   auto left_result = InputNodeRuntime::create(config(
       id(171), id(172), AuthenticatedPeer{id(173)}, id(174), Endpoint{"127.0.0.1", 0},
@@ -1088,7 +1097,7 @@ TEST(InputNodeRuntime, ReenableBeforeTickDoesNotBroadcastDisabledChange) {
   ASSERT_TRUE(left->set_clipboard_sync_enabled(false, now).ok());
   ClipboardData disabled;
   disabled.text = "disabled";
-  left_clipboard.emit(disabled);
+  left_clipboard.emit_change(disabled);
   ASSERT_TRUE(left->set_clipboard_sync_enabled(true, now).ok());
   ASSERT_TRUE(left->tick(now).ok());
   ASSERT_TRUE(right->poll(now, 0ms).ok());
@@ -1111,6 +1120,23 @@ TEST(InputNodeRuntime, ClipboardStartupFailureDoesNotStopInputBackend) {
   ASSERT_TRUE(runtime->stop(IClock::time_point{}).ok());
   EXPECT_TRUE(clipboard.stopped);
   EXPECT_FALSE(input.status().running);
+}
+
+TEST(InputNodeRuntime, ClipboardStartupFailureRetriesWhileEnabled) {
+  FakeInputBackend input;
+  FailingClipboardBackend clipboard;
+  clipboard.fail_first = true;
+  auto result = InputNodeRuntime::create(config(
+      id(191), id(192), AuthenticatedPeer{id(193)}, id(194), Endpoint{"127.0.0.1", 0},
+      &input, 256, &clipboard, true));
+  ASSERT_TRUE(result.ok()) << result.error();
+  auto runtime = std::move(result.value());
+  ASSERT_TRUE(runtime->start().ok());
+  EXPECT_TRUE(runtime->running());
+  EXPECT_EQ(clipboard.start_attempts, 1);
+  ASSERT_TRUE(runtime->tick(IClock::time_point{}).ok());
+  EXPECT_EQ(clipboard.start_attempts, 2);
+  ASSERT_TRUE(runtime->stop(IClock::time_point{}).ok());
 }
 
 }  // namespace

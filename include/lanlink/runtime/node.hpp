@@ -96,6 +96,7 @@ class InputNodeRuntime {
   void clear_remote_cursor() noexcept { remote_cursor_.reset(); }
   Result<void> queue_event(const InputEvent& event);
   void queue_clipboard_change(platform::ClipboardData data);
+  Result<void> start_clipboard_backend();
 
   InputRuntimeConfig config_;
   InputRouter router_;
@@ -119,6 +120,7 @@ class InputNodeRuntime {
   double local_display_scale_{1.0};
   bool warned_remote_without_suppression_{false};
   bool running_{false};
+  bool clipboard_backend_started_{false};
   bool input_forwarding_enabled_{true};
 };
 

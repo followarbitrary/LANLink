@@ -147,9 +147,38 @@ Result<void> wait_readable(NativeSocket socket, std::chrono::milliseconds timeou
     return Result<void>::success();
 }
 
-Result<void> write_all(NativeSocket socket, const std::vector<std::uint8_t>& bytes) {
+Result<void> wait_writable(NativeSocket socket, std::chrono::milliseconds timeout) {
+    fd_set write_set;
+    FD_ZERO(&write_set);
+    FD_SET(socket, &write_set);
+    timeval value{};
+    timeval* value_ptr = nullptr;
+    if (timeout.count() >= 0) {
+        value.tv_sec = static_cast<long>(timeout.count() / 1000);
+        value.tv_usec = static_cast<long>((timeout.count() % 1000) * 1000);
+        value_ptr = &value;
+    }
+#if defined(_WIN32)
+    const int ready = select(0, nullptr, &write_set, nullptr, value_ptr);
+#else
+    const int ready = select(socket + 1, nullptr, &write_set, nullptr, value_ptr);
+#endif
+    if (ready < 0) {
+        if (interrupted())
+            return Result<void>::failure("write wait interrupted");
+        return Result<void>::failure("write wait failed");
+    }
+    if (ready == 0)
+        return Result<void>::failure("write timeout");
+    return Result<void>::success();
+}
+
+Result<void> write_all(NativeSocket socket, const std::vector<std::uint8_t>& bytes,
+                       std::chrono::milliseconds timeout) {
     std::size_t offset = 0;
     while (offset < bytes.size()) {
+        auto writable = wait_writable(socket, timeout);
+        if (!writable.ok()) return writable;
 #if defined(_WIN32)
         const int sent = send(socket, reinterpret_cast<const char*>(bytes.data() + offset),
                               static_cast<int>(bytes.size() - offset), 0);
@@ -254,9 +283,13 @@ Result<void> configure_tls_server(SSL*& ssl, SSL_CTX*& context, NativeSocket soc
     return Result<void>::success();
 }
 
-Result<void> write_all_tls(SSL* ssl, const std::vector<std::uint8_t>& bytes) {
+Result<void> write_all_tls(SSL* ssl, NativeSocket socket,
+                           const std::vector<std::uint8_t>& bytes,
+                           std::chrono::milliseconds timeout) {
     std::size_t offset = 0;
     while (offset < bytes.size()) {
+        auto writable = wait_writable(socket, timeout);
+        if (!writable.ok()) return writable;
         const auto remaining = bytes.size() - offset;
         const int written = SSL_write(ssl, bytes.data() + offset, static_cast<int>(remaining));
         if (written > 0) {
@@ -360,10 +393,12 @@ Result<void> Connection::send(const protocol::Message& message) {
     if (!encoded.ok())
         return Result<void>::failure(encoded.error());
 #if LANLINK_HAS_OPENSSL
-    auto result = impl_->tls != nullptr ? write_all_tls(impl_->tls, encoded.value())
-                                        : write_all(impl_->socket, encoded.value());
+    auto result = impl_->tls != nullptr
+                      ? write_all_tls(impl_->tls, impl_->socket, encoded.value(),
+                                      impl_->options.io_timeout)
+                      : write_all(impl_->socket, encoded.value(), impl_->options.io_timeout);
 #else
-    auto result = write_all(impl_->socket, encoded.value());
+    auto result = write_all(impl_->socket, encoded.value(), impl_->options.io_timeout);
 #endif
     if (!result.ok())
         close();

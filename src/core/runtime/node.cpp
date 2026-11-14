@@ -89,6 +89,14 @@ Result<void> InputNodeRuntime::set_clipboard_sync_enabled(bool enabled, TimePoin
     queued_clipboard_changes_.clear();
     clipboard_fingerprint_.reset();
   }
+  if (config_.clipboard_backend != nullptr) {
+    auto discarded = config_.clipboard_backend->discard_pending_notifications();
+    if (!discarded.ok()) debug::warn("clipboard baseline drain failed error=", discarded.error());
+  }
+  if (enabled && running_) {
+    auto started = start_clipboard_backend();
+    if (!started.ok()) return started;
+  }
   return Result<void>::success();
 }
 
@@ -136,12 +144,9 @@ Result<void> InputNodeRuntime::start() {
     return started;
   }
   if (config_.clipboard_backend != nullptr) {
-    auto clipboard_started = config_.clipboard_backend->start(
-        [this](platform::ClipboardData data) { queue_clipboard_change(std::move(data)); });
-    if (!clipboard_started.ok()) {
+    auto clipboard_started = start_clipboard_backend();
+    if (!clipboard_started.ok())
       debug::warn("clipboard backend start failed error=", clipboard_started.error());
-      config_.clipboard_backend->stop();
-    }
   }
   running_ = true;
   return Result<void>::success();
@@ -179,7 +184,27 @@ Result<void> InputNodeRuntime::queue_event(const InputEvent& event) {
 
 void InputNodeRuntime::queue_clipboard_change(platform::ClipboardData data) {
   std::lock_guard lock(queue_mutex_);
+  const auto capacity = std::min<std::size_t>(config_.queue_capacity,
+                                               platform::kMaxClipboardNotificationQueue);
+  if (queued_clipboard_changes_.size() >= capacity) {
+    queued_clipboard_changes_.pop_front();
+    debug::warn("clipboard notification queue full; dropping oldest change");
+  }
   queued_clipboard_changes_.push_back(std::move(data));
+}
+
+Result<void> InputNodeRuntime::start_clipboard_backend() {
+  if (config_.clipboard_backend == nullptr || clipboard_backend_started_)
+    return Result<void>::success();
+  auto started = config_.clipboard_backend->start(
+      [this](platform::ClipboardData data) { queue_clipboard_change(std::move(data)); });
+  if (!started.ok()) {
+    clipboard_backend_started_ = false;
+    config_.clipboard_backend->stop();
+    return started;
+  }
+  clipboard_backend_started_ = true;
+  return Result<void>::success();
 }
 
 Result<void> InputNodeRuntime::dispatch_actions(const std::vector<RouterAction>& actions,
@@ -732,7 +757,15 @@ Result<void> InputNodeRuntime::poll(TimePoint now, std::chrono::milliseconds tim
 Result<void> InputNodeRuntime::tick(TimePoint now) {
   if (!running_) return Result<void>::failure("runtime is not started");
   Result<void> result = Result<void>::success();
-  if (config_.clipboard_backend != nullptr) {
+  if (config_.clipboard_backend != nullptr && config_.clipboard_sync_enabled &&
+      !clipboard_backend_started_) {
+    auto started = start_clipboard_backend();
+    if (!started.ok()) {
+      debug::warn("clipboard backend retry start failed error=", started.error());
+      result = Result<void>::failure(started.error());
+    }
+  }
+  if (config_.clipboard_backend != nullptr && clipboard_backend_started_) {
     auto polled = config_.clipboard_backend->poll();
     if (!polled.ok()) {
       debug::warn("clipboard backend poll failed error=", polled.error());
@@ -785,7 +818,10 @@ Result<void> InputNodeRuntime::stop(TimePoint now) {
     listener_.reset();
   }
   config_.backend->stop();
-  if (config_.clipboard_backend != nullptr) config_.clipboard_backend->stop();
+  if (config_.clipboard_backend != nullptr) {
+    config_.clipboard_backend->stop();
+    clipboard_backend_started_ = false;
+  }
   running_ = false;
   edge_overflow_edge_.reset();
   edge_overflow_ = 0.0;

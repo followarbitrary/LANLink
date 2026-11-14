@@ -63,6 +63,7 @@ class PeerSession {
     Result<void> dispatch_clipboard_end(const protocol::ClipboardEnd& end,
                                         IClock::time_point now);
     Result<void> drop_clipboard(const char* error);
+    Result<void> retry_pending_clipboard();
 
     Connection connection_;
     PeerSessionConfig config_;
@@ -94,8 +95,10 @@ class PeerSession {
         std::vector<std::uint8_t> text_coverage;
         std::vector<std::uint8_t> html_coverage;
         std::vector<std::uint8_t> png_coverage;
+        IClock::time_point started_at{};
     };
     std::optional<ClipboardReceiveState> clipboard_receive_;
+    std::optional<platform::ClipboardData> pending_clipboard_apply_;
 };
 
 } // namespace lanlink::transport

@@ -226,6 +226,18 @@ TEST(ClipboardBackendContract, RejectsOversizedAndInvalidPngWrites) {
   EXPECT_FALSE(backend.write(invalid_png).ok());
 }
 
+TEST(ClipboardBackendContract, EnforcesOnWirePackageCapIncludingMetadataBudget) {
+  FakeClipboardBackend backend;
+  ASSERT_TRUE(backend.start({}).ok());
+  ClipboardData at_limit;
+  at_limit.text = std::string(kMaxClipboardDataSize, 'x');
+  EXPECT_TRUE(backend.write(at_limit).ok());
+
+  ClipboardData over_limit;
+  over_limit.text = std::string(kMaxClipboardDataSize + 1, 'x');
+  EXPECT_FALSE(backend.write(over_limit).ok());
+}
+
 TEST(ClipboardBackendContract, FakeRejectsInvalidChangesAndSeedData) {
   FakeClipboardBackend backend;
   ASSERT_TRUE(backend.start({}).ok());

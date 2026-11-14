@@ -31,6 +31,11 @@ Result<void> FakeClipboardBackend::poll() {
   return Result<void>::success();
 }
 
+Result<void> FakeClipboardBackend::discard_pending_notifications() {
+  pending_changes_.clear();
+  return Result<void>::success();
+}
+
 Result<ClipboardData> FakeClipboardBackend::read() const {
   if (!running_) return Result<ClipboardData>::failure("clipboard backend is not running");
   return Result<ClipboardData>::success(data_);
@@ -60,6 +65,8 @@ void FakeClipboardBackend::emit_change(ClipboardData data) {
     set_error(valid.error());
     return;
   }
+  if (pending_changes_.size() >= kMaxClipboardNotificationQueue)
+    pending_changes_.pop_front();
   pending_changes_.push_back(std::move(data));
   last_error_.clear();
 }

@@ -238,8 +238,13 @@ struct WindowsClipboardBackend::Impl {
         impl->suppress_next = false;
       } else {
         auto value = impl->read_clipboard();
-        if (value.ok()) impl->changes.push_back(std::move(value.value()));
-        else impl->pending_error = value.error();
+        if (value.ok()) {
+          if (impl->changes.size() >= kMaxClipboardNotificationQueue)
+            impl->changes.pop_front();
+          impl->changes.push_back(std::move(value.value()));
+        } else {
+          impl->pending_error = value.error();
+        }
       }
       return 0;
     }
@@ -410,6 +415,14 @@ Result<void> WindowsClipboardBackend::poll() {
   return Result<void>::success();
 }
 
+Result<void> WindowsClipboardBackend::discard_pending_notifications() {
+  if (!impl_->thread.joinable()) return Result<void>::success();
+  std::lock_guard lock(impl_->mutex);
+  impl_->changes.clear();
+  impl_->pending_error.clear();
+  return Result<void>::success();
+}
+
 Result<ClipboardData> WindowsClipboardBackend::read() const {
   if (!impl_->thread.joinable()) return Result<ClipboardData>::failure("clipboard backend is not running");
   return impl_->read_clipboard();
@@ -514,6 +527,9 @@ Result<void> WindowsClipboardBackend::start(ChangeCallback) {
 }
 void WindowsClipboardBackend::stop() {}
 Result<void> WindowsClipboardBackend::poll() { return Result<void>::failure(last_error_); }
+Result<void> WindowsClipboardBackend::discard_pending_notifications() {
+  return Result<void>::success();
+}
 Result<ClipboardData> WindowsClipboardBackend::read() const {
   return Result<ClipboardData>::failure(last_error_);
 }

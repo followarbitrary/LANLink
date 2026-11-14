@@ -603,11 +603,16 @@ TEST(PeerSession, ClipboardBackendFailureDoesNotDisconnectPeer) {
     EXPECT_EQ(pair.target_backend->write_count(), 0u);
 
     ASSERT_TRUE(pair.target_backend->start({}).ok());
+    ASSERT_TRUE(pair.target->tick({}).ok());
+    EXPECT_EQ(pair.target_backend->write_count(), 1u);
+    EXPECT_EQ(pair.target_backend->data(), failed_data);
+    EXPECT_TRUE(pair.target->connected());
+
     ClipboardData recovered_data;
     recovered_data.text = "backend recovered";
     ASSERT_TRUE(pair.source->send_clipboard(recovered_data).ok());
-    pump_clipboard(*pair.target, *pair.target_backend);
-    EXPECT_EQ(pair.target_backend->write_count(), 1u);
+    pump_clipboard(*pair.target, *pair.target_backend, 1);
+    EXPECT_EQ(pair.target_backend->write_count(), 2u);
     EXPECT_EQ(pair.target_backend->data(), recovered_data);
     EXPECT_TRUE(pair.target->connected());
 }
