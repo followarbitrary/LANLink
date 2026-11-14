@@ -1,4 +1,5 @@
 #include "main_window.hpp"
+#include "topology_canvas.hpp"
 
 #include "lanlink/platform/fake_clipboard_backend.hpp"
 #include "lanlink/platform/fake_input_backend.hpp"
@@ -10,9 +11,11 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMetaObject>
+#include <QMouseEvent>
 #include <QPushButton>
 #include <QSystemTrayIcon>
 #include <QThread>
+#include <QVariantAnimation>
 
 #include <gtest/gtest.h>
 
@@ -41,6 +44,7 @@ testing::Environment* const qt_widgets_environment =
 
 using lanlink::desktop::MainWindow;
 using lanlink::desktop::RuntimeWorker;
+using lanlink::desktop::TopologyCanvas;
 
 RuntimeWorker::BackendFactory fake_backend_factory() {
   return [] {
@@ -153,6 +157,26 @@ TEST(MainWindowTest, UsesLanLinkIconForWindowAndTray) {
   EXPECT_FALSE(tray->icon().isNull());
 }
 
+TEST(MainWindowTest, UsesLanLinkMarkInTitleBar) {
+  MainWindow window(nullptr, fake_backend_factory(), false);
+
+  auto* brand = window.findChild<QLabel*>(QStringLiteral("brandIcon"));
+  ASSERT_NE(brand, nullptr);
+  EXPECT_FALSE(brand->pixmap().isNull());
+}
+
+TEST(MainWindowTest, KeepsSettingsControlsCompactAndReadable) {
+  MainWindow window(nullptr, fake_backend_factory(), false);
+
+  auto* direction = window.findChild<QLabel*>(QStringLiteral("topologyDirectionLabel"));
+  auto* runtime = runtime_toggle(window);
+  ASSERT_NE(direction, nullptr);
+  ASSERT_NE(runtime, nullptr);
+  EXPECT_TRUE(direction->text().contains(QStringLiteral("由拓扑图决定")));
+  EXPECT_GE(runtime->minimumWidth(), 112);
+  EXPECT_LE(runtime->maximumHeight(), 44);
+}
+
 TEST(MainWindowTest, AddsPeerOnlyAfterPeerSignal) {
   MainWindow window(nullptr, fake_backend_factory(), false);
 
@@ -167,6 +191,49 @@ TEST(MainWindowTest, AddsPeerOnlyAfterPeerSignal) {
   ASSERT_TRUE(invoked);
   EXPECT_GE(label_count(window, QStringLiteral("设备 2")), 1);
   EXPECT_EQ(label_count(window, QStringLiteral("等待对端设备")), 0);
+}
+
+TEST(MainWindowTest, TopologyLayoutDrivesPeerDirection) {
+  MainWindow window(nullptr, fake_backend_factory(), false);
+  ASSERT_TRUE(QMetaObject::invokeMethod(
+      &window, "onPeerChanged", Qt::DirectConnection,
+      Q_ARG(QString, QStringLiteral("设备 2")),
+      Q_ARG(QString, QStringLiteral("LANLink 节点")),
+      Q_ARG(QString, QStringLiteral("192.168.1.2:41000")), Q_ARG(qulonglong, 2),
+      Q_ARG(qulonglong, 2), Q_ARG(bool, true)));
+
+  window.showPage(1);
+  window.show();
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+
+  auto* direction = window.findChild<QLabel*>(QStringLiteral("topologyDirectionLabel"));
+  ASSERT_NE(direction, nullptr);
+  EXPECT_TRUE(direction->text().contains(QStringLiteral("当前在右侧")));
+
+  TopologyCanvas* canvas = nullptr;
+  for (auto* candidate : window.findChildren<TopologyCanvas*>()) {
+    if (candidate->isVisible()) {
+      canvas = candidate;
+      break;
+    }
+  }
+  ASSERT_NE(canvas, nullptr);
+  ASSERT_GT(canvas->width(), 0);
+
+  const QPointF press(346.0, 106.0);
+  const QPointF move(36.0, 106.0);
+  QMouseEvent pressEvent(QEvent::MouseButtonPress, press, press, press, Qt::LeftButton,
+                         Qt::LeftButton, Qt::NoModifier);
+  QMouseEvent moveEvent(QEvent::MouseMove, move, move, move, Qt::NoButton, Qt::LeftButton,
+                        Qt::NoModifier);
+  QMouseEvent releaseEvent(QEvent::MouseButtonRelease, move, move, move, Qt::LeftButton,
+                           Qt::NoButton, Qt::NoModifier);
+  QApplication::sendEvent(canvas, &pressEvent);
+  QApplication::sendEvent(canvas, &moveEvent);
+  QApplication::sendEvent(canvas, &releaseEvent);
+
+  EXPECT_TRUE(direction->text().contains(QStringLiteral("当前在左侧")));
+  window.close();
 }
 
 TEST(MainWindowTest, RemovesPeerAfterDiscoveryTimeoutOrDisconnect) {
@@ -277,11 +344,13 @@ TEST(MainWindowTest, StartsAndStopsRuntimeThroughSettingsButton) {
   auto* status = runtime_status(window);
   auto* network = window.findChild<QLabel*>(QStringLiteral("networkLabel"));
   auto* header = window.findChild<QLabel*>(QStringLiteral("runtimeHeaderStatus"));
+  auto* local = window.findChild<QLabel*>(QStringLiteral("localLabel"));
   auto* footer = window.findChild<QLabel*>(QStringLiteral("footerStatusLabel"));
   ASSERT_NE(toggle, nullptr);
   ASSERT_NE(status, nullptr);
   ASSERT_NE(network, nullptr);
   ASSERT_NE(header, nullptr);
+  ASSERT_NE(local, nullptr);
   ASSERT_NE(footer, nullptr);
 
   toggle->click();
@@ -299,6 +368,10 @@ TEST(MainWindowTest, StartsAndStopsRuntimeThroughSettingsButton) {
   EXPECT_EQ(running_toggle->text(), QStringLiteral("停止服务"));
   EXPECT_TRUE(network->text().contains(QStringLiteral("局域网")));
   EXPECT_EQ(header->text(), QStringLiteral("●  运行中"));
+  EXPECT_TRUE(header->styleSheet().contains(QStringLiteral("#123f36")));
+  EXPECT_TRUE(header->styleSheet().contains(QStringLiteral("border: 1px solid")));
+  EXPECT_TRUE(local->wordWrap());
+  EXPECT_TRUE(local->text().contains(QStringLiteral("监听 ")));
   EXPECT_TRUE(footer->text().startsWith(QStringLiteral("LANLink · ")));
 
   running_toggle->click();
@@ -312,6 +385,9 @@ TEST(MainWindowTest, StartsAndStopsRuntimeThroughSettingsButton) {
            current_toggle->text() == QStringLiteral("启动服务") &&
            current_header->text() == QStringLiteral("●  未运行");
   }));
+  EXPECT_TRUE(window.findChild<QLabel*>(QStringLiteral("runtimeHeaderStatus"))
+                  ->styleSheet()
+                  .contains(QStringLiteral("#3f3524")));
   EXPECT_EQ(label_count(window, QStringLiteral("等待对端设备")), 0);
 }
 
@@ -338,6 +414,9 @@ TEST(MainWindowTest, ShowsWorkerStartupErrorAndRemainsRestartable) {
 TEST(MainWindowTest, CrossScreenPreferenceCanBeToggled) {
   MainWindow window(nullptr, fake_backend_factory(), false);
 
+  EXPECT_TRUE(label_contains(window, QStringLiteral("跨屏输入运行参数")));
+  EXPECT_FALSE(label_contains(window, QStringLiteral("M0 输入引擎参数")));
+
   const auto checks = window.findChildren<QCheckBox*>();
   // The first check box belongs to the connection form's auto-topology
   // setting; the next three are the preference rows shown in the screenshot.
@@ -346,9 +425,15 @@ TEST(MainWindowTest, CrossScreenPreferenceCanBeToggled) {
   ASSERT_TRUE(checks[2] != nullptr);
   ASSERT_TRUE(checks[3] != nullptr);
 
+  EXPECT_EQ(checks[1]->sizeHint(), QSize(48, 28));
+  EXPECT_TRUE(checks[1]->parentWidget()->objectName() == QStringLiteral("preferenceRow"));
+  EXPECT_TRUE(checks[1]->parentWidget()->styleSheet().contains(QStringLiteral("transparent")));
   EXPECT_TRUE(checks[1]->isEnabled());
   EXPECT_TRUE(checks[2]->isEnabled());
   EXPECT_FALSE(checks[3]->isEnabled());
+  const auto animations = checks[1]->findChildren<QVariantAnimation*>();
+  ASSERT_EQ(animations.size(), 1);
+  EXPECT_EQ(animations.front()->duration(), 160);
 
   auto* footer = window.findChild<QLabel*>(QStringLiteral("footerStatusLabel"));
   ASSERT_NE(footer, nullptr);

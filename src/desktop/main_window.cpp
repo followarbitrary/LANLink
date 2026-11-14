@@ -2,6 +2,7 @@
 
 #include "pages.hpp"
 #include "icons.hpp"
+#include "topology_canvas.hpp"
 
 #include <QAction>
 #if defined(LANLINK_HAS_QT_NETWORK)
@@ -10,7 +11,6 @@
 #endif
 #include <QApplication>
 #include <QCheckBox>
-#include <QComboBox>
 #include <QFileInfo>
 #include <QHBoxLayout>
 #include <QLineEdit>
@@ -25,6 +25,8 @@
 #include <QTimer>
 #include <QVBoxLayout>
 
+#include <cmath>
+#include <optional>
 #include <utility>
 
 namespace lanlink::desktop {
@@ -83,6 +85,23 @@ QString local_endpoint_for_port(std::uint16_t port) {
   return QStringLiteral("0.0.0.0:%1").arg(port);
 }
 
+std::optional<app::RemoteSide> remote_side_from_topology(const QVector<DeviceState>& devices) {
+  if (devices.size() < 2) return std::nullopt;
+  const auto& local = devices[0];
+  const auto& peer = devices[1];
+  const QPointF localCenter = local.position + QPointF(local.size.width() / 2.0, local.size.height() / 2.0);
+  const QPointF peerCenter = peer.position + QPointF(peer.size.width() / 2.0, peer.size.height() / 2.0);
+  const double dx = peerCenter.x() - localCenter.x();
+  const double dy = peerCenter.y() - localCenter.y();
+  if (std::abs(dx) < std::abs(dy) || std::abs(dx) < 0.001) return std::nullopt;
+  return dx < 0.0 ? app::RemoteSide::kLeft : app::RemoteSide::kRight;
+}
+
+QString remote_side_text(app::RemoteSide side) {
+  return side == app::RemoteSide::kLeft ? QStringLiteral("由拓扑图决定 · 当前在左侧")
+                                        : QStringLiteral("由拓扑图决定 · 当前在右侧");
+}
+
 }  // namespace
 
 MainWindow::MainWindow(QWidget* parent, RuntimeWorker::BackendFactory backend_factory,
@@ -130,8 +149,12 @@ void MainWindow::setupUi() {
   auto* titleLayout = new QHBoxLayout(titleBar);
   titleLayout->setContentsMargins(22, 0, 14, 0);
   titleLayout->setSpacing(10);
-  auto* logo = new QLabel(QStringLiteral("▱"));
-  logo->setStyleSheet(QStringLiteral("color: #8fc3ff; font-size: 28px; font-weight: 600;"));
+  auto* logo = new QLabel;
+  logo->setObjectName(QStringLiteral("brandIcon"));
+  logo->setFixedSize(32, 32);
+  logo->setAlignment(Qt::AlignCenter);
+  logo->setPixmap(QPixmap(QStringLiteral(":/icons/lanlink-icon.png"))
+                      .scaled(30, 30, Qt::KeepAspectRatio, Qt::SmoothTransformation));
   titleLayout->addWidget(logo);
   auto* appName = new QLabel(QStringLiteral("LANLink"));
   appName->setStyleSheet(QStringLiteral("font-size: 24px; font-weight: 600;"));
@@ -141,9 +164,10 @@ void MainWindow::setupUi() {
   statusLabel_ = running;
   running->setObjectName(QStringLiteral("runtimeHeaderStatus"));
   running->setAlignment(Qt::AlignCenter);
-  running->setMinimumWidth(124);
+  running->setMinimumWidth(118);
+  running->setFixedHeight(36);
   running->setStyleSheet(QStringLiteral(
-      "color: #f2c77d; background: #5a4321; border-radius: 22px; padding: 9px 15px; font-size: 15px;"));
+      "color: #f2c77d; background: #3f3524; border: 1px solid #705e3c; border-radius: 17px; padding: 6px 14px; font-size: 14px;"));
   titleLayout->addWidget(running);
   controlLabel_ = new QLabel(QStringLiteral("当前控制：本机输入"));
   controlLabel_->setStyleSheet(QStringLiteral("color: #a6b7ca; font-size: 13px;"));
@@ -177,7 +201,7 @@ void MainWindow::setupUi() {
   bodyLayout->setSpacing(0);
   auto* nav = new QWidget;
   nav->setObjectName(QStringLiteral("nav"));
-  nav->setFixedWidth(180);
+  nav->setFixedWidth(220);
   auto* navLayout = new QVBoxLayout(nav);
   navLayout->setContentsMargins(14, 20, 14, 16);
   navLayout->setSpacing(8);
@@ -206,10 +230,14 @@ void MainWindow::setupUi() {
   auto* local = new QWidget;
   auto* localLayout = new QHBoxLayout(local);
   localLayout->setContentsMargins(12, 10, 8, 10);
+  localLayout->setSpacing(8);
   auto* localIcon = new QLabel;
   localIcon->setPixmap(iconPixmap(IconKind::Monitor, QSize(24, 24), QColor(QStringLiteral("#8fc3ff"))));
   localLayout->addWidget(localIcon, 0, Qt::AlignTop);
   auto* localText = new QLabel(QStringLiteral("本机 · LANLink\n等待启动服务"));
+  localText->setObjectName(QStringLiteral("localLabel"));
+  localText->setWordWrap(true);
+  localText->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
   localLabel_ = localText;
   localText->setStyleSheet(QStringLiteral("color: #cfdae7; font-size: 13px;"));
   localLayout->addWidget(localText);
@@ -218,8 +246,14 @@ void MainWindow::setupUi() {
 
   content_ = new QStackedWidget;
   content_->setObjectName(QStringLiteral("content"));
-  content_->addWidget(makePageContainer(buildOverviewPage(&state_, content_)));
-  content_->addWidget(makePageContainer(buildLayoutPage(&state_, content_)));
+  const auto addTopologyPage = [this](QWidget* page) {
+    if (auto* canvas = page->findChild<TopologyCanvas*>()) {
+      connect(canvas, &TopologyCanvas::layoutChanged, this, &MainWindow::onTopologyLayoutChanged);
+    }
+    content_->addWidget(makePageContainer(page));
+  };
+  addTopologyPage(buildOverviewPage(&state_, content_));
+  addTopologyPage(buildLayoutPage(&state_, content_));
   content_->addWidget(makePageContainer(buildDevicesPage(state_, content_)));
   content_->addWidget(makePageContainer(
       buildTransferPage(&state_, content_,
@@ -467,10 +501,20 @@ void MainWindow::onRuntimeStatusChanged(const QString& status, bool running, boo
     statusLabel_->setText(connected ? QStringLiteral("●  已连接")
                                     : (running ? QStringLiteral("●  运行中")
                                                : QStringLiteral("●  未运行")));
+    const QString statusColor = connected ? QStringLiteral("#9bd9ff")
+                                          : (running ? QStringLiteral("#9be3be")
+                                                     : QStringLiteral("#f2c77d"));
+    const QString statusBackground = connected ? QStringLiteral("#1d425b")
+                                               : (running ? QStringLiteral("#123f36")
+                                                          : QStringLiteral("#3f3524"));
+    const QString statusBorder = connected ? QStringLiteral("#4d8db8")
+                                           : (running ? QStringLiteral("#2c8a76")
+                                                      : QStringLiteral("#705e3c"));
     statusLabel_->setStyleSheet(QStringLiteral(
-        "color: %1; background: %2; border-radius: 22px; padding: 9px 15px; font-size: 15px;")
-                                    .arg(connected ? QStringLiteral("#9be3be") : QStringLiteral("#f2c77d"))
-                                    .arg(connected ? QStringLiteral("#174d3c") : QStringLiteral("#5a4321")));
+        "color: %1; background: %2; border: 1px solid %3; border-radius: 17px; padding: 6px 14px; font-size: 14px;")
+                                    .arg(statusColor)
+                                    .arg(statusBackground)
+                                    .arg(statusBorder));
   }
   updateStatusMessage(QStringLiteral("LANLink · %1").arg(status));
   if (tray_ != nullptr)
@@ -511,6 +555,7 @@ void MainWindow::onPeerChanged(const QString& name, const QString& platform,
     state_.peerName.clear();
     state_.peerEndpoint.clear();
     rebuildPages();
+    syncTopologyDirection();
     return;
   }
   bool changed = false;
@@ -546,6 +591,34 @@ void MainWindow::onPeerChanged(const QString& name, const QString& platform,
   if (!state_.autoDiscoverPeer) state_.options.peer_id = deviceId;
   if (!state_.options.peer_display_id_explicit) state_.options.peer_display_id = displayId;
   rebuildPages();
+  syncTopologyDirection();
+}
+
+void MainWindow::onTopologyLayoutChanged() { syncTopologyDirection(); }
+
+void MainWindow::syncTopologyDirection() {
+  const auto side = remote_side_from_topology(state_.devices);
+  if (!side.has_value()) {
+    if (auto* direction = findChild<QLabel*>(QStringLiteral("topologyDirectionLabel"))) {
+      direction->setText(state_.devices.size() < 2
+                             ? QStringLiteral("由拓扑图决定 · 等待对端布局")
+                             : QStringLiteral("由拓扑图决定 · 当前为上下布局（运行时仅支持左右）"));
+    }
+    return;
+  }
+
+  state_.options.remote_side = *side;
+  state_.options.remote_side_explicit = true;
+  if (auto* direction = findChild<QLabel*>(QStringLiteral("topologyDirectionLabel")))
+    direction->setText(remote_side_text(*side));
+
+  if (runtimeWorker_ != nullptr && runtimeThread_ != nullptr && runtimeThread_->isRunning()) {
+    auto* worker = runtimeWorker_;
+    const auto selectedSide = *side;
+    QMetaObject::invokeMethod(
+        worker, [worker, selectedSide]() { worker->setRemoteSide(selectedSide); },
+        Qt::BlockingQueuedConnection);
+  }
 }
 
 void MainWindow::onRuntimeLog(const QString& message) {
@@ -600,8 +673,14 @@ void MainWindow::rebuildPages() {
   if (content_ == nullptr) return;
   const int current = content_->currentIndex();
   while (content_->count() > 0) delete content_->widget(0);
-  content_->addWidget(makePageContainer(buildOverviewPage(&state_, content_)));
-  content_->addWidget(makePageContainer(buildLayoutPage(&state_, content_)));
+  const auto addTopologyPage = [this](QWidget* page) {
+    if (auto* canvas = page->findChild<TopologyCanvas*>()) {
+      connect(canvas, &TopologyCanvas::layoutChanged, this, &MainWindow::onTopologyLayoutChanged);
+    }
+    content_->addWidget(makePageContainer(page));
+  };
+  addTopologyPage(buildOverviewPage(&state_, content_));
+  addTopologyPage(buildLayoutPage(&state_, content_));
   content_->addWidget(makePageContainer(buildDevicesPage(state_, content_)));
   content_->addWidget(makePageContainer(
       buildTransferPage(&state_, content_,
@@ -634,7 +713,6 @@ void MainWindow::captureSettingsFromUi() {
   auto* connectPort = findChild<QLineEdit*>(QStringLiteral("connectPortEdit"));
   auto* displayId = findChild<QLineEdit*>(QStringLiteral("displayIdEdit"));
   auto* peerDisplayId = findChild<QLineEdit*>(QStringLiteral("peerDisplayIdEdit"));
-  auto* remoteSide = findChild<QComboBox*>(QStringLiteral("remoteSideCombo"));
   auto* autoTopology = findChild<QCheckBox*>(QStringLiteral("autoTopologyCheck"));
   bool ok = false;
   if (deviceId != nullptr) {
@@ -668,11 +746,6 @@ void MainWindow::captureSettingsFromUi() {
     const auto value = peerDisplayId->text().toULongLong(&ok);
     if (ok && value != 0) state_.options.peer_display_id = value;
   }
-  if (remoteSide != nullptr) {
-    state_.options.remote_side = remoteSide->currentData().toString() == QStringLiteral("left")
-                                     ? app::RemoteSide::kLeft
-                                     : app::RemoteSide::kRight;
-  }
   if (connectHost != nullptr) {
     const auto host = connectHost->text().trimmed();
     if (host.isEmpty()) {
@@ -684,8 +757,9 @@ void MainWindow::captureSettingsFromUi() {
   }
   if (autoTopology != nullptr) {
     state_.options.peer_display_id_explicit = !autoTopology->isChecked();
-    state_.options.remote_side_explicit = !autoTopology->isChecked();
   }
+  state_.options.remote_side_explicit = true;
+  syncTopologyDirection();
 }
 
 bool MainWindow::eventFilter(QObject* watched, QEvent* event) {

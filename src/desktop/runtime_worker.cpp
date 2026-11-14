@@ -197,6 +197,27 @@ void RuntimeWorker::stop() {
   emit finished();
 }
 
+void RuntimeWorker::setRemoteSide(app::RemoteSide side) {
+  options_.remote_side = side;
+  options_.remote_side_explicit = true;
+  if (!runtime_) return;
+
+  auto topology = app::make_topology(options_);
+  if (!topology.ok()) {
+    emit logMessage(QStringLiteral("拓扑方向更新失败：%1")
+                        .arg(QString::fromStdString(topology.error())));
+    return;
+  }
+  const auto updated = runtime_->set_topology(std::move(topology.value()));
+  if (!updated.ok()) {
+    emit errorOccurred(QString::fromStdString(updated.error()));
+    return;
+  }
+  topology_selected_ = true;
+  emit logMessage(side == app::RemoteSide::kLeft ? QStringLiteral("拓扑已更新：对端在左侧")
+                                                 : QStringLiteral("拓扑已更新：对端在右侧"));
+}
+
 void RuntimeWorker::sendFile(const QString& path) {
   if (path.isEmpty()) return;
   if (!runtime_ || !runtime_->connected()) {

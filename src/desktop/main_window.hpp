@@ -43,6 +43,7 @@ class MainWindow final : public QMainWindow {
   void onRuntimeStatusChanged(const QString& status, bool running, bool connected);
   void onPeerChanged(const QString& name, const QString& platform, const QString& address,
                      qulonglong deviceId, qulonglong displayId, bool online);
+  void onTopologyLayoutChanged();
   void onRuntimeLog(const QString& message);
   void onRuntimeError(const QString& message);
   void onFileTransferChanged(const QString& name, qulonglong done, qulonglong total,
@@ -60,6 +61,7 @@ class MainWindow final : public QMainWindow {
   void rebuildPages();
   void updateRuntimeControls();
   void captureSettingsFromUi();
+  void syncTopologyDirection();
   void updateStatusMessage(const QString& message);
   void setWindowButtonStyle(QPushButton* button);
 

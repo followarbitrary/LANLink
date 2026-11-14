@@ -34,6 +34,7 @@ class RuntimeWorker final : public QObject {
  public slots:
   void start(app::AppOptions options);
   void stop();
+  void setRemoteSide(app::RemoteSide side);
   void setInputForwardingEnabled(bool enabled);
   void setClipboardSyncEnabled(bool enabled);
   void recoverLocalInput();

@@ -9,19 +9,21 @@
 #include <QCheckBox>
 #include <QAbstractButton>
 #include <QButtonGroup>
-#include <QComboBox>
 #include <QDragEnterEvent>
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMimeData>
 #include <QLineEdit>
+#include <QMouseEvent>
+#include <QPainter>
 #include <QPushButton>
 #include <QRadioButton>
 #include <QScrollArea>
 #include <QSizePolicy>
 #include <QSpacerItem>
 #include <QToolButton>
+#include <QVariantAnimation>
 #include <QVBoxLayout>
 
 #include <functional>
@@ -33,21 +35,24 @@ const QString kPanelStyle = QStringLiteral(
     "QWidget#page { background: #1e2935; }"
     "QFrame#panel { background: #172330; border: 1px solid #1c2b3a; border-radius: 14px; }"
     "QFrame#subpanel { background: #141e2a; border: 1px solid #1c2b3a; border-radius: 14px; }"
+    "QWidget#preferenceRow, QWidget#autoTopologyRow { background: transparent; }"
     "QLabel { color: #edf2f8; background: transparent; }"
     "QLabel#muted { color: #92a7bd; }"
     "QLabel#section { color: #eff4fa; font-size: 21px; font-weight: 600; }"
-    "QPushButton { color: #dce6f2; background: #223347; border: 1px solid #3c526c; border-radius: 9px; padding: 9px 16px; }"
-    "QPushButton:hover { background: #2b425b; }"
-    "QPushButton#primary { color: #14202c; background: #f2f4f7; border: 0; border-radius: 22px; padding: 10px 18px; min-height: 42px; font-weight: 600; }"
-    "QPushButton#secondary { color: #dce6f2; background: #1c3045; border: 1px solid #4b637d; border-radius: 22px; padding: 10px 18px; min-height: 42px; }"
-    "QRadioButton, QCheckBox { color: #e7edf5; font-size: 17px; spacing: 10px; }"
+    "QPushButton { color: #dce6f2; background: #223347; border: 1px solid #3c526c; border-radius: 10px; padding: 0 16px; min-height: 34px; max-height: 40px; font-size: 15px; }"
+    "QPushButton:hover { background: #2b425b; border-color: #5b84aa; }"
+    "QPushButton:pressed { background: #1a2a3a; }"
+    "QPushButton#runtimeToggle { color: #e8f4ff; background: #1f557f; border: 1px solid #5799c8; border-radius: 11px; padding: 0 18px; min-height: 36px; max-height: 42px; font-weight: 600; }"
+    "QPushButton#runtimeToggle:hover { background: #286c9d; border-color: #77b7e4; }"
+    "QPushButton#runtimeToggle:pressed { background: #194566; }"
+    "QPushButton#primary { color: #102235; background: #cfe6fb; border: 1px solid #8fc7f6; border-radius: 18px; padding: 0 18px; min-height: 36px; max-height: 42px; font-weight: 600; }"
+    "QPushButton#primary:hover { background: #e1f1ff; border-color: #b6dbfa; }"
+    "QPushButton#secondary { color: #dce6f2; background: #1c3045; border: 1px solid #4b637d; border-radius: 18px; padding: 0 18px; min-height: 36px; max-height: 42px; }"
+    "QPushButton#secondary:hover { background: #27425d; border-color: #6a8eaf; }"
+    "QRadioButton { color: #e7edf5; font-size: 17px; spacing: 10px; }"
     "QToolButton#settingToggle { color: #172330; background: #f2f4f7; border: 0; border-radius: 14px; font-size: 17px; font-weight: 700; min-width: 28px; max-width: 28px; min-height: 28px; max-height: 28px; }"
     "QToolButton#settingToggle:unchecked { color: #91a3b8; background: #223347; border: 1px solid #51647b; }"
-    "QRadioButton::indicator, QCheckBox::indicator { width: 20px; height: 20px; }"
-    "QCheckBox::indicator { border: 2px solid #7c8da2; border-radius: 10px; background: #202b39; }"
-    "QCheckBox::indicator:checked { background: #f2f4f7; border-color: #f2f4f7; }"
-    "QCheckBox::indicator:checked:after { color: #172330; }"
-    "QRadioButton::indicator { border: 2px solid #647388; border-radius: 10px; background: #202b39; }"
+    "QRadioButton::indicator { width: 20px; height: 20px; border: 2px solid #647388; border-radius: 10px; background: #202b39; }"
     "QRadioButton::indicator:checked { border: 6px solid #f2f4f7; background: #172330; }"
     "QLineEdit { color: #e7edf5; background: #202b39; border: 1px solid #3e5268; border-radius: 8px; padding: 8px 10px; }"
 );
@@ -57,6 +62,86 @@ QLabel* label(const QString& text, const QString& objectName = {}) {
   if (!objectName.isEmpty()) result->setObjectName(objectName);
   return result;
 }
+
+class ToggleSwitch final : public QCheckBox {
+ public:
+  explicit ToggleSwitch(QWidget* parent = nullptr) : QCheckBox(parent), animation_(new QVariantAnimation(this)) {
+    setCursor(Qt::PointingHandCursor);
+    setFocusPolicy(Qt::StrongFocus);
+    setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    setMouseTracking(true);
+    progress_ = isChecked() ? 1.0 : 0.0;
+    animation_->setDuration(160);
+    animation_->setEasingCurve(QEasingCurve::OutCubic);
+    connect(animation_, &QVariantAnimation::valueChanged, this, [this](const QVariant& value) {
+      progress_ = value.toReal();
+      update();
+    });
+    connect(this, &QAbstractButton::toggled, this, [this](bool checked) {
+      animation_->stop();
+      animation_->setStartValue(progress_);
+      animation_->setEndValue(checked ? 1.0 : 0.0);
+      animation_->start();
+    });
+  }
+
+  QSize sizeHint() const override { return QSize(48, 28); }
+
+ protected:
+  void mouseReleaseEvent(QMouseEvent* event) override {
+    if (event->button() == Qt::LeftButton && rect().contains(event->position().toPoint())) {
+      click();
+      event->accept();
+      return;
+    }
+    QCheckBox::mouseReleaseEvent(event);
+  }
+
+  void paintEvent(QPaintEvent*) override {
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing);
+
+    const QRectF track(1.0, 4.0, width() - 2.0, height() - 8.0);
+    const auto mix = [this](const QColor& from, const QColor& to) {
+      return QColor::fromRgbF(from.redF() + (to.redF() - from.redF()) * progress_,
+                              from.greenF() + (to.greenF() - from.greenF()) * progress_,
+                              from.blueF() + (to.blueF() - from.blueF()) * progress_);
+    };
+    QColor trackColor = mix(QColor(QStringLiteral("#2a3d52")), QColor(QStringLiteral("#1677ff")));
+    QColor borderColor = mix(QColor(QStringLiteral("#5a7189")), QColor(QStringLiteral("#6aabff")));
+    QColor thumbColor = QColor(QStringLiteral("#f7fbff"));
+    if (!isEnabled()) {
+      trackColor.setAlpha(110);
+      borderColor.setAlpha(110);
+      thumbColor.setAlpha(150);
+    }
+
+    painter.setPen(QPen(borderColor, 1.5));
+    painter.setBrush(trackColor);
+    painter.drawRoundedRect(track, track.height() / 2.0, track.height() / 2.0);
+
+    constexpr qreal thumbDiameter = 18.0;
+    const qreal inset = (track.height() - thumbDiameter) / 2.0;
+    const qreal startX = track.left() + inset;
+    const qreal endX = track.right() - inset - thumbDiameter;
+    const qreal thumbX = startX + (endX - startX) * progress_;
+    const qreal thumbY = track.top() + inset;
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(thumbColor);
+    painter.drawEllipse(QRectF(thumbX, thumbY, thumbDiameter, thumbDiameter));
+
+    if (hasFocus()) {
+      painter.setPen(QPen(QColor(QStringLiteral("#8fc3ff")), 1.5));
+      painter.setBrush(Qt::NoBrush);
+      painter.drawRoundedRect(QRectF(0.5, 3.5, width() - 1.0, height() - 7.0),
+                              (height() - 8.0) / 2.0, (height() - 8.0) / 2.0);
+    }
+  }
+
+ private:
+  QVariantAnimation* animation_ = nullptr;
+  qreal progress_ = 0.0;
+};
 
 QWidget* pageBase(const QString& title, const QString& subtitle, QWidget* parent) {
   auto* page = new QWidget(parent);
@@ -500,23 +585,40 @@ QWidget* buildSettingsPage(DesktopState* state, QWidget* parent,
   auto* peerDisplayId = addField(QStringLiteral("对端显示器 ID"),
                                  QString::number(state->options.peer_display_id),
                                  QStringLiteral("peerDisplayIdEdit"));
-  auto* remoteSide = new QComboBox;
-  remoteSide->setObjectName(QStringLiteral("remoteSideCombo"));
-  remoteSide->addItem(QStringLiteral("对端在右侧"), QStringLiteral("right"));
-  remoteSide->addItem(QStringLiteral("对端在左侧"), QStringLiteral("left"));
-  remoteSide->setCurrentIndex(state->options.remote_side == app::RemoteSide::kLeft ? 1 : 0);
-  form->addRow(label(QStringLiteral("对端方向")), remoteSide);
-  auto* autoTopology = new QCheckBox(QStringLiteral("自动使用发现的显示器和方向"));
+  auto* topologyDirection = label(
+      state->devices.size() < 2
+          ? QStringLiteral("由拓扑图决定 · 等待对端布局")
+          : (state->options.remote_side == app::RemoteSide::kLeft
+                 ? QStringLiteral("由拓扑图决定 · 当前在左侧")
+                 : QStringLiteral("由拓扑图决定 · 当前在右侧")),
+      QStringLiteral("topologyDirectionLabel"));
+  topologyDirection->setAlignment(Qt::AlignVCenter | Qt::AlignLeft);
+  topologyDirection->setMinimumWidth(250);
+  topologyDirection->setStyleSheet(QStringLiteral(
+      "color: #b9d9f5; background: #1c3045; border: 1px solid #45627c; border-radius: 9px; padding: 7px 12px;"));
+  form->addRow(label(QStringLiteral("对端方向")), topologyDirection);
+  auto* autoTopologyRow = new QWidget;
+  autoTopologyRow->setObjectName(QStringLiteral("autoTopologyRow"));
+  autoTopologyRow->setAttribute(Qt::WA_StyledBackground, true);
+  autoTopologyRow->setStyleSheet(QStringLiteral("background: transparent;"));
+  auto* autoTopologyLayout = new QHBoxLayout(autoTopologyRow);
+  autoTopologyLayout->setContentsMargins(0, 2, 0, 2);
+  autoTopologyLayout->setSpacing(10);
+  autoTopologyLayout->addWidget(label(QStringLiteral("自动使用发现的显示器 ID")));
+  autoTopologyLayout->addStretch();
+  auto* autoTopology = new ToggleSwitch;
   autoTopology->setObjectName(QStringLiteral("autoTopologyCheck"));
-  autoTopology->setChecked(!state->options.peer_display_id_explicit &&
-                           !state->options.remote_side_explicit);
-  form->addRow(QString(), autoTopology);
+  autoTopology->setChecked(!state->options.peer_display_id_explicit);
+  autoTopologyLayout->addWidget(autoTopology);
+  form->addRow(QString(), autoTopologyRow);
   layout->addWidget(connection);
 
   auto* actionRow = new QHBoxLayout;
   auto* toggle = new QPushButton;
   toggle->setObjectName(QStringLiteral("runtimeToggle"));
   toggle->setProperty("class", QStringLiteral("primary"));
+  toggle->setMinimumWidth(120);
+  toggle->setFixedHeight(42);
   toggle->setText(state->running ? QStringLiteral("停止服务") : QStringLiteral("启动服务"));
   auto* status = label(state->status, QStringLiteral("muted"));
   status->setObjectName(QStringLiteral("runtimeFormStatus"));
@@ -528,7 +630,7 @@ QWidget* buildSettingsPage(DesktopState* state, QWidget* parent,
   QObject::connect(toggle, &QPushButton::clicked, page,
                    [state, startRuntime, stopRuntime, deviceId, peerId, listenPort, group,
                     discoveryPort, connectHost, connectPort, displayId, peerDisplayId,
-                    remoteSide, autoTopology, status]() {
+                    autoTopology, status]() {
     if (state->running) {
       if (stopRuntime) stopRuntime();
       return;
@@ -584,11 +686,8 @@ QWidget* buildSettingsPage(DesktopState* state, QWidget* parent,
       }
       options.connect = transport::Endpoint{host.toStdString(), port};
     }
-    options.remote_side = remoteSide->currentData().toString() == QStringLiteral("left")
-                              ? app::RemoteSide::kLeft
-                              : app::RemoteSide::kRight;
     options.peer_display_id_explicit = !autoTopology->isChecked();
-    options.remote_side_explicit = !autoTopology->isChecked();
+    options.remote_side_explicit = true;
     state->options = options;
     if (startRuntime) startRuntime(options);
   });
@@ -600,6 +699,9 @@ QWidget* buildSettingsPage(DesktopState* state, QWidget* parent,
                                                  const QString& objectName, bool checked, bool enabled,
                                                  std::function<void(bool)> callback) {
     auto* row = new QWidget;
+    row->setObjectName(QStringLiteral("preferenceRow"));
+    row->setAttribute(Qt::WA_StyledBackground, true);
+    row->setStyleSheet(QStringLiteral("background: transparent;"));
     auto* rowLayout = new QHBoxLayout(row);
     rowLayout->setContentsMargins(0, 0, 0, 0);
     auto* text = new QVBoxLayout;
@@ -609,7 +711,7 @@ QWidget* buildSettingsPage(DesktopState* state, QWidget* parent,
     text->addWidget(label(subtitle, QStringLiteral("muted")));
     rowLayout->addLayout(text);
     rowLayout->addStretch();
-    auto* check = new QCheckBox;
+    auto* check = new ToggleSwitch;
     check->setObjectName(objectName);
     check->setChecked(checked);
     check->setEnabled(enabled);
@@ -632,15 +734,17 @@ QWidget* buildSettingsPage(DesktopState* state, QWidget* parent,
   auto* m0 = panel(QStringLiteral("subpanel"));
   auto* m0Layout = new QVBoxLayout(m0);
   m0Layout->setContentsMargins(18, 16, 18, 16);
-  auto* m0Title = label(QStringLiteral("M0 输入引擎参数"));
+  auto* m0Title = label(QStringLiteral("跨屏输入运行参数"));
   m0Title->setStyleSheet(QStringLiteral("font-size: 21px; font-weight: 600;"));
   m0Layout->addWidget(m0Title);
+  m0Layout->addWidget(label(QStringLiteral("用于保持连接、判断边缘触发并交接输入控制。"),
+                            QStringLiteral("muted")));
   const QVector<QPair<QString, QString>> rows = {
-      {QStringLiteral("心跳间隔"), QStringLiteral("1000 ms")},
-      {QStringLiteral("失联超时"), QStringLiteral("3000 ms")},
-      {QStringLiteral("输入租约"), QStringLiteral("3000 ms")},
-      {QStringLiteral("越界阈值"), QStringLiteral("4 px")},
-      {QStringLiteral("目标入口安全内距"), QStringLiteral("8 px")},
+      {QStringLiteral("连接保活间隔"), QStringLiteral("1000 ms")},
+      {QStringLiteral("连接失效判定"), QStringLiteral("3000 ms")},
+      {QStringLiteral("输入控制租期"), QStringLiteral("3000 ms")},
+      {QStringLiteral("边缘触发距离"), QStringLiteral("4 px")},
+      {QStringLiteral("目标端安全边距"), QStringLiteral("8 px")},
   };
   for (const auto& [name, value] : rows) {
     auto* row = new QHBoxLayout;
