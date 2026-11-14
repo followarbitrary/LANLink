@@ -54,6 +54,10 @@ if [[ -d "${build_dir}/lanlink_desktop.app" ]]; then
     exit 1
   fi
   macdeployqt "${build_dir}/lanlink_desktop.app" -always-overwrite
+  # macdeployqt rewrites nested Qt library paths, which invalidates any
+  # signatures embedded in those libraries. Re-sign the complete bundle so
+  # macOS can launch it directly from the DMG.
+  codesign --force --deep --sign - "${build_dir}/lanlink_desktop.app"
   ditto "${build_dir}/lanlink_desktop.app" "${package_dir}/lanlink_desktop.app"
 elif [[ -x "${build_dir}/lanlink_desktop" ]]; then
   install -m 755 "${build_dir}/lanlink_desktop" "${package_dir}/lanlink_desktop"
