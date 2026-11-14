@@ -597,7 +597,7 @@ QWidget* buildSettingsPage(DesktopState* state, QWidget* parent,
                 QStringLiteral("crossScreenCheck"), state->crossScreenEnabled, true,
                 std::move(toggleCrossScreen));
   addPreference(QStringLiteral("剪贴板同步"),
-                QStringLiteral("同步文本、HTML 和 PNG，单次内容上限 4 MiB"),
+                QStringLiteral("同步文本、HTML 和 PNG，单次剪贴板包上限 4 MiB（含协议开销）"),
                 QStringLiteral("clipboardSyncCheck"), state->clipboardEnabled, true,
                 std::move(toggleClipboard));
   addPreference(QStringLiteral("文件传输"), QStringLiteral("当前核心未提供文件传输协议"),

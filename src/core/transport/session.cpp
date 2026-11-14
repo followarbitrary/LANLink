@@ -299,6 +299,10 @@ Result<void> PeerSession::drop_clipboard(const char* error) {
 
 Result<void> PeerSession::retry_pending_clipboard() {
     if (!pending_clipboard_apply_.has_value()) return Result<void>::success();
+    if (!clipboard_sync_enabled(config_)) {
+        pending_clipboard_apply_.reset();
+        return Result<void>::success();
+    }
     const auto& data = *pending_clipboard_apply_;
     if (config_.clipboard_backend != nullptr) {
         auto applied = data.text.has_value() || data.html.has_value() || data.png.has_value()
@@ -460,6 +464,7 @@ Result<void> PeerSession::dispatch_message(const protocol::Message& message,
         std::holds_alternative<protocol::ClipboardEnd>(message)) {
         if (!clipboard_sync_enabled(config_)) {
             clipboard_receive_.reset();
+            pending_clipboard_apply_.reset();
             return Result<void>::success();
         }
         if (const auto* begin = std::get_if<protocol::ClipboardBegin>(&message))

@@ -24,6 +24,7 @@ namespace lanlink::platform {
 namespace {
 constexpr wchar_t kWindowClass[] = L"LANLink.ClipboardWindow";
 constexpr wchar_t kWindowTitle[] = L"LANLink Clipboard";
+constexpr UINT kFlushNotificationsMessage = WM_APP + 0x4a;
 
 Result<std::string> wide_to_utf8(const wchar_t* value, int length) {
   if (value == nullptr || length < 0)
@@ -211,6 +212,14 @@ std::string parse_html_clipboard_payload(const std::vector<std::uint8_t>& bytes)
 }
 }  // namespace
 
+namespace detail {
+void drain_clipboard_update_messages() {
+  MSG stale{};
+  while (PeekMessageW(&stale, nullptr, WM_CLIPBOARDUPDATE, WM_CLIPBOARDUPDATE, PM_REMOVE)) {
+  }
+}
+}  // namespace detail
+
 struct WindowsClipboardBackend::Impl {
   std::thread thread;
   std::mutex mutex;
@@ -352,6 +361,17 @@ struct WindowsClipboardBackend::Impl {
 
     MSG message{};
     while (window != nullptr && GetMessageW(&message, nullptr, 0, 0) > 0) {
+      if (message.message == kFlushNotificationsMessage) {
+        {
+          std::lock_guard lock(mutex);
+          changes.clear();
+          pending_error.clear();
+        }
+        detail::drain_clipboard_update_messages();
+        auto* completed = reinterpret_cast<HANDLE>(message.wParam);
+        if (completed != nullptr) SetEvent(completed);
+        continue;
+      }
       TranslateMessage(&message);
       DispatchMessageW(&message);
     }
@@ -417,9 +437,19 @@ Result<void> WindowsClipboardBackend::poll() {
 
 Result<void> WindowsClipboardBackend::discard_pending_notifications() {
   if (!impl_->thread.joinable()) return Result<void>::success();
-  std::lock_guard lock(impl_->mutex);
-  impl_->changes.clear();
-  impl_->pending_error.clear();
+  HANDLE completed = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  if (completed == nullptr) return Result<void>::failure("clipboard drain event failed");
+  const auto thread_id = impl_->thread_id;
+  if (thread_id == 0 ||
+      !PostThreadMessageW(thread_id, kFlushNotificationsMessage,
+                          reinterpret_cast<WPARAM>(completed), 0)) {
+    CloseHandle(completed);
+    return Result<void>::failure("clipboard drain dispatch failed");
+  }
+  const auto wait_result = WaitForSingleObject(completed, INFINITE);
+  CloseHandle(completed);
+  if (wait_result != WAIT_OBJECT_0)
+    return Result<void>::failure("clipboard drain wait failed");
   return Result<void>::success();
 }
 
@@ -516,6 +546,10 @@ Result<void> WindowsClipboardBackend::clear() { return write(ClipboardData{}); }
 #else
 
 namespace lanlink::platform {
+namespace detail {
+void drain_clipboard_update_messages() {}
+}  // namespace detail
+
 struct WindowsClipboardBackend::Impl {};
 
 WindowsClipboardBackend::WindowsClipboardBackend() : impl_(std::make_unique<Impl>()) {

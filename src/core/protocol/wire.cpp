@@ -120,8 +120,9 @@ bool valid_clipboard_chunk(const ClipboardChunk& value) {
     if (zero(value.source) || value.sequence == 0 ||
         !valid_clipboard_format(static_cast<std::uint8_t>(value.format)) ||
         value.data.size() > kMaxClipboardChunkDataSize ||
-        value.offset > kMaxClipboardPackageSize ||
-        static_cast<std::uint64_t>(value.offset) + value.data.size() > kMaxClipboardPackageSize)
+        value.offset > kMaxClipboardPayloadSize ||
+        static_cast<std::uint64_t>(value.offset) + value.data.size() >
+            kMaxClipboardPayloadSize)
         return false;
     switch (value.format) {
     case ClipboardFormat::kText:

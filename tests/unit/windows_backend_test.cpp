@@ -1,8 +1,13 @@
 #include "lanlink/platform/windows_input_backend.hpp"
+#include "lanlink/platform/windows_clipboard_backend.hpp"
 
 #include <gtest/gtest.h>
 
 #include <mutex>
+
+#if defined(_WIN32)
+#include <windows.h>
+#endif
 
 namespace lanlink::platform {
 namespace {
@@ -114,6 +119,29 @@ TEST(WindowsInputBackend, StartWhileRunningDoesNotWaitForHookThread) {
   backend.stop();
 #else
   GTEST_SKIP() << "Windows hook lifecycle is only exercised on Windows";
+#endif
+}
+
+TEST(WindowsClipboardBackend, DiscardPendingNotificationsSynchronizesWithBackendThread) {
+#if defined(_WIN32)
+  MSG initialize{};
+  PeekMessageW(&initialize, nullptr, 0, 0, PM_NOREMOVE);
+  ASSERT_TRUE(PostThreadMessageW(GetCurrentThreadId(), WM_CLIPBOARDUPDATE, 0, 0));
+  MSG queued{};
+  ASSERT_TRUE(PeekMessageW(&queued, nullptr, WM_CLIPBOARDUPDATE, WM_CLIPBOARDUPDATE,
+                           PM_NOREMOVE));
+  detail::drain_clipboard_update_messages();
+  EXPECT_FALSE(PeekMessageW(&queued, nullptr, WM_CLIPBOARDUPDATE, WM_CLIPBOARDUPDATE,
+                            PM_NOREMOVE));
+
+  WindowsClipboardBackend backend;
+  const auto started = backend.start({});
+  if (!started.ok()) GTEST_SKIP() << started.error();
+  EXPECT_TRUE(backend.discard_pending_notifications().ok());
+  EXPECT_TRUE(backend.poll().ok());
+  backend.stop();
+#else
+  GTEST_SKIP() << "Windows clipboard lifecycle is only exercised on Windows";
 #endif
 }
 

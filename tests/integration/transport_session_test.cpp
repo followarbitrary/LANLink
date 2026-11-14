@@ -617,6 +617,23 @@ TEST(PeerSession, ClipboardBackendFailureDoesNotDisconnectPeer) {
     EXPECT_TRUE(pair.target->connected());
 }
 
+TEST(PeerSession, DisabledSyncDropsPendingBackendApply) {
+    bool enabled = true;
+    auto pair = make_clipboard_pair(260, [] { return true; }, [&enabled] { return enabled; });
+    pair.target_backend->stop();
+    ClipboardData pending;
+    pending.text = "must not apply while disabled";
+    ASSERT_TRUE(pair.source->send_clipboard(pending).ok());
+    for (int attempt = 0; attempt < 16; ++attempt)
+        ASSERT_TRUE(pair.target->pump({}, 10ms).ok());
+    enabled = false;
+    ASSERT_TRUE(pair.target_backend->start({}).ok());
+    ASSERT_TRUE(pair.target->tick({}).ok());
+    EXPECT_EQ(pair.target_backend->write_count(), 0u);
+    EXPECT_EQ(pair.target_backend->data(), ClipboardData{});
+    EXPECT_TRUE(pair.target->connected());
+}
+
 } // namespace
 
 } // namespace
