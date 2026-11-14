@@ -137,6 +137,12 @@ TEST(MainWindowTest, DoesNotShowPlaceholderWithoutPeer) {
   EXPECT_EQ(label_count(window, QStringLiteral("等待对端设备")), 0);
 }
 
+TEST(MainWindowTest, HidesQtConsoleSubtitleFromTitleBar) {
+  MainWindow window(nullptr, fake_backend_factory(), false);
+
+  EXPECT_FALSE(label_contains(window, QStringLiteral("Qt6 控制台")));
+}
+
 TEST(MainWindowTest, AddsPeerOnlyAfterPeerSignal) {
   MainWindow window(nullptr, fake_backend_factory(), false);
 

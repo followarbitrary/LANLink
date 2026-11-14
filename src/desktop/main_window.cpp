@@ -134,9 +134,6 @@ void MainWindow::setupUi() {
   auto* appName = new QLabel(QStringLiteral("LANLink"));
   appName->setStyleSheet(QStringLiteral("font-size: 24px; font-weight: 600;"));
   titleLayout->addWidget(appName);
-  auto* preview = new QLabel(QStringLiteral("Qt6 控制台"));
-  preview->setStyleSheet(QStringLiteral("color: #8fa2b8; font-size: 15px;"));
-  titleLayout->addWidget(preview);
   titleLayout->addStretch();
   auto* running = new QLabel(QStringLiteral("●  未运行"));
   statusLabel_ = running;
