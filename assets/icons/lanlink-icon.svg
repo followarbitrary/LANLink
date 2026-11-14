@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">LANLink icon</title>
+  <desc id="desc">Two outlined endpoints connected by a cursor path.</desc>
+  <g fill="none" stroke="#1677FF" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M154 512C260 366 382 366 468 476" stroke-width="28"/>
+    <path d="M556 548C642 658 764 658 870 512" stroke-width="28"/>
+    <circle cx="154" cy="512" r="30" stroke-width="24"/>
+    <circle cx="870" cy="512" r="30" stroke-width="24"/>
+    <path d="M490 452L560 512L528 514L544 560L520 568L506 524L478 548Z" stroke-width="14"/>
+  </g>
+</svg>

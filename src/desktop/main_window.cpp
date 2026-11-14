@@ -92,6 +92,7 @@ MainWindow::MainWindow(QWidget* parent, RuntimeWorker::BackendFactory backend_fa
       backend_factory_(std::move(backend_factory)),
       clipboard_backend_factory_(std::move(clipboard_backend_factory)) {
   setWindowTitle(QStringLiteral("LANLink"));
+  setWindowIcon(QIcon(QStringLiteral(":/icons/lanlink-icon.png")));
   setWindowFlags(Qt::FramelessWindowHint | Qt::Window);
   setAttribute(Qt::WA_TranslucentBackground, false);
   setMinimumSize(820, 560);
@@ -282,7 +283,7 @@ void MainWindow::showPage(int index) {
 
 void MainWindow::setupTray() {
   tray_ = new QSystemTrayIcon(this);
-  tray_->setIcon(style()->standardIcon(QStyle::SP_ComputerIcon));
+  tray_->setIcon(QIcon(QStringLiteral(":/icons/lanlink-icon.png")));
   tray_->setToolTip(QStringLiteral("LANLink · 未启动"));
   auto* menu = new QMenu(this);
   auto* open = menu->addAction(QStringLiteral("打开控制面板"));

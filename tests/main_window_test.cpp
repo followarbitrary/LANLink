@@ -11,6 +11,7 @@
 #include <QLineEdit>
 #include <QMetaObject>
 #include <QPushButton>
+#include <QSystemTrayIcon>
 #include <QThread>
 
 #include <gtest/gtest.h>
@@ -141,6 +142,15 @@ TEST(MainWindowTest, HidesQtConsoleSubtitleFromTitleBar) {
   MainWindow window(nullptr, fake_backend_factory(), false);
 
   EXPECT_FALSE(label_contains(window, QStringLiteral("Qt6 控制台")));
+}
+
+TEST(MainWindowTest, UsesLanLinkIconForWindowAndTray) {
+  MainWindow window(nullptr, fake_backend_factory(), false);
+
+  EXPECT_FALSE(window.windowIcon().isNull());
+  auto* tray = window.findChild<QSystemTrayIcon*>();
+  ASSERT_NE(tray, nullptr);
+  EXPECT_FALSE(tray->icon().isNull());
 }
 
 TEST(MainWindowTest, AddsPeerOnlyAfterPeerSignal) {

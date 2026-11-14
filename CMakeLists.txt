@@ -74,15 +74,23 @@ if(LANLINK_BUILD_DESKTOP)
       src/desktop/topology_canvas.hpp
       src/desktop/pages.cpp
       src/desktop/pages.hpp
+      src/desktop/resources.qrc
     )
     set_target_properties(lanlink_desktop PROPERTIES AUTOMOC ON AUTOUIC ON AUTORCC ON)
     if(APPLE)
+      target_sources(lanlink_desktop PRIVATE assets/icons/LANLink.icns)
+      set_source_files_properties(assets/icons/LANLink.icns
+        PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
       set_target_properties(lanlink_desktop PROPERTIES
         MACOSX_BUNDLE ON
         MACOSX_BUNDLE_GUI_IDENTIFIER "com.aeg.lanlink"
         MACOSX_BUNDLE_BUNDLE_NAME "LANLink"
+        MACOSX_BUNDLE_ICON_FILE "LANLink.icns"
         MACOSX_BUNDLE_SHORT_VERSION_STRING "0.1"
         MACOSX_BUNDLE_BUNDLE_VERSION "0.1")
+    endif()
+    if(WIN32)
+      target_sources(lanlink_desktop PRIVATE src/desktop/lanlink.rc)
     endif()
     target_compile_features(lanlink_desktop PRIVATE cxx_std_20)
     target_link_libraries(lanlink_desktop PRIVATE Qt6::Widgets)
@@ -241,8 +249,9 @@ if(LANLINK_BUILD_DESKTOP AND LANLINK_QT6_WIDGETS_FOUND AND Qt6Test_FOUND)
     src/desktop/topology_canvas.cpp
     src/desktop/topology_canvas.hpp
     src/desktop/runtime_worker.cpp
-    src/desktop/runtime_worker.hpp)
-  set_target_properties(main_window_test PROPERTIES AUTOMOC ON)
+    src/desktop/runtime_worker.hpp
+    src/desktop/resources.qrc)
+  set_target_properties(main_window_test PROPERTIES AUTOMOC ON AUTORCC ON)
   target_compile_features(main_window_test PRIVATE cxx_std_20)
   target_include_directories(main_window_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
