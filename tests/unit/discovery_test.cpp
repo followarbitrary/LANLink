@@ -216,3 +216,20 @@ TEST(Discovery, BroadcastTopologyNeverDowngradesLocalRevision) {
     ASSERT_EQ(service.value().topology_snapshots().size(), 1u);
     EXPECT_EQ(service.value().topology_snapshots()[0].revision, 2u);
 }
+
+TEST(Discovery, RejectsSnapshotRevisionDifferentFromTopologyVersion) {
+    ScreenTopology topology;
+    Display display{id(10), id(20), Rect{0, 0, 10, 10}, 1.0, Rotation::k0};
+    ASSERT_TRUE(topology.set_snapshot(1, {display}, {}).ok());
+    EXPECT_FALSE(DiscoveryService::encode_topology(TopologySnapshot{id(2), 2, topology, "test-group"}).ok());
+}
+
+TEST(Discovery, ValidatesOlderBroadcastBeforeIgnoringRevision) {
+    auto service = DiscoveryService::bind(config(42007));
+    ASSERT_TRUE(service.ok());
+    ASSERT_TRUE(service.value().broadcast_topology(sample_topology(2), 2).ok());
+    ScreenTopology topology;
+    Display display{id(10), id(20), Rect{0, 0, 10, 10}, 1.0, Rotation::k0};
+    ASSERT_TRUE(topology.set_snapshot(1, {display}, {}).ok());
+    EXPECT_FALSE(service.value().broadcast_topology(TopologySnapshot{id(1), 2, topology, "test-group"}).ok());
+}

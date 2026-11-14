@@ -161,7 +161,8 @@ bool send_packet(Socket socket, std::uint16_t port, std::string_view packet) {
 Result<std::string> DiscoveryService::encode_topology(const TopologySnapshot& snapshot) {
     if (!valid_group(snapshot.group) || snapshot.origin == DeviceId{} ||
         snapshot.topology.displays().size() > kMaxTopologyDisplays ||
-        snapshot.topology.links().size() > kMaxTopologyLinks)
+        snapshot.topology.links().size() > kMaxTopologyLinks ||
+        snapshot.revision != snapshot.topology.version())
         return Result<std::string>::failure("invalid topology snapshot");
     std::ostringstream out;
     out << std::setprecision(17) << "LANLINK2 " << snapshot.group << ' ' << snapshot.origin.high << ' '
@@ -382,11 +383,11 @@ Result<void> DiscoveryService::broadcast_topology(const TopologySnapshot& snapsh
     }
     if (snapshot.group != impl_->config.group || snapshot.origin != impl_->config.device_id)
         return Result<void>::failure("topology snapshot origin or group mismatch");
+    auto encoded = encode_topology(snapshot);
+    if (!encoded.ok()) return Result<void>::failure(encoded.error());
     auto existing = impl_->topology_snapshots.find(snapshot.origin);
     if (existing != impl_->topology_snapshots.end() && snapshot.revision <= existing->second.revision)
         return Result<void>::success();
-    auto encoded = encode_topology(snapshot);
-    if (!encoded.ok()) return Result<void>::failure(encoded.error());
     if (!send_packet(impl_->socket, impl_->config.discovery_port, encoded.value()))
         return Result<void>::failure("topology broadcast failed");
     impl_->local_topology = snapshot;
