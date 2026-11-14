@@ -84,7 +84,7 @@ Result<void> InputNodeRuntime::set_clipboard_sync_enabled(bool enabled, TimePoin
   }
   if (config_.clipboard_sync_enabled == enabled) return Result<void>::success();
   config_.clipboard_sync_enabled = enabled;
-  if (!enabled) {
+  {
     std::lock_guard lock(queue_mutex_);
     queued_clipboard_changes_.clear();
     clipboard_fingerprint_.reset();
@@ -139,11 +139,8 @@ Result<void> InputNodeRuntime::start() {
     auto clipboard_started = config_.clipboard_backend->start(
         [this](platform::ClipboardData data) { queue_clipboard_change(std::move(data)); });
     if (!clipboard_started.ok()) {
+      debug::warn("clipboard backend start failed error=", clipboard_started.error());
       config_.clipboard_backend->stop();
-      config_.backend->stop();
-      listener_->close();
-      listener_.reset();
-      return clipboard_started;
     }
   }
   running_ = true;

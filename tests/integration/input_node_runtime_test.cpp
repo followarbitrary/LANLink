@@ -1,6 +1,7 @@
 #include "lanlink/common/config.hpp"
 #include "lanlink/platform/fake_input_backend.hpp"
 #include "lanlink/platform/fake_clipboard_backend.hpp"
+#include "lanlink/platform/clipboard_backend.hpp"
 #include "lanlink/runtime/node.hpp"
 
 #include <gtest/gtest.h>
@@ -13,6 +14,53 @@ using namespace lanlink;
 using namespace lanlink::platform;
 using namespace lanlink::runtime;
 using namespace lanlink::transport;
+
+class FailingClipboardBackend final : public IClipboardBackend {
+ public:
+  Result<void> start(ChangeCallback) override {
+    started = true;
+    return Result<void>::failure("clipboard startup failed");
+  }
+  void stop() override { stopped = true; }
+  Result<void> poll() override { return Result<void>::success(); }
+  Result<ClipboardData> read() const override { return Result<ClipboardData>::success({}); }
+  Result<void> write(const ClipboardData&) override { return Result<void>::success(); }
+  Result<void> clear() override { return Result<void>::success(); }
+  const std::string& last_error() const noexcept override { return error; }
+
+  bool started{false};
+  bool stopped{false};
+  std::string error{"clipboard startup failed"};
+};
+
+class ManualClipboardBackend final : public IClipboardBackend {
+ public:
+  Result<void> start(ChangeCallback callback) override {
+    callback_ = std::move(callback);
+    return Result<void>::success();
+  }
+  void stop() override { callback_ = {}; }
+  Result<void> poll() override { return Result<void>::success(); }
+  Result<ClipboardData> read() const override { return Result<ClipboardData>::success(data_); }
+  Result<void> write(const ClipboardData& data) override {
+    data_ = data;
+    ++write_count_;
+    return Result<void>::success();
+  }
+  Result<void> clear() override { return write(ClipboardData{}); }
+  const std::string& last_error() const noexcept override { return error_; }
+
+  void emit(ClipboardData data) {
+    data_ = data;
+    if (callback_) callback_(std::move(data));
+  }
+
+ private:
+  ChangeCallback callback_;
+  ClipboardData data_;
+  std::size_t write_count_{0};
+  std::string error_;
+};
 
 Uuid128 id(std::uint64_t value) { return {value, value + 1000}; }
 
@@ -936,7 +984,11 @@ TEST(InputNodeRuntime, ClipboardChangesBroadcastOnNextTickOnlyWhenEnabled) {
   second.text = "second";
   left_clipboard.emit_change(second);
   ASSERT_TRUE(left->tick(now).ok());
-  ASSERT_TRUE(right->poll(now, 0ms).ok());
+  for (int i = 0; i < 4; ++i) {
+    ASSERT_TRUE(right->poll(now, 0ms).ok());
+    ASSERT_TRUE(right->tick(now).ok());
+    now += 1ms;
+  }
   EXPECT_EQ(right_clipboard.data(), second);
 
   left_clipboard.emit_change(second);
@@ -961,7 +1013,11 @@ TEST(InputNodeRuntime, ClipboardChangesBroadcastOnNextTickOnlyWhenEnabled) {
   third.text = "third";
   left_clipboard.emit_change(third);
   ASSERT_TRUE(left->tick(now).ok());
-  ASSERT_TRUE(right->poll(now, 0ms).ok());
+  for (int i = 0; i < 4; ++i) {
+    ASSERT_TRUE(right->poll(now, 0ms).ok());
+    ASSERT_TRUE(right->tick(now).ok());
+    now += 1ms;
+  }
   EXPECT_EQ(right_clipboard.data(), third);
 }
 
@@ -1004,6 +1060,57 @@ TEST(InputNodeRuntime, ClipboardRemoteWritesDoNotEchoBack) {
   ASSERT_TRUE(left->poll(now, 0ms).ok());
   EXPECT_EQ(left_clipboard.data(), remote);
   EXPECT_EQ(right_clipboard.write_count(), 0u);
+}
+
+TEST(InputNodeRuntime, ReenableBeforeTickDoesNotBroadcastDisabledChange) {
+  FakeInputBackend left_input;
+  FakeInputBackend right_input;
+  ManualClipboardBackend left_clipboard;
+  FakeClipboardBackend right_clipboard;
+  auto left_result = InputNodeRuntime::create(config(
+      id(171), id(172), AuthenticatedPeer{id(173)}, id(174), Endpoint{"127.0.0.1", 0},
+      &left_input, 256, &left_clipboard, true));
+  auto right_result = InputNodeRuntime::create(config(
+      id(173), id(175), AuthenticatedPeer{id(171)}, id(176), Endpoint{"127.0.0.1", 0},
+      &right_input, 256, &right_clipboard, true));
+  ASSERT_TRUE(left_result.ok()) << left_result.error();
+  ASSERT_TRUE(right_result.ok()) << right_result.error();
+  auto left = std::move(left_result.value());
+  auto right = std::move(right_result.value());
+  ASSERT_TRUE(left->set_topology(topology_for(id(174), id(176), true)).ok());
+  ASSERT_TRUE(right->set_topology(topology_for(id(176), id(174), false)).ok());
+  ASSERT_TRUE(left->start().ok());
+  ASSERT_TRUE(right->start().ok());
+  ASSERT_TRUE(left->connect_peer(right->local_endpoint()).ok());
+  IClock::time_point now{};
+  pump_pair(*left, *right, now, 20);
+
+  ASSERT_TRUE(left->set_clipboard_sync_enabled(false, now).ok());
+  ClipboardData disabled;
+  disabled.text = "disabled";
+  left_clipboard.emit(disabled);
+  ASSERT_TRUE(left->set_clipboard_sync_enabled(true, now).ok());
+  ASSERT_TRUE(left->tick(now).ok());
+  ASSERT_TRUE(right->poll(now, 0ms).ok());
+  EXPECT_EQ(right_clipboard.data(), ClipboardData{});
+  EXPECT_EQ(right_clipboard.write_count(), 0u);
+}
+
+TEST(InputNodeRuntime, ClipboardStartupFailureDoesNotStopInputBackend) {
+  FakeInputBackend input;
+  FailingClipboardBackend clipboard;
+  auto result = InputNodeRuntime::create(config(
+      id(181), id(182), AuthenticatedPeer{id(183)}, id(184), Endpoint{"127.0.0.1", 0},
+      &input, 256, &clipboard, true));
+  ASSERT_TRUE(result.ok()) << result.error();
+  auto runtime = std::move(result.value());
+  ASSERT_TRUE(runtime->start().ok());
+  EXPECT_TRUE(runtime->running());
+  EXPECT_TRUE(input.status().running);
+  EXPECT_TRUE(clipboard.started);
+  ASSERT_TRUE(runtime->stop(IClock::time_point{}).ok());
+  EXPECT_TRUE(clipboard.stopped);
+  EXPECT_FALSE(input.status().running);
 }
 
 }  // namespace
