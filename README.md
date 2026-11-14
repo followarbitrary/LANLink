@@ -62,7 +62,7 @@ chmod +x scripts/package-macos.sh
 ./scripts/package-macos.sh
 ```
 
-The script uses the host architecture reported by `uname -m` and writes `dist/lanlink-macos-<architecture>.tar.gz`. The archive always contains the CLI runtime (`lanlink_app`). When Qt6 and `macdeployqt` are available, it also contains a self-contained `lanlink_desktop.app` bundle with the Qt6 control panel. Extract the archive, then run `./lanlink_app --help` or open `lanlink_desktop.app`. Both entry points still need Accessibility permission under **System Settings → Privacy & Security → Accessibility**.
+The script uses the host architecture reported by `uname -m` and writes `dist/lanlink-macos-<architecture>.tar.gz`. The archive always contains the CLI runtime (`lanlink_app`). When Qt6 and `macdeployqt` are available, it also contains a self-contained `lanlink_desktop.app` bundle with the Qt6 control panel, and creates `dist/lanlink-macos-<architecture>.dmg`. Double-click the DMG, then drag `LANLink.app` onto the `Applications` shortcut. The desktop app starts the Core runtime automatically when it opens; both the app and the CLI still need Accessibility permission under **System Settings → Privacy & Security → Accessibility**.
 
 The macOS archive uses local ad-hoc signatures only; it is not Developer ID signed or notarized. Verify the package before copying it to another Mac:
 
@@ -72,7 +72,10 @@ tar -xzf dist/lanlink-macos-$(uname -m).tar.gz
 file lanlink-macos-$(uname -m)/lanlink_app
 test ! -e lanlink-macos-$(uname -m)/lanlink_desktop.app || file lanlink-macos-$(uname -m)/lanlink_desktop.app/Contents/MacOS/lanlink_desktop
 shasum -a 256 dist/lanlink-macos-$(uname -m).tar.gz
+shasum -a 256 dist/lanlink-macos-$(uname -m).dmg
 ```
+
+The DMG is an unsigned drag-and-drop installer and is not Developer ID signed or notarized. macOS may ask you to approve the app the first time it is opened.
 
 The `file` output should report the same architecture as the machine that ran the packaging script (`arm64` or `x86_64`). For distribution outside a trusted development environment, sign and notarize the binary with an Apple Developer ID before sharing it.
 

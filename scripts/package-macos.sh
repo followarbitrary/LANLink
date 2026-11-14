@@ -11,6 +11,8 @@ architecture="$(uname -m)"
 package_name="lanlink-macos-${architecture}"
 package_dir="${staging_root}/${package_name}"
 archive="${dist_dir}/${package_name}.tar.gz"
+dmg_staging="${dist_dir}/dmg/${package_name}"
+dmg="${dist_dir}/${package_name}.dmg"
 qt_prefix=""
 
 if [[ "${architecture}" != "arm64" && "${architecture}" != "x86_64" ]]; then
@@ -66,3 +68,20 @@ done
 
 tar -czf "${archive}" -C "${staging_root}" "${package_name}"
 printf 'Created %s\n' "${archive}"
+
+if [[ -d "${package_dir}/lanlink_desktop.app" ]]; then
+  rm -rf "${dmg_staging}" "${dmg}"
+  mkdir -p "${dmg_staging}"
+  ditto "${package_dir}/lanlink_desktop.app" "${dmg_staging}/LANLink.app"
+  ln -s /Applications "${dmg_staging}/Applications"
+  cp "${package_dir}/README.md" "${dmg_staging}/README.md"
+  hdiutil create \
+    -volname "LANLink" \
+    -srcfolder "${dmg_staging}" \
+    -ov \
+    -format UDZO \
+    "${dmg}"
+  printf 'Created %s\n' "${dmg}"
+else
+  printf 'Qt6 desktop app is unavailable; skipping DMG creation.\n'
+fi
