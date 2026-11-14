@@ -80,8 +80,30 @@ std::uint16_t test_port() {
 
 }  // namespace
 
-TEST(MainWindowTest, RejectsInvalidSettingsWithoutStartingWorker) {
+TEST(MainWindowTest, StartsRuntimeAutomaticallyOnConstruction) {
   MainWindow window(nullptr, fake_backend_factory());
+  auto* toggle = runtime_toggle(window);
+  auto* status = runtime_status(window);
+  auto* header = window.findChild<QLabel*>(QStringLiteral("runtimeHeaderStatus"));
+  ASSERT_NE(toggle, nullptr);
+  ASSERT_NE(status, nullptr);
+  ASSERT_NE(header, nullptr);
+
+  ASSERT_TRUE(wait_until([&] {
+    auto* current_toggle = runtime_toggle(window);
+    auto* current_status = runtime_status(window);
+    auto* current_header = window.findChild<QLabel*>(QStringLiteral("runtimeHeaderStatus"));
+    return current_toggle != nullptr && current_status != nullptr && current_header != nullptr &&
+           current_toggle->text() == QStringLiteral("停止服务") &&
+           current_header->text() == QStringLiteral("●  运行中") &&
+           (current_status->text().contains(QStringLiteral("发现")) ||
+            current_status->text().contains(QStringLiteral("监听")) ||
+            current_status->text().contains(QStringLiteral("等待")));
+  }));
+}
+
+TEST(MainWindowTest, RejectsInvalidSettingsWithoutStartingWorker) {
+  MainWindow window(nullptr, fake_backend_factory(), false);
   auto* device_id = field(window, QStringLiteral("deviceIdEdit"));
   auto* toggle = runtime_toggle(window);
   auto* status = runtime_status(window);
@@ -97,7 +119,7 @@ TEST(MainWindowTest, RejectsInvalidSettingsWithoutStartingWorker) {
 }
 
 TEST(MainWindowTest, StartsAndStopsRuntimeThroughSettingsButton) {
-  MainWindow window(nullptr, fake_backend_factory());
+  MainWindow window(nullptr, fake_backend_factory(), false);
   ASSERT_NE(field(window, QStringLiteral("listenPortEdit")), nullptr);
   ASSERT_NE(field(window, QStringLiteral("discoveryPortEdit")), nullptr);
   const auto base_port = test_port();
@@ -146,7 +168,7 @@ TEST(MainWindowTest, StartsAndStopsRuntimeThroughSettingsButton) {
 }
 
 TEST(MainWindowTest, ShowsWorkerStartupErrorAndRemainsRestartable) {
-  MainWindow window(nullptr, failing_backend_factory());
+  MainWindow window(nullptr, failing_backend_factory(), false);
   auto* toggle = runtime_toggle(window);
   auto* status = runtime_status(window);
   ASSERT_NE(toggle, nullptr);

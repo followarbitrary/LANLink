@@ -16,6 +16,7 @@
 #include <QScreen>
 #include <QScrollArea>
 #include <QStyle>
+#include <QTimer>
 #include <QVBoxLayout>
 
 #include <utility>
@@ -53,7 +54,8 @@ QPushButton* navButton(const QString& text, IconKind kind) {
 
 }  // namespace
 
-MainWindow::MainWindow(QWidget* parent, RuntimeWorker::BackendFactory backend_factory)
+MainWindow::MainWindow(QWidget* parent, RuntimeWorker::BackendFactory backend_factory,
+                       bool auto_start)
     : QMainWindow(parent), backend_factory_(std::move(backend_factory)) {
   setWindowTitle(QStringLiteral("LANLink"));
   setWindowFlags(Qt::FramelessWindowHint | Qt::Window);
@@ -63,6 +65,12 @@ MainWindow::MainWindow(QWidget* parent, RuntimeWorker::BackendFactory backend_fa
   setStyleSheet(kWindowStyle);
   setupUi();
   setupTray();
+  if (auto_start) {
+    QTimer::singleShot(0, this, [this] {
+      captureSettingsFromUi();
+      startRuntime(state_.options);
+    });
+  }
 }
 
 MainWindow::~MainWindow() { stopRuntime(); }

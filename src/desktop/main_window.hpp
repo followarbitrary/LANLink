@@ -20,7 +20,8 @@ class MainWindow final : public QMainWindow {
 
  public:
   explicit MainWindow(QWidget* parent = nullptr,
-                      RuntimeWorker::BackendFactory backend_factory = {});
+                      RuntimeWorker::BackendFactory backend_factory = {},
+                      bool auto_start = true);
   ~MainWindow() override;
 
   void showPage(int index);

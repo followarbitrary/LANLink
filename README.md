@@ -42,7 +42,7 @@ The help output lists these flags: `--device-id`, `--peer-id`, `--listen-port`, 
 
 ### Qt6 desktop control panel
 
-When Qt 6 is installed, the Debug preset also builds the optional `lanlink_desktop` Qt Widgets control panel. It starts the same discovery, transport, and native input-forwarding runtime as `lanlink_app` on a worker thread. Configure device/peer IDs, listen/discovery ports, group, optional `HOST:PORT`, display IDs, and left/right direction in **连接设置**, then start the service. Clipboard synchronization and file transfer remain disabled because the current core does not expose those protocols.
+When Qt 6 is installed, the Debug preset also builds the optional `lanlink_desktop` Qt Widgets control panel. It starts the same discovery, transport, and native input-forwarding runtime as `lanlink_app` on a worker thread as soon as the window opens. Configure device/peer IDs, listen/discovery ports, group, optional `HOST:PORT`, display IDs, and left/right direction in **连接设置**; the same page can stop and restart the service. If startup fails, the error is shown in the window and the service remains restartable. Clipboard synchronization and file transfer remain disabled because the current core does not expose those protocols.
 
 ```sh
 cmake --build cmake-build-debug --target lanlink_desktop
