@@ -73,14 +73,15 @@ class ManualClipboardBackend final : public IClipboardBackend {
 
 Uuid128 id(std::uint64_t value) { return {value, value + 1000}; }
 
-ScreenTopology topology_for(DisplayId local, DisplayId remote, bool local_left) {
+ScreenTopology topology_for(DisplayId local, DisplayId remote, bool local_left,
+                            std::uint64_t version = 1) {
   ScreenTopology topology;
   const Display first{local_left ? id(1) : id(3), local, {0, 0, 100, 100}, 1.0,
                        Rotation::k0};
   const Display second{local_left ? id(3) : id(1), remote, {100, 0, 200, 100}, 1.0,
                         Rotation::k0};
-  const ScreenLink link{local, Edge::kRight, remote, Edge::kLeft, 0.0, 1.0, 1};
-  EXPECT_TRUE(topology.set_snapshot(1, {first, second}, {link}).ok());
+  const ScreenLink link{local, Edge::kRight, remote, Edge::kLeft, 0.0, 1.0, version};
+  EXPECT_TRUE(topology.set_snapshot(version, {first, second}, {link}).ok());
   return topology;
 }
 
@@ -283,7 +284,7 @@ TEST(InputNodeRuntime, TopologyUpdateRevokesActiveLeaseAcrossPeers) {
   ASSERT_EQ(left->router().state(), RouterState::kRemote);
   ASSERT_TRUE(right->arbiter().has_active_lease());
 
-  auto updated = topology_for(id(20), id(10), false);
+  auto updated = topology_for(id(20), id(10), false, 2);
   ASSERT_TRUE(right->set_topology(std::move(updated)).ok());
   EXPECT_FALSE(right->arbiter().has_lease());
   EXPECT_EQ(right->router().state(), RouterState::kLocal);
