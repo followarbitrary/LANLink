@@ -45,6 +45,8 @@ class MainWindow final : public QMainWindow {
                      qulonglong deviceId, qulonglong displayId, bool online);
   void onRuntimeLog(const QString& message);
   void onRuntimeError(const QString& message);
+  void onFileTransferChanged(const QString& name, qulonglong done, qulonglong total,
+                             const QString& status, bool outgoing);
 
  private:
   QWidget* makePageContainer(QWidget* page);
@@ -53,6 +55,8 @@ class MainWindow final : public QMainWindow {
   void startRuntime(const app::AppOptions& options);
   void stopRuntime();
   void recoverLocalInputOnWorker();
+  void sendFileOnWorker(const QString& path);
+  void cancelFileOnWorker();
   void rebuildPages();
   void updateRuntimeControls();
   void captureSettingsFromUi();

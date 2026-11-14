@@ -11,7 +11,11 @@ namespace lanlink::desktop {
 QWidget* buildOverviewPage(DesktopState* state, QWidget* parent = nullptr);
 QWidget* buildLayoutPage(DesktopState* state, QWidget* parent = nullptr);
 QWidget* buildDevicesPage(const DesktopState& state, QWidget* parent = nullptr);
-QWidget* buildTransferPage(DesktopState* state, QWidget* parent = nullptr);
+using FileTransferCallback = std::function<void(const QString&)>;
+using CancelFileTransferCallback = std::function<void()>;
+QWidget* buildTransferPage(DesktopState* state, QWidget* parent = nullptr,
+                           FileTransferCallback sendFile = {},
+                           CancelFileTransferCallback cancelFile = {});
 using StartRuntimeCallback = std::function<void(const app::AppOptions&)>;
 using StopRuntimeCallback = std::function<void()>;
 using TogglePreferenceCallback = std::function<void(bool)>;

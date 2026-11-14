@@ -1,10 +1,14 @@
 #include "runtime_worker.hpp"
 
 #include <QTimer>
+#include <QDir>
+#include <QFileInfo>
+#include <QStandardPaths>
 
 #include <cctype>
 #include <cmath>
 #include <memory>
+#include <filesystem>
 #include <string>
 #include <utility>
 
@@ -152,6 +156,7 @@ void RuntimeWorker::start(app::AppOptions options) {
   was_connected_ = false;
   selected_peer_.reset();
   selected_device_id_.reset();
+  active_file_transfer_.reset();
   topology_selected_ = false;
   outgoing_requested_ = false;
   emit_status(QStringLiteral("正在发现局域网设备"), true, false);
@@ -182,6 +187,7 @@ void RuntimeWorker::stop() {
   }
   backend_.reset();
   clipboard_backend_.reset();
+  active_file_transfer_.reset();
   running_ = false;
   selected_peer_.reset();
   selected_device_id_.reset();
@@ -189,6 +195,40 @@ void RuntimeWorker::stop() {
   outgoing_requested_ = false;
   emit_status(QStringLiteral("已停止"), false, false);
   emit finished();
+}
+
+void RuntimeWorker::sendFile(const QString& path) {
+  if (path.isEmpty()) return;
+  if (!runtime_ || !runtime_->connected()) {
+    emit fileTransferChanged(QFileInfo(path).fileName(), 0, 0,
+                             QStringLiteral("无在线对端"), true);
+    return;
+  }
+  const QFileInfo info(path);
+  if (!info.exists() || !info.isFile()) {
+    emit fileTransferChanged(info.fileName(), 0, 0, QStringLiteral("文件不存在"), true);
+    return;
+  }
+  const auto result = runtime_->send_file(
+      std::filesystem::path(path.toStdString()), info.fileName().toStdString());
+  if (!result.ok()) {
+    emit fileTransferChanged(info.fileName(), 0, 0,
+                             QString::fromStdString(result.error()), true);
+    return;
+  }
+  active_file_transfer_ = result.value();
+}
+
+void RuntimeWorker::cancelFile() {
+  if (!runtime_ || !active_file_transfer_.has_value()) return;
+  const auto transfer = *active_file_transfer_;
+  const auto result = runtime_->cancel_file(transfer);
+  if (!result.ok()) {
+    emit errorOccurred(QString::fromStdString(result.error()));
+    emit fileTransferChanged(QString(), 0, 0,
+                             QString::fromStdString(result.error()), true);
+  }
+  active_file_transfer_.reset();
 }
 
 void RuntimeWorker::setInputForwardingEnabled(bool enabled) {
@@ -335,6 +375,37 @@ bool RuntimeWorker::start_runtime() {
   config.clipboard_sync_enabled = options_.clipboard_enabled;
   config.queue_capacity = 256;
   config.accept_incoming = options_.connect.has_value() || selected_peer_.has_value();
+  auto receive_directory = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
+  if (receive_directory.isEmpty()) receive_directory = QDir::tempPath();
+  config.receive_directory = std::filesystem::path(receive_directory.toStdString());
+  config.file_status_callback = [this](const transport::FileTransferStatus& status) {
+    const auto state = [&status] {
+      switch (status.state) {
+      case protocol::FileStatusCode::kAccepted: return QStringLiteral("已接受");
+      case protocol::FileStatusCode::kProgress: return QStringLiteral("传输中");
+      case protocol::FileStatusCode::kCompleted: return QStringLiteral("已完成");
+      case protocol::FileStatusCode::kFailed: return QStringLiteral("失败");
+      case protocol::FileStatusCode::kCanceled: return QStringLiteral("已取消");
+      }
+      return QStringLiteral("未知状态");
+    }();
+    const auto message = status.message.empty()
+                             ? state
+                             : state + QStringLiteral("：") +
+                                   QString::fromStdString(status.message);
+    emit fileTransferChanged(QString::fromStdString(status.name),
+                             static_cast<qulonglong>(status.bytes),
+                             static_cast<qulonglong>(status.total_size), message,
+                             !status.incoming);
+    if (status.state == protocol::FileStatusCode::kCompleted ||
+        status.state == protocol::FileStatusCode::kFailed ||
+        status.state == protocol::FileStatusCode::kCanceled) {
+      if (active_file_transfer_.has_value() && active_file_transfer_.value() == status.transfer)
+        active_file_transfer_.reset();
+    } else {
+      active_file_transfer_ = status.transfer;
+    }
+  };
   auto created = runtime::InputNodeRuntime::create(std::move(config));
   if (!created.ok()) {
     fail(QString::fromStdString(created.error()));

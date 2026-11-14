@@ -3,6 +3,7 @@
 #include <QObject>
 
 #include <functional>
+#include <filesystem>
 #include <memory>
 #include <optional>
 
@@ -36,6 +37,8 @@ class RuntimeWorker final : public QObject {
   void setInputForwardingEnabled(bool enabled);
   void setClipboardSyncEnabled(bool enabled);
   void recoverLocalInput();
+  void sendFile(const QString& path);
+  void cancelFile();
 
  signals:
   void statusChanged(const QString& status, bool running, bool connected);
@@ -43,6 +46,8 @@ class RuntimeWorker final : public QObject {
                    qulonglong deviceId, qulonglong displayId, bool online);
   void logMessage(const QString& message);
   void errorOccurred(const QString& message);
+  void fileTransferChanged(const QString& name, qulonglong done, qulonglong total,
+                           const QString& status, bool outgoing);
   void finished();
 
  private slots:
@@ -73,6 +78,7 @@ class RuntimeWorker final : public QObject {
   bool running_{false};
   bool was_connected_{false};
   bool input_forwarding_enabled_{true};
+  std::optional<Uuid128> active_file_transfer_;
   QString last_status_;
   bool last_status_running_{false};
   bool last_status_connected_{false};

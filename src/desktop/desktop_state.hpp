@@ -41,6 +41,11 @@ struct DesktopState {
   int activeDevice{0};
   int selectedTransferTarget{0};
   QString droppedFile;
+  QString fileTransferName;
+  QString fileTransferStatus;
+  std::uint64_t fileTransferDone{0};
+  std::uint64_t fileTransferTotal{0};
+  bool fileTransferOutgoing{true};
   bool crossScreenEnabled{true};
   // Clipboard synchronization is opt-in to keep local clipboard contents private by default.
   bool clipboardEnabled{false};

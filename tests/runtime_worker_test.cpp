@@ -131,6 +131,16 @@ TEST(RuntimeWorkerTest, RejectsInvalidDiscoveryGroup) {
   EXPECT_NE(result.error().find("group"), std::string::npos);
 }
 
+TEST(RuntimeWorkerTest, RejectsFileSendWithoutOnlinePeer) {
+  lanlink::desktop::RuntimeWorker worker(nullptr, fake_backend_factory());
+  QSignalSpy transfer_spy(&worker, &lanlink::desktop::RuntimeWorker::fileTransferChanged);
+  worker.sendFile(QStringLiteral("/tmp/report.txt"));
+  ASSERT_EQ(transfer_spy.count(), 1);
+  EXPECT_EQ(transfer_spy.at(0).at(0).toString(), QStringLiteral("report.txt"));
+  EXPECT_EQ(transfer_spy.at(0).at(3).toString(), QStringLiteral("无在线对端"));
+  EXPECT_TRUE(transfer_spy.at(0).at(4).toBool());
+}
+
 TEST(RuntimeWorkerThreadTest, StartsAndStopsOnItsWorkerThread) {
   lanlink::desktop::RuntimeWorker worker(nullptr, fake_backend_factory());
   QThread thread;

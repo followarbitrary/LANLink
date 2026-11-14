@@ -11,6 +11,7 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QFileInfo>
 #include <QHBoxLayout>
 #include <QLineEdit>
 #include <QMouseEvent>
@@ -219,7 +220,10 @@ void MainWindow::setupUi() {
   content_->addWidget(makePageContainer(buildOverviewPage(&state_, content_)));
   content_->addWidget(makePageContainer(buildLayoutPage(&state_, content_)));
   content_->addWidget(makePageContainer(buildDevicesPage(state_, content_)));
-  content_->addWidget(makePageContainer(buildTransferPage(&state_, content_)));
+  content_->addWidget(makePageContainer(
+      buildTransferPage(&state_, content_,
+                        [this](const QString& path) { sendFileOnWorker(path); },
+                        [this]() { cancelFileOnWorker(); })));
   content_->addWidget(makePageContainer(
       buildSettingsPage(&state_, content_,
                          [this](const app::AppOptions& options) { startRuntime(options); },
@@ -383,6 +387,8 @@ void MainWindow::startRuntime(const app::AppOptions& options) {
   connect(runtimeWorker_, &RuntimeWorker::peerChanged, this, &MainWindow::onPeerChanged);
   connect(runtimeWorker_, &RuntimeWorker::logMessage, this, &MainWindow::onRuntimeLog);
   connect(runtimeWorker_, &RuntimeWorker::errorOccurred, this, &MainWindow::onRuntimeError);
+  connect(runtimeWorker_, &RuntimeWorker::fileTransferChanged, this,
+          &MainWindow::onFileTransferChanged);
   RuntimeWorker* worker = runtimeWorker_;
   const app::AppOptions copied = options;
   connect(runtimeThread_, &QThread::started, worker, [worker, copied]() mutable {
@@ -407,6 +413,10 @@ void MainWindow::stopRuntime() {
   state_.status = QStringLiteral("已停止");
   state_.peerEndpoint.clear();
   state_.peerName.clear();
+  state_.fileTransferName.clear();
+  state_.fileTransferStatus.clear();
+  state_.fileTransferDone = 0;
+  state_.fileTransferTotal = 0;
   if (!state_.devices.isEmpty()) state_.devices.resize(1);
   state_.activeDevice = 0;
   state_.selectedTransferTarget = 0;
@@ -422,6 +432,21 @@ void MainWindow::recoverLocalInputOnWorker() {
   if (runtimeWorker_ == nullptr || runtimeThread_ == nullptr) return;
   QMetaObject::invokeMethod(runtimeWorker_, &RuntimeWorker::recoverLocalInput,
                             Qt::BlockingQueuedConnection);
+}
+
+void MainWindow::sendFileOnWorker(const QString& path) {
+  if (runtimeWorker_ == nullptr || runtimeThread_ == nullptr) {
+    onFileTransferChanged(QFileInfo(path).fileName(), 0, 0, QStringLiteral("服务未运行"), true);
+    return;
+  }
+  QMetaObject::invokeMethod(runtimeWorker_, &RuntimeWorker::sendFile,
+                            Qt::QueuedConnection, path);
+}
+
+void MainWindow::cancelFileOnWorker() {
+  if (runtimeWorker_ == nullptr || runtimeThread_ == nullptr) return;
+  QMetaObject::invokeMethod(runtimeWorker_, &RuntimeWorker::cancelFile,
+                            Qt::QueuedConnection);
 }
 
 void MainWindow::onRuntimeStatusChanged(const QString& status, bool running, bool connected) {
@@ -534,6 +559,32 @@ void MainWindow::onRuntimeError(const QString& message) {
   updateRuntimeControls();
 }
 
+void MainWindow::onFileTransferChanged(const QString& name, qulonglong done, qulonglong total,
+                                       const QString& status, bool outgoing) {
+  state_.fileTransferName = name;
+  state_.fileTransferDone = static_cast<std::uint64_t>(done);
+  state_.fileTransferTotal = static_cast<std::uint64_t>(total);
+  state_.fileTransferStatus = status;
+  state_.fileTransferOutgoing = outgoing;
+  if (content_ != nullptr && content_->currentIndex() == 3) {
+    auto* label = findChild<QLabel*>(QStringLiteral("transferStatusLabel"));
+    if (label != nullptr) {
+      if (!name.isEmpty() && total > 0) {
+        label->setText(QStringLiteral("%1 · %2 / %3 (%4%)")
+                          .arg(name)
+                          .arg(done)
+                          .arg(total)
+                          .arg((100.0 * done) / total, 0, 'f', 1));
+      } else {
+        label->setText(status);
+      }
+    }
+    if (auto* cancel = findChild<QPushButton*>(QStringLiteral("transferCancelButton")))
+      cancel->setEnabled(status == QStringLiteral("已接受") || status == QStringLiteral("传输中") ||
+                         status.startsWith(QStringLiteral("传输中：")));
+  }
+}
+
 void MainWindow::rebuildPages() {
   if (content_ == nullptr) return;
   const int current = content_->currentIndex();
@@ -541,7 +592,10 @@ void MainWindow::rebuildPages() {
   content_->addWidget(makePageContainer(buildOverviewPage(&state_, content_)));
   content_->addWidget(makePageContainer(buildLayoutPage(&state_, content_)));
   content_->addWidget(makePageContainer(buildDevicesPage(state_, content_)));
-  content_->addWidget(makePageContainer(buildTransferPage(&state_, content_)));
+  content_->addWidget(makePageContainer(
+      buildTransferPage(&state_, content_,
+                        [this](const QString& path) { sendFileOnWorker(path); },
+                        [this]() { cancelFileOnWorker(); })));
   content_->addWidget(makePageContainer(
       buildSettingsPage(&state_, content_,
                          [this](const app::AppOptions& options) { startRuntime(options); },

@@ -369,56 +369,80 @@ QWidget* buildDevicesPage(const DesktopState& state, QWidget* parent) {
   return page;
 }
 
-QWidget* buildTransferPage(DesktopState* state, QWidget* parent) {
-  auto* page = pageBase(QStringLiteral("文件传输（未接入）"),
-                        QStringLiteral("当前 LANLink 核心只提供键鼠跨屏转发，文件协议尚未实现。"), parent);
+QWidget* buildTransferPage(DesktopState* state, QWidget* parent,
+                           FileTransferCallback sendFile,
+                           CancelFileTransferCallback cancelFile) {
+  auto* page = pageBase(QStringLiteral("文件传输"),
+                        QStringLiteral("向当前在线对端发送单个文件，接收文件保存到下载目录。"), parent);
   auto* layout = pageLayout(page);
+  bool hasOnlinePeer = false;
+  for (int index = 1; index < state->devices.size(); ++index)
+    hasOnlinePeer = hasOnlinePeer || state->devices[index].online;
   auto* zone = new DropZone;
-  zone->setEnabled(false);
+  zone->setObjectName(QStringLiteral("transferDropZone"));
+  zone->setEnabled(hasOnlinePeer);
   layout->addWidget(zone);
   layout->addWidget(label(QStringLiteral("目标设备"), QStringLiteral("section")));
   auto* targetBox = new QVBoxLayout;
-  if (state->devices.isEmpty()) {
-    layout->addWidget(label(QStringLiteral("暂无可用目标设备"), QStringLiteral("muted")));
-    layout->addStretch();
-    return page;
-  }
+  if (!hasOnlinePeer)
+    layout->addWidget(label(QStringLiteral("暂无在线对端设备，请先启动并等待局域网发现。"), QStringLiteral("muted")));
   auto* group = new QButtonGroup(page);
   group->setExclusive(true);
   for (int index = 1; index < state->devices.size(); ++index) {
     auto* radio = new TargetOption(state->devices[index].name);
     group->addButton(radio);
-    radio->setChecked(index == state->selectedTransferTarget);
+    radio->setChecked(index == state->selectedTransferTarget && state->devices[index].online);
+    radio->setEnabled(state->devices[index].online);
     QObject::connect(radio, &QAbstractButton::toggled, page, [state, index](bool checked) {
       if (checked) state->selectedTransferTarget = index;
     });
     targetBox->addWidget(radio);
   }
-  auto* local = new TargetOption(state->devices[0].name + QStringLiteral("（本机）"));
-  group->addButton(local);
-  local->setChecked(state->selectedTransferTarget == 0);
-  QObject::connect(local, &QAbstractButton::toggled, page, [state](bool checked) {
-    if (checked) state->selectedTransferTarget = 0;
-  });
-  targetBox->addWidget(local);
+  if (!state->devices.isEmpty()) {
+    auto* local = new TargetOption(state->devices[0].name + QStringLiteral("（本机）"));
+    group->addButton(local);
+    local->setChecked(false);
+    local->setEnabled(false);
+    targetBox->addWidget(local);
+  }
   layout->addLayout(targetBox);
 
   auto* browse = new QPushButton(QStringLiteral("选择文件"));
-  browse->setEnabled(false);
-  auto* status = label(QStringLiteral("传输进度、暂停、续传和接收记录将在这里显示。"), QStringLiteral("muted"));
+  browse->setObjectName(QStringLiteral("transferBrowseButton"));
+  browse->setEnabled(hasOnlinePeer);
+  auto* cancel = new QPushButton(QStringLiteral("取消传输"));
+  cancel->setObjectName(QStringLiteral("transferCancelButton"));
+  cancel->setEnabled(false);
+  auto statusText = state->fileTransferStatus.isEmpty()
+                        ? QStringLiteral("选择文件或拖入文件后立即发送。")
+                        : state->fileTransferStatus;
+  if (!state->fileTransferName.isEmpty() && state->fileTransferTotal > 0) {
+    statusText = QStringLiteral("%1 · %2 / %3 (%4%)")
+                     .arg(state->fileTransferName)
+                     .arg(state->fileTransferDone)
+                     .arg(state->fileTransferTotal)
+                     .arg((100.0 * state->fileTransferDone) / state->fileTransferTotal, 0, 'f', 1);
+  }
+  auto* status = label(statusText, QStringLiteral("muted"));
+  status->setObjectName(QStringLiteral("transferStatusLabel"));
   layout->addWidget(browse, 0, Qt::AlignLeft);
+  layout->addWidget(cancel, 0, Qt::AlignLeft);
   layout->addWidget(status);
-  auto chooseFile = [state, status, page]() {
-    const QString path = QFileDialog::getOpenFileName(page, QStringLiteral("选择要发送的文件"));
+  auto chooseFile = [state, status, page, sendFile, cancel](const QString& selectedPath) {
+    const auto path = selectedPath.isEmpty()
+                          ? QFileDialog::getOpenFileName(page, QStringLiteral("选择要发送的文件"))
+                          : selectedPath;
     if (path.isEmpty()) return;
     state->droppedFile = path;
-    status->setText(QStringLiteral("已选择：%1").arg(QFileInfo(path).fileName()));
+    status->setText(QStringLiteral("正在发送：%1").arg(QFileInfo(path).fileName()));
+    cancel->setEnabled(true);
+    if (sendFile) sendFile(path);
   };
-  QObject::connect(browse, &QPushButton::clicked, page, chooseFile);
-  QObject::connect(zone, &DropZone::fileDropped, page, [state, status](const QString& path) {
-    if (path.isEmpty()) return;
-    state->droppedFile = path;
-    status->setText(QStringLiteral("已选择：%1").arg(QFileInfo(path).fileName()));
+  QObject::connect(browse, &QPushButton::clicked, page, [chooseFile]() { chooseFile(QString()); });
+  QObject::connect(zone, &DropZone::fileDropped, page, chooseFile);
+  QObject::connect(cancel, &QPushButton::clicked, page, [cancelFile, cancel]() {
+    if (cancelFile) cancelFile();
+    cancel->setEnabled(false);
   });
   layout->addStretch();
   return page;

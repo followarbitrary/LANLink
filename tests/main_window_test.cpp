@@ -188,6 +188,51 @@ TEST(MainWindowTest, RemovesPeerAfterDiscoveryTimeoutOrDisconnect) {
   EXPECT_EQ(label_count(window, QStringLiteral("设备 2")), 0);
 }
 
+TEST(MainWindowTest, FileTransferControlsFollowOnlinePeerAndProgressSignals) {
+  MainWindow window(nullptr, fake_backend_factory(), false);
+  window.showPage(3);
+  auto* browse = window.findChild<QPushButton*>(QStringLiteral("transferBrowseButton"));
+  auto* drop = window.findChild<QWidget*>(QStringLiteral("transferDropZone"));
+  ASSERT_NE(browse, nullptr);
+  ASSERT_NE(drop, nullptr);
+  EXPECT_FALSE(browse->isEnabled());
+  EXPECT_FALSE(drop->isEnabled());
+
+  ASSERT_TRUE(QMetaObject::invokeMethod(
+      &window, "onPeerChanged", Qt::DirectConnection,
+      Q_ARG(QString, QStringLiteral("设备 2")),
+      Q_ARG(QString, QStringLiteral("LANLink 节点")),
+      Q_ARG(QString, QStringLiteral("192.168.1.2:41000")), Q_ARG(qulonglong, 2),
+      Q_ARG(qulonglong, 2), Q_ARG(bool, true)));
+  window.showPage(3);
+  browse = window.findChild<QPushButton*>(QStringLiteral("transferBrowseButton"));
+  drop = window.findChild<QWidget*>(QStringLiteral("transferDropZone"));
+  ASSERT_NE(browse, nullptr);
+  ASSERT_NE(drop, nullptr);
+  EXPECT_TRUE(browse->isEnabled());
+  EXPECT_TRUE(drop->isEnabled());
+
+  ASSERT_TRUE(QMetaObject::invokeMethod(
+      &window, "onFileTransferChanged", Qt::DirectConnection,
+      Q_ARG(QString, QStringLiteral("report.txt")), Q_ARG(qulonglong, 5),
+      Q_ARG(qulonglong, 10), Q_ARG(QString, QStringLiteral("传输中")), Q_ARG(bool, true)));
+  auto* status = window.findChild<QLabel*>(QStringLiteral("transferStatusLabel"));
+  ASSERT_NE(status, nullptr);
+  EXPECT_TRUE(status->text().contains(QStringLiteral("report.txt")));
+  EXPECT_TRUE(status->text().contains(QStringLiteral("50.0%")));
+
+  ASSERT_TRUE(QMetaObject::invokeMethod(
+      &window, "onPeerChanged", Qt::DirectConnection,
+      Q_ARG(QString, QStringLiteral("设备 2")),
+      Q_ARG(QString, QStringLiteral("LANLink 节点")),
+      Q_ARG(QString, QStringLiteral("192.168.1.2:41000")), Q_ARG(qulonglong, 2),
+      Q_ARG(qulonglong, 2), Q_ARG(bool, false)));
+  window.showPage(3);
+  browse = window.findChild<QPushButton*>(QStringLiteral("transferBrowseButton"));
+  ASSERT_NE(browse, nullptr);
+  EXPECT_FALSE(browse->isEnabled());
+}
+
 TEST(MainWindowTest, RejectsInvalidSettingsWithoutStartingWorker) {
   MainWindow window(nullptr, fake_backend_factory(), false);
   auto* device_id = field(window, QStringLiteral("deviceIdEdit"));
