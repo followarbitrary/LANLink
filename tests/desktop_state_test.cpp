@@ -34,7 +34,7 @@ TEST(DesktopStateTest, UsesCompactTopologyCardAndRightSideSpacing) {
   state.resetLayout();
 
   ASSERT_EQ(state.devices.size(), 2);
-  EXPECT_EQ(state.devices[0].size, QSizeF(280.0, 150.0));
+  EXPECT_EQ(state.devices[0].size, QSizeF(280.0, 120.0));
   EXPECT_GT(state.devices[1].position.x(),
             state.devices[0].position.x() + state.devices[0].size.width());
   EXPECT_EQ(state.devices[1].position, QPointF(368.0, 68.0));

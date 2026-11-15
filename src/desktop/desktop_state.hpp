@@ -15,7 +15,7 @@ namespace lanlink::desktop {
 inline constexpr double kTopologyOriginX = 40.0;
 inline constexpr double kTopologyOriginY = 68.0;
 inline constexpr double kTopologyCardWidth = 280.0;
-inline constexpr double kTopologyCardHeight = 150.0;
+inline constexpr double kTopologyCardHeight = 120.0;
 inline constexpr double kTopologyCardGap = 48.0;
 
 inline QString local_platform_name() {

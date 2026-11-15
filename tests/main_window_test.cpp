@@ -210,7 +210,7 @@ TEST(MainWindowTest, SingleNodeTopologyDoesNotRenderConnectionLine) {
   const QColor background(QStringLiteral("#141e2a"));
   QImage image(canvas.size(), QImage::Format_ARGB32);
   const auto has_link_pixels = [&]() {
-    for (int y = 152; y <= 158; ++y) {
+    for (int y = 110; y <= 170; ++y) {
       for (int x = 326; x <= 366; ++x) {
         const QColor pixel = image.pixelColor(x, y);
         if (pixel != background && pixel.green() > background.green()) return true;
