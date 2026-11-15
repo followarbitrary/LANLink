@@ -9,15 +9,15 @@ option(LANLINK_BUILD_DESKTOP "Build the optional Qt 6 desktop control panel" ON)
 
 option(LANLINK_ENABLE_TLS "Build the OpenSSL TLS transport backend" ON)
 
-include(FetchContent)
+# GoogleTest is vendored so a clean configure does not need network access or
+# depend on the contents of a machine-local FetchContent cache.
 set(BUILD_GMOCK OFF CACHE BOOL "" FORCE)
 set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
-FetchContent_Declare(
-  googletest
-  URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.tar.gz
-  DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+add_subdirectory(
+  ${CMAKE_CURRENT_SOURCE_DIR}/third-party/googletest
+  ${CMAKE_CURRENT_BINARY_DIR}/third-party/googletest
+  EXCLUDE_FROM_ALL
 )
-FetchContent_MakeAvailable(googletest)
 
 add_library(lanlink_core
   src/core/common/ids.cpp

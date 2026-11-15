@@ -17,6 +17,10 @@ LANLink is a command-line node for sharing keyboard and mouse input between two 
 - Visual Studio 2022 with the **Desktop development with C++** workload (the `debug-windows` preset uses the `Visual Studio 17 2022` generator).
 - Allow `lanlink_app` through Windows Defender Firewall when Windows prompts. Permit inbound TCP traffic on the LAN port used below (`41000`) on the Private network profile.
 
+### Third-party dependencies
+
+GoogleTest 1.14.0 is included under [`third-party/googletest`](third-party/googletest), so configuring and running the CTest suite does not download dependencies or depend on a machine-local GoogleTest installation. Qt 6 and OpenSSL remain optional platform SDK dependencies: use a pinned Qt 6 kit and OpenSSL package on CI, and pass their installation prefix through `CMAKE_PREFIX_PATH` when the desktop or TLS backend is required. See [`third-party/README.md`](third-party/README.md) for the dependency boundary and license details.
+
 ## Build
 
 From the repository root, configure and build the Debug preset:
