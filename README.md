@@ -15,12 +15,11 @@ LANLink is a command-line node for sharing keyboard and mouse input between two 
 - Windows 10 or later.
 - CMake 3.23 or newer.
 - Visual Studio 2022 with the **Desktop development with C++** workload (the `debug-windows` preset uses the `Visual Studio 17 2022` generator).
-- Git for Windows, used by the pinned vcpkg registry to materialize versioned port trees.
 - Allow `lanlink_app` through Windows Defender Firewall when Windows prompts. Permit inbound TCP traffic on the LAN port used below (`41000`) on the Private network profile.
 
 ### Third-party dependencies
 
-GoogleTest 1.14.0 is included under [`third-party/googletest`](third-party/googletest), so configuring and running the CTest suite does not download dependencies or depend on a machine-local GoogleTest installation. The Windows release script bootstraps the pinned Qt 6 and OpenSSL graph from [`vcpkg.json`](vcpkg.json) when its repository-local install is missing. Other local Debug builds may still use an explicitly supplied Qt/OpenSSL SDK through `CMAKE_PREFIX_PATH`. See [`third-party/README.md`](third-party/README.md) for the dependency boundary and license details.
+GoogleTest 1.14.0 is included under [`third-party/googletest`](third-party/googletest), so configuring and running the CTest suite does not download dependencies or depend on a machine-local GoogleTest installation. The Windows release script bootstraps a fixed vcpkg source archive and installs the pinned Qt 6 and OpenSSL ports into its repository-local prefix. Other local Debug builds may still use an explicitly supplied Qt/OpenSSL SDK through `CMAKE_PREFIX_PATH`. See [`third-party/README.md`](third-party/README.md) for the dependency boundary and license details.
 
 ## Build
 
@@ -104,9 +103,9 @@ If the PowerShell execution policy blocks local scripts, use:
 powershell -ExecutionPolicy Bypass -File .\scripts\package-windows.ps1
 ```
 
-The script writes `dist\lanlink-windows-x64.zip`. It bootstraps the vcpkg commit and archive checksum recorded in `third-party\vcpkg-bootstrap.json` when the repository-local copy is absent, installs the pinned Qt 6.6.1 and OpenSSL 3.2.1 graph from `vcpkg.json` into `third-party\vcpkg_installed`, and uses that same prefix for CMake, `windeployqt.exe`, and the OpenSSL runtime DLLs. The archive always contains `lanlink_app.exe`, `lanlink_desktop.exe`, the Qt runtime files, and the OpenSSL TLS runtime. A missing or corrupt download, failed package install, missing Qt deployment tool, or missing OpenSSL DLL stops packaging; the script does not fall back to `PATH`, `QTDIR`, or a global vcpkg installation. The first run needs network access unless the pinned archive and package cache are already available. The desktop executable embeds the LANLink application icon from `assets\icons\LANLink.ico`. Extract the archive, then run `.\lanlink_app.exe --help` from the extracted directory. Add `--clipboard` on both peers to enable UTF-8 text, HTML, and PNG synchronization (4 MiB combined package limit including protocol metadata). Allow the packaged executable through Windows Defender Firewall on the Private network profile when prompted so peers can connect.
+The script writes `dist\lanlink-windows-x64.zip`. It bootstraps the vcpkg commit and archive checksum recorded in `third-party\vcpkg-bootstrap.json` when the repository-local copy is absent, then installs the fixed `qtbase[gui,network,testlib,widgets]`, `qtsvg`, and `openssl` ports in classic mode into `third-party\vcpkg_installed`. It uses that same prefix for CMake, `windeployqt.exe`, and the OpenSSL runtime DLLs. The archive always contains `lanlink_app.exe`, `lanlink_desktop.exe`, the Qt runtime files, and the OpenSSL TLS runtime. A missing or corrupt download, failed package install, missing Qt deployment tool, or missing OpenSSL DLL stops packaging; the script does not fall back to `PATH`, `QTDIR`, or a global vcpkg installation. The first run needs network access unless the pinned archive and package cache are already available. The desktop executable embeds the LANLink application icon from `assets\icons\LANLink.ico`. Extract the archive, then run `.\lanlink_app.exe --help` from the extracted directory. Add `--clipboard` on both peers to enable UTF-8 text, HTML, and PNG synchronization (4 MiB combined package limit including protocol metadata). Allow the packaged executable through Windows Defender Firewall on the Private network profile when prompted so peers can connect.
 
-The packaging script must be run on Windows with Visual Studio 2022. The macOS development host can validate the pinned manifest, CMake configuration, CTest suite, and script contract, but cannot execute the native Windows package or `windeployqt.exe`.
+The packaging script must be run on Windows with Visual Studio 2022. The macOS development host can validate the pinned vcpkg package graph, CMake configuration, CTest suite, and script contract, but cannot execute the native Windows package or `windeployqt.exe`.
 
 ## Automatic LAN discovery
 

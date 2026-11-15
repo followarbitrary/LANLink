@@ -9,19 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def main() -> None:
-    manifest = json.loads((ROOT / "vcpkg.json").read_text(encoding="utf-8"))
-    assert manifest["builtin-baseline"] == "ca2f11c400a70cd0295b317c96135663b6f2063e"
-    assert manifest["overrides"] == [
-        {"name": "qtbase", "version": "6.6.1", "port-version": 10},
-        {"name": "qtsvg", "version": "6.6.1"},
-        {"name": "openssl", "version": "3.2.1"},
-    ]
-
-    qtbase = next(dep for dep in manifest["dependencies"] if isinstance(dep, dict) and dep["name"] == "qtbase")
-    assert qtbase["default-features"] is False
-    assert qtbase["features"] == ["gui", "network", "testlib", "widgets"]
-    assert "qtsvg" in manifest["dependencies"]
-    assert "openssl" in manifest["dependencies"]
+    assert not (ROOT / "vcpkg.json").exists()
 
     bootstrap = json.loads(
         (ROOT / "third-party" / "vcpkg-bootstrap.json").read_text(encoding="utf-8")
@@ -39,18 +27,17 @@ def main() -> None:
     for required in (
         "Get-FileHash",
         "Invoke-WebRequest",
+        "qtbase[gui,network,testlib,widgets]",
+        '"qtsvg"',
+        '"openssl"',
         "VCPKG_TARGET_TRIPLET=x64-windows",
         "VCPKG_INSTALLED_DIR",
         "$installedTriplet = Join-Path $vcpkgInstalled \"x64-windows\"",
         "CMAKE_PREFIX_PATH=$installedTriplet",
         "VCPKG_BINARY_SOURCES",
         "VCPKG_DOWNLOADS",
-        "$vcpkgToolchainInSource = Join-Path",
-        "$needsBootstrap =",
-        "git.exe",
-        "init",
-        "fetch",
-        "reset",
+        "VCPKG_MANIFEST_MODE=OFF",
+        "VCPKG_MANIFEST_INSTALL=OFF",
         "MultiThreadedDLL",
         "windeployqt.exe",
         "libssl-*.dll",
@@ -61,7 +48,15 @@ def main() -> None:
         "LANLINK_REQUIRE_TLS=ON",
     ):
         assert required in script, required
-    for forbidden in ("$env:QTDIR", "qmake.exe", "LANLINK_ENABLE_TLS=OFF"):
+    for forbidden in (
+        "$env:QTDIR",
+        "qmake.exe",
+        "LANLINK_ENABLE_TLS=OFF",
+        "Ensure-VcpkgGitRepository",
+        "VCPKG_MANIFEST_MODE=ON",
+        "--x-manifest-root=",
+        "git.exe",
+    ):
         assert forbidden not in script, forbidden
 
 

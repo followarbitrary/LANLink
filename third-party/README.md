@@ -15,11 +15,13 @@ GoogleTest during configuration.
 ## Platform SDK dependencies
 
 The Windows packaging flow pins and bootstraps Qt 6 and OpenSSL through the
-repository-level [`vcpkg.json`](../vcpkg.json). It downloads the vcpkg source
-only at build time when the verified checkout is absent, installs the pinned
-`x64-windows` graph into the ignored `third-party/vcpkg_installed` directory,
-and uses that prefix for both CMake discovery and runtime deployment. Source
-downloads and binary archives are also kept under `third-party/.cache`.
+fixed vcpkg source archive recorded in
+[`vcpkg-bootstrap.json`](vcpkg-bootstrap.json). It downloads the source only at
+build time when the verified checkout is absent, installs the fixed
+`qtbase[gui,network,testlib,widgets]`, `qtsvg`, and `openssl` ports in classic
+mode into the ignored `third-party/vcpkg_installed` directory, and uses that
+prefix for both CMake discovery and runtime deployment. Source downloads and
+binary archives are also kept under `third-party/.cache`.
 
 The SDK binaries are intentionally not copied into this repository:
 
@@ -31,7 +33,4 @@ The SDK binaries are intentionally not copied into this repository:
 The first Windows packaging run needs network access unless the vcpkg archive
 and package binary caches are already present. A checksum mismatch, failed
 bootstrap, or failed package install stops packaging; the script does not fall
-back to a machine-global Qt or OpenSSL installation. Git for Windows is also
-required during the first bootstrap so vcpkg can materialize its versioned
-port trees into the repository-local checkout; subsequent runs reuse that
-checkout without re-fetching the registry objects.
+back to a machine-global Qt or OpenSSL installation.

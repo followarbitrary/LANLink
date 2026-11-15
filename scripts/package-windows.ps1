@@ -45,39 +45,6 @@ function Read-VcpkgBootstrapConfig {
     return $config
 }
 
-function Ensure-VcpkgGitRepository {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$SourceRoot,
-        [Parameter(Mandatory = $true)]
-        [string]$Commit
-    )
-
-    $gitCommand = Get-Command "git.exe" -ErrorAction SilentlyContinue
-    if ($null -eq $gitCommand) {
-        throw "Git for Windows is required to materialize the pinned vcpkg registry objects. Install Git and retry."
-    }
-
-    $git = $gitCommand.Source
-    $gitDir = Join-Path $SourceRoot ".git"
-    if (-not (Test-Path -LiteralPath $gitDir)) {
-        Invoke-Checked $git @("-C", $SourceRoot, "init")
-    }
-
-    $remoteUrl = (& $git -C $SourceRoot remote get-url origin 2>$null | Out-String).Trim()
-    if ([string]::IsNullOrWhiteSpace($remoteUrl)) {
-        Invoke-Checked $git @("-C", $SourceRoot, "remote", "add", "origin", "https://github.com/microsoft/vcpkg.git")
-    } elseif ($remoteUrl -ne "https://github.com/microsoft/vcpkg.git") {
-        Invoke-Checked $git @("-C", $SourceRoot, "remote", "set-url", "origin", "https://github.com/microsoft/vcpkg.git")
-    }
-
-    $head = (& $git -C $SourceRoot rev-parse HEAD 2>$null | Out-String).Trim()
-    if ($head -ne $Commit) {
-        Invoke-Checked $git @("-C", $SourceRoot, "fetch", "--depth", "1", "origin", $Commit)
-        Invoke-Checked $git @("-C", $SourceRoot, "reset", "--hard", $Commit)
-    }
-}
-
 function Ensure-Vcpkg {
     param(
         [Parameter(Mandatory = $true)]
@@ -120,8 +87,6 @@ function Ensure-Vcpkg {
             throw "Pinned vcpkg archive did not extract to $sourceRoot"
         }
     }
-
-    Ensure-VcpkgGitRepository $sourceRoot $BootstrapConfig.commit
 
     if ($needsBootstrap) {
         Push-Location $sourceRoot
@@ -189,11 +154,15 @@ $env:VCPKG_BINARY_SOURCES = $binarySource
 $env:VCPKG_DOWNLOADS = $downloadCache
 Invoke-Checked $vcpkgExe @(
     "install",
-    "--x-manifest-root=$repoRoot",
+    "qtbase[gui,network,testlib,widgets]",
+    "qtsvg",
+    "openssl",
     "--x-install-root=$vcpkgInstalled",
     "--triplet=x64-windows",
     "--host-triplet=x64-windows",
-    "--binarysource=$binarySource"
+    "--binarysource=$binarySource",
+    "--downloads-root=$downloadCache",
+    "--no-print-usage"
 )
 
 $qtConfigDir = Join-Path $installedTriplet "lib\cmake\Qt6"
@@ -216,8 +185,8 @@ $cmakeArguments = @(
     "-A", "x64",
     "-DCMAKE_CXX_EXTENSIONS=OFF",
     "-DCMAKE_TOOLCHAIN_FILE=$vcpkgToolchain",
-    "-DVCPKG_MANIFEST_MODE=ON",
-    "-DVCPKG_MANIFEST_DIR=$repoRoot",
+    "-DVCPKG_MANIFEST_MODE=OFF",
+    "-DVCPKG_MANIFEST_INSTALL=OFF",
     "-DVCPKG_INSTALLED_DIR=$vcpkgInstalled",
     "-DVCPKG_TARGET_TRIPLET=x64-windows",
     "-DCMAKE_PREFIX_PATH=$installedTriplet",
