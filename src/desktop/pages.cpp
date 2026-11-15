@@ -32,13 +32,13 @@ namespace lanlink::desktop {
 namespace {
 
 const QString kPanelStyle = QStringLiteral(
-    "QWidget#page { background: #1e2935; }"
+    "QWidget#page { background: #1e2935; font-size: 15px; }"
     "QFrame#panel { background: #172330; border: 1px solid #1c2b3a; border-radius: 14px; }"
     "QFrame#subpanel { background: #141e2a; border: 1px solid #1c2b3a; border-radius: 14px; }"
     "QWidget#preferenceRow, QWidget#autoTopologyRow { background: transparent; }"
     "QLabel { color: #edf2f8; background: transparent; }"
     "QLabel#muted { color: #92a7bd; }"
-    "QLabel#section { color: #eff4fa; font-size: 21px; font-weight: 600; }"
+    "QLabel#section { color: #eff4fa; font-size: 20px; font-weight: 600; }"
     "QPushButton { color: #dce6f2; background: #223347; border: 1px solid #3c526c; border-radius: 10px; padding: 0 16px; min-height: 34px; max-height: 40px; font-size: 15px; }"
     "QPushButton:hover { background: #2b425b; border-color: #5b84aa; }"
     "QPushButton:pressed { background: #1a2a3a; }"
@@ -49,8 +49,8 @@ const QString kPanelStyle = QStringLiteral(
     "QPushButton#primary:hover { background: #e1f1ff; border-color: #b6dbfa; }"
     "QPushButton#secondary { color: #dce6f2; background: #1c3045; border: 1px solid #4b637d; border-radius: 18px; padding: 0 18px; min-height: 36px; max-height: 42px; }"
     "QPushButton#secondary:hover { background: #27425d; border-color: #6a8eaf; }"
-    "QRadioButton { color: #e7edf5; font-size: 17px; spacing: 10px; }"
-    "QToolButton#settingToggle { color: #172330; background: #f2f4f7; border: 0; border-radius: 14px; font-size: 17px; font-weight: 700; min-width: 28px; max-width: 28px; min-height: 28px; max-height: 28px; }"
+    "QRadioButton { color: #e7edf5; font-size: 15px; spacing: 10px; }"
+    "QToolButton#settingToggle { color: #172330; background: #f2f4f7; border: 0; border-radius: 14px; font-size: 15px; font-weight: 600; min-width: 28px; max-width: 28px; min-height: 28px; max-height: 28px; }"
     "QToolButton#settingToggle:unchecked { color: #91a3b8; background: #223347; border: 1px solid #51647b; }"
     "QRadioButton::indicator { width: 20px; height: 20px; border: 2px solid #647388; border-radius: 10px; background: #202b39; }"
     "QRadioButton::indicator:checked { border: 6px solid #f2f4f7; background: #172330; }"
@@ -176,7 +176,7 @@ QLabel* onlineBadge() {
   badge->setAlignment(Qt::AlignCenter);
   badge->setMinimumWidth(58);
   badge->setStyleSheet(QStringLiteral(
-      "background: #174d3c; color: #53d39b; border-radius: 16px; padding: 7px 12px; font-size: 15px;"));
+      "background: #174d3c; color: #53d39b; border-radius: 16px; padding: 7px 12px; font-size: 13px;"));
   return badge;
 }
 
@@ -189,7 +189,7 @@ QWidget* titleRow(const QString& title, const QString& actionText = {}) {
   layout->addStretch();
   if (!actionText.isEmpty()) {
     auto* action = label(actionText);
-    action->setStyleSheet(QStringLiteral("color: #8fc3ff; font-size: 15px;"));
+    action->setStyleSheet(QStringLiteral("color: #8fc3ff; font-size: 13px;"));
     layout->addWidget(action);
   }
   return row;
@@ -223,7 +223,7 @@ QFrame* deviceCard(const DeviceState& device, bool selected) {
   top->addWidget(check);
   layout->addLayout(top);
   auto* name = label(device.name);
-  name->setStyleSheet(QStringLiteral("font-size: 17px; font-weight: 600;"));
+  name->setStyleSheet(QStringLiteral("font-size: 16px; font-weight: 600;"));
   layout->addWidget(name);
   layout->addWidget(label(device.address, QStringLiteral("muted")));
   return card;
@@ -251,12 +251,12 @@ QWidget* activeDevicePanel(const DesktopState& state) {
   auto* layout = new QVBoxLayout(frame);
   layout->setContentsMargins(18, 15, 18, 15);
   auto* title = label(device.name);
-  title->setStyleSheet(QStringLiteral("font-size: 21px; font-weight: 600;"));
+  title->setStyleSheet(QStringLiteral("font-size: 20px; font-weight: 600;"));
   layout->addWidget(title);
   auto* meta = label(device.platform + QStringLiteral(" · ") +
                         (device.online ? QStringLiteral("已连接") : QStringLiteral("等待连接")),
                     QStringLiteral("muted"));
-  meta->setStyleSheet(QStringLiteral("font-size: 16px;"));
+  meta->setStyleSheet(QStringLiteral("font-size: 13px;"));
   layout->addWidget(meta);
 
   auto* actions = new QHBoxLayout;
@@ -278,7 +278,7 @@ QWidget* activeDevicePanel(const DesktopState& state) {
   } else {
     auto* offline = label(QStringLiteral("未运行"));
     offline->setStyleSheet(QStringLiteral(
-        "color: #f2c77d; background: #5a4321; border-radius: 16px; padding: 7px 12px; font-size: 15px;"));
+        "color: #f2c77d; background: #5a4321; border-radius: 16px; padding: 7px 12px; font-size: 13px;"));
     actions->addWidget(offline);
   }
   layout->addLayout(actions);
@@ -346,7 +346,7 @@ class DropZone final : public QFrame {
     icon->setAlignment(Qt::AlignCenter);
     layout->addWidget(icon);
     auto* title = label(QStringLiteral("文件发送区域"));
-    title->setStyleSheet(QStringLiteral("font-size: 23px; font-weight: 600;"));
+    title->setStyleSheet(QStringLiteral("font-size: 20px; font-weight: 600;"));
     title->setAlignment(Qt::AlignCenter);
     layout->addWidget(title);
     auto* hint = label(QStringLiteral("正式应用支持拖放文件或点击浏览"), QStringLiteral("muted"));
@@ -394,7 +394,7 @@ class TargetOption final : public QAbstractButton {
     }
     painter.setPen(QColor(QStringLiteral("#e7edf5")));
     QFont optionFont = painter.font();
-    optionFont.setPointSize(16);
+    optionFont.setPointSize(15);
     painter.setFont(optionFont);
     painter.drawText(QRectF(34.0, 0.0, width() - 34.0, height()), Qt::AlignVCenter | Qt::AlignLeft, text());
   }
@@ -437,7 +437,7 @@ QWidget* buildDevicesPage(const DesktopState& state, QWidget* parent) {
     rowLayout->addWidget(icon);
     auto* details = new QVBoxLayout;
     auto* name = label(device.name);
-    name->setStyleSheet(QStringLiteral("font-size: 23px; font-weight: 600;"));
+    name->setStyleSheet(QStringLiteral("font-size: 20px; font-weight: 600;"));
     details->addWidget(name);
     details->addWidget(label(device.platform + QStringLiteral(" · ") + device.address, QStringLiteral("muted")));
     rowLayout->addLayout(details);
@@ -447,7 +447,7 @@ QWidget* buildDevicesPage(const DesktopState& state, QWidget* parent) {
     } else {
       auto* offline = label(QStringLiteral("离线"));
       offline->setStyleSheet(QStringLiteral(
-          "color: #f2c77d; background: #5a4321; border-radius: 16px; padding: 7px 12px; font-size: 15px;"));
+          "color: #f2c77d; background: #5a4321; border-radius: 16px; padding: 7px 12px; font-size: 13px;"));
       rowLayout->addWidget(offline);
     }
     layout->addWidget(row);
@@ -708,7 +708,7 @@ QWidget* buildSettingsPage(DesktopState* state, QWidget* parent,
     rowLayout->setContentsMargins(0, 0, 0, 0);
     auto* text = new QVBoxLayout;
     auto* titleLabel = label(title);
-    titleLabel->setStyleSheet(QStringLiteral("font-size: 18px;"));
+    titleLabel->setStyleSheet(QStringLiteral("font-size: 16px;"));
     text->addWidget(titleLabel);
     text->addWidget(label(subtitle, QStringLiteral("muted")));
     rowLayout->addLayout(text);
@@ -737,7 +737,7 @@ QWidget* buildSettingsPage(DesktopState* state, QWidget* parent,
   auto* m0Layout = new QVBoxLayout(m0);
   m0Layout->setContentsMargins(18, 16, 18, 16);
   auto* m0Title = label(QStringLiteral("跨屏输入运行参数"));
-  m0Title->setStyleSheet(QStringLiteral("font-size: 21px; font-weight: 600;"));
+  m0Title->setStyleSheet(QStringLiteral("font-size: 20px; font-weight: 600;"));
   m0Layout->addWidget(m0Title);
   m0Layout->addWidget(label(QStringLiteral("用于保持连接、判断边缘触发并交接输入控制。"),
                             QStringLiteral("muted")));

@@ -244,6 +244,14 @@ TEST(MainWindowTest, UsesPlatformTypographyHierarchy) {
   EXPECT_EQ(heading->font().weight(), QFont::DemiBold);
   EXPECT_EQ(QApplication::font().pixelSize(), 15);
   EXPECT_NE(QApplication::font().family(), QStringLiteral("Sans Serif"));
+
+  auto* section = window.findChild<QLabel*>(QStringLiteral("section"));
+  auto* navButton = window.findChild<QPushButton*>(QStringLiteral("navButton"));
+  ASSERT_NE(section, nullptr);
+  ASSERT_NE(navButton, nullptr);
+  EXPECT_EQ(section->font().pixelSize(), 20);
+  EXPECT_EQ(section->font().weight(), QFont::DemiBold);
+  EXPECT_EQ(navButton->font().pixelSize(), 15);
 }
 
 TEST(MainWindowTest, KeepsSettingsControlsCompactAndReadable) {

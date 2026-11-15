@@ -13,6 +13,7 @@
 #include <QCheckBox>
 #include <QFileInfo>
 #include <QFont>
+#include <QFontDatabase>
 #include <QHBoxLayout>
 #include <QLineEdit>
 #include <QMouseEvent>
@@ -34,13 +35,13 @@ namespace lanlink::desktop {
 namespace {
 
 const QString kWindowStyleBase = QStringLiteral(
-    "QMainWindow { background: #1e2935; }"
+    "QMainWindow { background: #1e2935; font-size: 15px; }"
     "QWidget#titleBar { background: #18222e; }"
     "QWidget#nav { background: #151d28; }"
     "QWidget#footer { background: #151d28; }"
     "QLabel { color: #e9eff6; background: transparent; }"
     "QLabel#muted { color: #93a5ba; }"
-    "QPushButton#navButton { color: #9caec2; background: transparent; border: 0; border-radius: 10px; text-align: left; padding: 12px 14px; font-size: 16px; }"
+    "QPushButton#navButton { color: #9caec2; background: transparent; border: 0; border-radius: 10px; text-align: left; padding: 12px 14px; font-size: 15px; }"
     "QPushButton#navButton:checked { color: #f0f5fb; background: #293f58; }"
     "QStackedWidget#content { background: #1e2935; }"
     "QScrollArea#pageScroll { border: 0; background: #1e2935; }"
@@ -49,7 +50,7 @@ const QString kWindowStyleBase = QStringLiteral(
 
 #if defined(Q_OS_MACOS)
 const QString kWindowControlStyle = QStringLiteral(
-    "QPushButton[windowControl=\"true\"] { color: transparent; border: 0; border-radius: 8px; padding: 0; font-size: 9px; font-weight: 700; }"
+    "QPushButton[windowControl=\"true\"] { color: transparent; border: 0; border-radius: 8px; padding: 0; font-size: 9px; font-weight: 600; }"
     "QPushButton[windowControl=\"true\"]:hover, QPushButton[windowControlHovered=\"true\"] { color: #18222e; }"
     "QPushButton#windowCloseButton { background: #ff5f57; border: 1px solid #e34f49; }"
     "QPushButton#windowMinimizeButton { background: #ffbd2e; border: 1px solid #e0a522; }"
@@ -68,15 +69,30 @@ const QString kWindowStyle = kWindowStyleBase + kWindowControlStyle;
 
 QFont platformUiFont() {
   QFont font;
+  const auto installedFamilies = QFontDatabase::families();
+  QStringList families;
+  const auto addIfInstalled = [&](const QString& preferred) {
+    for (const auto& installed : installedFamilies) {
+      if (installed.compare(preferred, Qt::CaseInsensitive) == 0) {
+        families.append(installed);
+        return;
+      }
+    }
+  };
 #if defined(Q_OS_MACOS)
-  font.setFamilies({QStringLiteral("SF Pro Text"), QStringLiteral("PingFang SC"),
-                    QStringLiteral("Helvetica Neue")});
+  addIfInstalled(QStringLiteral("SF Pro Text"));
+  addIfInstalled(QStringLiteral("PingFang SC"));
+  addIfInstalled(QStringLiteral("Helvetica Neue"));
 #elif defined(Q_OS_WIN)
-  font.setFamilies({QStringLiteral("Segoe UI"), QStringLiteral("Microsoft YaHei")});
+  addIfInstalled(QStringLiteral("Segoe UI"));
+  addIfInstalled(QStringLiteral("Microsoft YaHei"));
 #else
-  font.setFamilies({QStringLiteral("Noto Sans"), QStringLiteral("Noto Sans CJK SC"),
-                    QStringLiteral("DejaVu Sans")});
+  addIfInstalled(QStringLiteral("Noto Sans"));
+  addIfInstalled(QStringLiteral("Noto Sans CJK SC"));
+  addIfInstalled(QStringLiteral("DejaVu Sans"));
 #endif
+  if (families.isEmpty()) families.append(QStringLiteral("Arial"));
+  font.setFamilies(families);
   font.setPixelSize(15);
   font.setWeight(QFont::Normal);
   font.setStyleStrategy(QFont::PreferAntialias);
@@ -268,7 +284,7 @@ void MainWindow::setupUi() {
   running->setMinimumWidth(118);
   running->setFixedHeight(36);
   running->setStyleSheet(QStringLiteral(
-      "color: #f2c77d; background: #3f3524; border: 1px solid #705e3c; border-radius: 17px; padding: 6px 14px; font-size: 14px;"));
+      "color: #f2c77d; background: #3f3524; border: 1px solid #705e3c; border-radius: 17px; padding: 6px 14px; font-size: 13px;"));
   titleLayout->addWidget(running);
   controlLabel_ = new QLabel(QStringLiteral("当前控制：本机输入"));
   controlLabel_->setStyleSheet(QStringLiteral("color: #a6b7ca; font-size: 13px;"));
@@ -290,7 +306,7 @@ void MainWindow::setupUi() {
   navLayout->setContentsMargins(14, 20, 14, 16);
   navLayout->setSpacing(8);
   auto* workspace = new QLabel(QStringLiteral("工作空间"));
-  workspace->setStyleSheet(QStringLiteral("color: #91a3b8; font-size: 14px; padding: 0 12px 10px;"));
+  workspace->setStyleSheet(QStringLiteral("color: #91a3b8; font-size: 13px; padding: 0 12px 10px;"));
   navLayout->addWidget(workspace);
   const QVector<QPair<QString, IconKind>> names = {
       {QStringLiteral("概览"), IconKind::Grid},
@@ -597,7 +613,7 @@ void MainWindow::onRuntimeStatusChanged(const QString& status, bool running, boo
                                            : (running ? QStringLiteral("#2c8a76")
                                                       : QStringLiteral("#705e3c"));
     statusLabel_->setStyleSheet(QStringLiteral(
-        "color: %1; background: %2; border: 1px solid %3; border-radius: 17px; padding: 6px 14px; font-size: 14px;")
+        "color: %1; background: %2; border: 1px solid %3; border-radius: 17px; padding: 6px 14px; font-size: 13px;")
                                     .arg(statusColor)
                                     .arg(statusBackground)
                                     .arg(statusBorder));

@@ -216,7 +216,7 @@ void TopologyCanvas::paintEvent(QPaintEvent*) {
 
     painter.setPen(kMuted);
     QFont stateFont = painter.font();
-    stateFont.setPointSizeF(11.5);
+    stateFont.setPointSizeF(12.0);
     stateFont.setWeight(QFont::Normal);
     painter.setFont(stateFont);
     painter.drawText(QRectF(textLeft + 18.0, bounds.top() + 66.0, textWidth - 18.0, 26.0),
