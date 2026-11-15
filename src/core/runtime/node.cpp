@@ -10,6 +10,63 @@
 
 namespace lanlink::runtime {
 
+namespace {
+
+Result<ScreenTopology> normalize_topology_for_local(const InputRuntimeConfig& config,
+                                                     ScreenTopology topology) {
+  auto displays = topology.displays();
+  auto links = topology.links();
+  auto local_it = std::find_if(
+      displays.begin(), displays.end(), [&config](const Display& display) {
+        return display.device == config.local_device && display.id == config.local_display;
+      });
+  if (local_it == displays.end()) {
+    // Display IDs are unique within a validated snapshot, so an older local
+    // snapshot that omitted the device metadata can still be normalized by
+    // the configured display ID. A missing display remains an actionable
+    // error and is never installed.
+    local_it = std::find_if(
+        displays.begin(), displays.end(), [&config](const Display& display) {
+          return display.id == config.local_display;
+        });
+    if (local_it == displays.end()) {
+      return Result<ScreenTopology>::failure(
+          "topology does not contain the configured local display");
+    }
+  }
+
+  const auto native_bounds = config.backend->display_bounds();
+  if (native_bounds.has_value()) {
+    const double dx = native_bounds->left - local_it->logical_bounds.left;
+    const double dy = native_bounds->top - local_it->logical_bounds.top;
+    for (auto& display : displays) {
+      display.logical_bounds.left += dx;
+      display.logical_bounds.top += dy;
+      display.logical_bounds.right += dx;
+      display.logical_bounds.bottom += dy;
+    }
+    const auto normalized_local_it = std::find_if(
+        displays.begin(), displays.end(), [&config](const Display& display) {
+          return display.id == config.local_display;
+        });
+    normalized_local_it->logical_bounds = *native_bounds;
+  }
+
+  for (auto& link : links) {
+    if (link.target != config.local_display) continue;
+    std::swap(link.source, link.target);
+    std::swap(link.source_edge, link.target_edge);
+  }
+
+  ScreenTopology normalized;
+  const auto set = normalized.set_snapshot(topology.version(), std::move(displays),
+                                           std::move(links));
+  if (!set.ok()) return Result<ScreenTopology>::failure(set.error());
+  return Result<ScreenTopology>::success(std::move(normalized));
+}
+
+}  // namespace
+
 InputNodeRuntime::InputNodeRuntime(InputRuntimeConfig config)
     : config_(std::move(config)),
       router_(config_.source, config_.peer, config_.local_display, {}, config_.queue_capacity) {}
@@ -36,6 +93,9 @@ Result<std::unique_ptr<InputNodeRuntime>> InputNodeRuntime::create(InputRuntimeC
 }
 
 Result<void> InputNodeRuntime::set_topology(ScreenTopology topology) {
+  auto normalized = normalize_topology_for_local(config_, std::move(topology));
+  if (!normalized.ok()) return Result<void>::failure(normalized.error());
+  topology = std::move(normalized.value());
   if (running_ && manager_.size() != 0) {
     const auto now = IClock::Clock::now();
     Result<void> cleanup = Result<void>::success();

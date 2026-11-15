@@ -971,6 +971,55 @@ TEST(InputNodeRuntime, MissingPointerDoesNotTriggerCrossing) {
   EXPECT_EQ(runtime->router().state(), RouterState::kLocal);
 }
 
+TEST(InputNodeRuntime, NormalizesRemoteOriginTopologyToLocalBackendAndReversesLink) {
+  FakeInputBackend backend;
+  backend.set_display_bounds(Rect{100.0, 200.0, 300.0, 400.0});
+  const auto local_device = id(1);
+  const auto remote_device = id(3);
+  const auto local_display = id(10);
+  const auto remote_display = id(20);
+  auto result = InputNodeRuntime::create(config(
+      local_device, id(2), AuthenticatedPeer{remote_device}, local_display,
+      Endpoint{"127.0.0.1", 0}, &backend));
+  ASSERT_TRUE(result.ok()) << result.error();
+  auto runtime = std::move(result.value());
+
+  ScreenTopology remote_origin;
+  ASSERT_TRUE(remote_origin.set_snapshot(
+      7,
+      {Display{remote_device, remote_display, {-1000.0, 50.0, -800.0, 250.0}, 1.5,
+               Rotation::k90},
+       Display{local_device, local_display, {-800.0, 50.0, -600.0, 250.0}, 2.0,
+               Rotation::k180}},
+      {ScreenLink{remote_display, Edge::kRight, local_display, Edge::kLeft, 0.2, 0.8,
+                  7}})
+                 .ok());
+
+  ASSERT_TRUE(runtime->set_topology(std::move(remote_origin)).ok());
+  ASSERT_EQ(runtime->topology().displays().size(), 2u);
+  const auto& normalized_local = runtime->topology().displays()[1];
+  EXPECT_EQ(normalized_local.device, local_device);
+  EXPECT_EQ(normalized_local.id, local_display);
+  EXPECT_EQ(normalized_local.logical_bounds, (Rect{100.0, 200.0, 300.0, 400.0}));
+  EXPECT_DOUBLE_EQ(normalized_local.scale, 2.0);
+  EXPECT_EQ(normalized_local.rotation, Rotation::k180);
+
+  ASSERT_EQ(runtime->topology().links().size(), 1u);
+  const auto& normalized_link = runtime->topology().links().front();
+  EXPECT_EQ(normalized_link.source, local_display);
+  EXPECT_EQ(normalized_link.source_edge, Edge::kLeft);
+  EXPECT_EQ(normalized_link.target, remote_display);
+  EXPECT_EQ(normalized_link.target_edge, Edge::kRight);
+  EXPECT_DOUBLE_EQ(normalized_link.tangent_min, 0.2);
+  EXPECT_DOUBLE_EQ(normalized_link.tangent_max, 0.8);
+  EXPECT_EQ(normalized_link.version, 7u);
+
+  const auto crossing = runtime->topology().crossing(
+      local_display, Edge::kLeft, Point{96.0, 300.0}, 4.0);
+  ASSERT_TRUE(crossing.has_value());
+  EXPECT_EQ(crossing->target, remote_display);
+}
+
 TEST(InputNodeRuntime, KeyEventAtStaleOutsidePointerDoesNotTriggerCrossing) {
   FakeInputBackend backend;
   auto result = InputNodeRuntime::create(config(
