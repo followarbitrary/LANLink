@@ -8,6 +8,7 @@ endif()
 option(LANLINK_BUILD_DESKTOP "Build the optional Qt 6 desktop control panel" ON)
 
 option(LANLINK_ENABLE_TLS "Build the OpenSSL TLS transport backend" ON)
+option(LANLINK_REQUIRE_TLS "Fail configuration when the OpenSSL TLS backend cannot be built" OFF)
 
 # GoogleTest is vendored so a clean configure does not need network access or
 # depend on the contents of a machine-local FetchContent cache.
@@ -50,6 +51,10 @@ if(LANLINK_ENABLE_TLS)
   if(OpenSSL_FOUND)
     set(LANLINK_HAS_OPENSSL 1)
     target_link_libraries(lanlink_core PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+  elseif(LANLINK_REQUIRE_TLS)
+    message(FATAL_ERROR
+      "LANLINK_REQUIRE_TLS=ON but OpenSSL SSL and Crypto components were not found. "
+      "Configure with the pinned dependency toolchain or set LANLINK_ENABLE_TLS=OFF.")
   endif()
 endif()
 
@@ -126,6 +131,12 @@ else()
 endif()
 
 enable_testing()
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+  add_test(
+    NAME package_windows_dependency_contract
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/package_windows_dependency_test.py)
+endif()
 add_executable(common_types_test tests/unit/common_types_test.cpp)
 target_link_libraries(common_types_test PRIVATE lanlink_core GTest::gtest_main)
 include(GoogleTest)

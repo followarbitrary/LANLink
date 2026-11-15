@@ -19,5 +19,7 @@ Thumbs.db
 node_modules/
 dist/
 build/
+third-party/.cache/
+third-party/vcpkg_installed/
 __pycache__/
 *.py[cod]

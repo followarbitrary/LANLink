@@ -1,8 +1,7 @@
 [CmdletBinding()]
 param(
     [ValidateSet("Release")]
-    [string]$Configuration = "Release",
-    [switch]$RequireDesktop
+    [string]$Configuration = "Release"
 )
 
 $ErrorActionPreference = "Stop"
@@ -15,70 +14,112 @@ function Invoke-Checked {
         [string[]]$Arguments
     )
 
-    & $Command @Arguments
+    & $Command @Arguments | ForEach-Object { Write-Host $_ }
     if ($LASTEXITCODE -ne 0) {
         throw "$Command failed with exit code $LASTEXITCODE"
     }
 }
 
-function Test-QtPrefix {
+function Read-VcpkgBootstrapConfig {
     param(
         [Parameter(Mandatory = $true)]
-        [string]$Prefix
+        [string]$Path
     )
 
-    return Test-Path (Join-Path $Prefix "lib\cmake\Qt6")
+    if (-not (Test-Path -LiteralPath $Path)) {
+        throw "Missing vcpkg bootstrap metadata: $Path"
+    }
+
+    $config = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    foreach ($property in @("commit", "archive_url", "sha256")) {
+        if ([string]::IsNullOrWhiteSpace([string]$config.$property)) {
+            throw "vcpkg bootstrap metadata is missing '$property'"
+        }
+    }
+    if ($config.commit -notmatch "^[0-9a-f]{40}$") {
+        throw "vcpkg bootstrap commit is not a 40-character SHA"
+    }
+    if ($config.sha256 -notmatch "^[0-9a-fA-F]{64}$") {
+        throw "vcpkg bootstrap SHA-256 is not a 64-character hex value"
+    }
+    return $config
 }
 
-function Resolve-QtPrefix {
-    $candidates = @()
-    if (-not [string]::IsNullOrWhiteSpace($env:QTDIR)) {
-        $candidates += $env:QTDIR
-    }
+function Ensure-Vcpkg {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$CacheRoot,
+        [Parameter(Mandatory = $true)]
+        [psobject]$BootstrapConfig
+    )
 
-    $qmakeCommand = Get-Command "qmake.exe" -ErrorAction SilentlyContinue
-    if ($null -ne $qmakeCommand) {
-        $qmakePrefix = (& $qmakeCommand.Source "-query" "QT_INSTALL_PREFIX" 2>$null | Out-String).Trim()
-        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($qmakePrefix)) {
-            $candidates += $qmakePrefix
-        }
-    }
+    New-Item -ItemType Directory -Force -Path $CacheRoot | Out-Null
+    $sourceRoot = Join-Path $CacheRoot "vcpkg-$($BootstrapConfig.commit)"
+    $archivePath = Join-Path $CacheRoot "vcpkg-$($BootstrapConfig.commit).zip"
+    $vcpkgExe = Join-Path $sourceRoot "vcpkg.exe"
+    $vcpkgToolchainInSource = Join-Path $sourceRoot "scripts\buildsystems\vcpkg.cmake"
+    $bootstrapScript = Join-Path $sourceRoot "bootstrap-vcpkg.bat"
 
-    $windeployqtCommand = Get-Command "windeployqt.exe" -ErrorAction SilentlyContinue
-    if ($null -ne $windeployqtCommand) {
-        $qtBin = Split-Path $windeployqtCommand.Source -Parent
-        $candidates += Split-Path $qtBin -Parent
-    }
-
-    foreach ($candidate in ($candidates | Select-Object -Unique)) {
-        if ([string]::IsNullOrWhiteSpace($candidate)) {
-            continue
-        }
+    if (-not (Test-Path -LiteralPath $archivePath)) {
+        Write-Host "Downloading pinned vcpkg $($BootstrapConfig.commit)..."
         try {
-            $resolved = (Resolve-Path -LiteralPath $candidate -ErrorAction Stop).Path
+            Invoke-WebRequest -Uri $BootstrapConfig.archive_url -OutFile $archivePath -UseBasicParsing
         } catch {
-            continue
-        }
-        if (Test-QtPrefix $resolved) {
-            return $resolved
-        }
-
-        # QTDIR is sometimes set to C:\Qt rather than to a specific kit.
-        $versionDirs = Get-ChildItem -LiteralPath $resolved -Directory -ErrorAction SilentlyContinue
-        foreach ($versionDir in $versionDirs) {
-            if (Test-QtPrefix $versionDir.FullName) {
-                return $versionDir.FullName
-            }
-            $kitDirs = Get-ChildItem -LiteralPath $versionDir.FullName -Directory -ErrorAction SilentlyContinue
-            foreach ($kitDir in $kitDirs) {
-                if (Test-QtPrefix $kitDir.FullName) {
-                    return $kitDir.FullName
-                }
-            }
+            throw "Unable to download pinned vcpkg archive from $($BootstrapConfig.archive_url): $($_.Exception.Message)"
         }
     }
 
-    return $null
+    $actualHash = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $expectedHash = $BootstrapConfig.sha256.ToLowerInvariant()
+    if ($actualHash -ne $expectedHash) {
+        throw "Pinned vcpkg archive SHA-256 mismatch. Expected $expectedHash, got $actualHash. Delete $archivePath and retry."
+    }
+
+    $needsBootstrap = (-not (Test-Path -LiteralPath $vcpkgExe)) -or
+        (-not (Test-Path -LiteralPath $vcpkgToolchainInSource)) -or
+        (-not (Test-Path -LiteralPath $bootstrapScript))
+    if ($needsBootstrap) {
+        if (Test-Path -LiteralPath $sourceRoot) {
+            Remove-Item -LiteralPath $sourceRoot -Recurse -Force
+        }
+        Expand-Archive -LiteralPath $archivePath -DestinationPath $CacheRoot -Force
+        if (-not (Test-Path -LiteralPath $sourceRoot)) {
+            throw "Pinned vcpkg archive did not extract to $sourceRoot"
+        }
+
+        Push-Location $sourceRoot
+        try {
+            Invoke-Checked $bootstrapScript @("-disableMetrics")
+        } finally {
+            Pop-Location
+        }
+    }
+
+    if (-not (Test-Path -LiteralPath $vcpkgExe)) {
+        throw "Pinned vcpkg bootstrap did not produce $vcpkgExe"
+    }
+    return $vcpkgExe
+}
+
+function Copy-OpenSslRuntime {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$InstalledDir,
+        [Parameter(Mandatory = $true)]
+        [string]$PackageDir
+    )
+
+    $binDir = Join-Path $InstalledDir "bin"
+    $sslDlls = @(Get-ChildItem -LiteralPath $binDir -Filter "libssl-*.dll" -File -ErrorAction SilentlyContinue)
+    $cryptoDlls = @(Get-ChildItem -LiteralPath $binDir -Filter "libcrypto-*.dll" -File -ErrorAction SilentlyContinue)
+    if ($sslDlls.Count -lt 1 -or $cryptoDlls.Count -lt 1) {
+        throw "Pinned OpenSSL runtime DLLs were not found under $binDir"
+    }
+    $runtimeDlls = @($sslDlls) + @($cryptoDlls)
+
+    foreach ($runtimeDll in $runtimeDlls) {
+        Copy-Item -LiteralPath $runtimeDll.FullName -Destination (Join-Path $PackageDir $runtimeDll.Name) -Force
+    }
 }
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
@@ -88,27 +129,47 @@ $stagingRoot = Join-Path $distDir "staging"
 $packageName = "lanlink-windows-x64"
 $packageDir = Join-Path $stagingRoot $packageName
 $archive = Join-Path $distDir "$packageName.zip"
+$bootstrapMetadata = Join-Path $repoRoot "third-party\vcpkg-bootstrap.json"
+$vcpkgCache = Join-Path $repoRoot "third-party\.cache"
+$vcpkgInstalled = Join-Path $repoRoot "third-party\vcpkg_installed"
+$installedTriplet = Join-Path $vcpkgInstalled "x64-windows"
 
-$qtPrefix = Resolve-QtPrefix
-$windeployqtPath = $null
-$windeployqtCommand = Get-Command "windeployqt.exe" -ErrorAction SilentlyContinue
-if ($null -ne $windeployqtCommand) {
-    $windeployqtPath = $windeployqtCommand.Source
-} elseif (-not [string]::IsNullOrWhiteSpace($qtPrefix)) {
-    $qtdirWindeployqt = Join-Path $qtPrefix "bin\windeployqt.exe"
-    if (Test-Path $qtdirWindeployqt) {
-        $windeployqtPath = $qtdirWindeployqt
-    }
+$bootstrapConfig = Read-VcpkgBootstrapConfig $bootstrapMetadata
+$vcpkgExe = Ensure-Vcpkg $vcpkgCache $bootstrapConfig
+$vcpkgRoot = Split-Path $vcpkgExe -Parent
+$vcpkgToolchain = Join-Path $vcpkgRoot "scripts\buildsystems\vcpkg.cmake"
+$binaryCache = Join-Path $vcpkgCache "archives"
+$downloadCache = Join-Path $vcpkgCache "downloads"
+$binarySource = "clear;files,$binaryCache,readwrite"
+
+if (-not (Test-Path -LiteralPath $vcpkgToolchain)) {
+    throw "Pinned vcpkg toolchain is missing: $vcpkgToolchain"
 }
 
-$desktopEnabled = (-not [string]::IsNullOrWhiteSpace($qtPrefix)) -and
-    ($null -ne $windeployqtPath)
-if ($RequireDesktop -and -not $desktopEnabled) {
-    throw "Qt6 Widgets and windeployqt.exe are required. Install a Qt6 MSVC x64 kit, add its bin directory to PATH, or set QTDIR."
+New-Item -ItemType Directory -Force -Path $binaryCache | Out-Null
+New-Item -ItemType Directory -Force -Path $downloadCache | Out-Null
+$env:VCPKG_BINARY_SOURCES = $binarySource
+$env:VCPKG_DOWNLOADS = $downloadCache
+Invoke-Checked $vcpkgExe @(
+    "install",
+    "--x-manifest-root=$repoRoot",
+    "--x-install-root=$vcpkgInstalled",
+    "--triplet=x64-windows",
+    "--host-triplet=x64-windows",
+    "--binarysource=$binarySource"
+)
+
+$qtConfigDir = Join-Path $installedTriplet "lib\cmake\Qt6"
+$windeployqtPath = Join-Path $installedTriplet "tools\Qt6\bin\windeployqt.exe"
+if (-not (Test-Path -LiteralPath $qtConfigDir)) {
+    throw "Pinned Qt6 CMake package is missing: $qtConfigDir"
+}
+if (-not (Test-Path -LiteralPath $windeployqtPath)) {
+    throw "Pinned Qt6 windeployqt.exe is missing: $windeployqtPath"
 }
 
-if (Test-Path $buildDir) {
-    Remove-Item -Recurse -Force $buildDir
+if (Test-Path -LiteralPath $buildDir) {
+    Remove-Item -LiteralPath $buildDir -Recurse -Force
 }
 
 $cmakeArguments = @(
@@ -117,53 +178,53 @@ $cmakeArguments = @(
     "-G", "Visual Studio 17 2022",
     "-A", "x64",
     "-DCMAKE_CXX_EXTENSIONS=OFF",
-    "-DLANLINK_ENABLE_TLS=OFF",
-    "-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded"
+    "-DCMAKE_TOOLCHAIN_FILE=$vcpkgToolchain",
+    "-DVCPKG_MANIFEST_MODE=ON",
+    "-DVCPKG_MANIFEST_DIR=$repoRoot",
+    "-DVCPKG_INSTALLED_DIR=$vcpkgInstalled",
+    "-DVCPKG_TARGET_TRIPLET=x64-windows",
+    "-DCMAKE_PREFIX_PATH=$installedTriplet",
+    "-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL",
+    "-DLANLINK_BUILD_DESKTOP=ON",
+    "-DLANLINK_ENABLE_TLS=ON",
+    "-DLANLINK_REQUIRE_TLS=ON"
 )
-if ($desktopEnabled) {
-    $cmakeArguments += "-DLANLINK_BUILD_DESKTOP=ON"
-    $cmakeArguments += "-DCMAKE_PREFIX_PATH=$qtPrefix"
-    Write-Host "Qt6 detected at $qtPrefix; the desktop app will be packaged."
-} else {
-    $cmakeArguments += "-DLANLINK_BUILD_DESKTOP=OFF"
-    Write-Warning "Qt6 Widgets or windeployqt.exe was not detected; creating a CLI-only Windows archive. Install Qt6 and rerun to include the desktop app."
-}
 Invoke-Checked "cmake" $cmakeArguments
 Invoke-Checked "cmake" @("--build", $buildDir, "--config", $Configuration, "--parallel")
 Invoke-Checked "ctest" @("--test-dir", $buildDir, "-C", $Configuration, "--repeat", "until-pass:10", "--output-on-failure")
 
-if (Test-Path $packageDir) {
-    Remove-Item -Recurse -Force $packageDir
+if (Test-Path -LiteralPath $packageDir) {
+    Remove-Item -LiteralPath $packageDir -Recurse -Force
 }
-if (Test-Path $archive) {
-    Remove-Item -Force $archive
+if (Test-Path -LiteralPath $archive) {
+    Remove-Item -LiteralPath $archive -Force
 }
 New-Item -ItemType Directory -Force -Path $packageDir | Out-Null
 Copy-Item (Join-Path $buildDir "$Configuration\lanlink_app.exe") (Join-Path $packageDir "lanlink_app.exe")
 
-if ($desktopEnabled) {
-    $desktopBuild = Join-Path $buildDir "$Configuration\lanlink_desktop.exe"
-    if (-not (Test-Path $desktopBuild)) {
-        throw "Qt6 was detected, but lanlink_desktop.exe was not built. Check the Qt6 MSVC x64 installation."
-    }
-
-    $desktopPackage = Join-Path $packageDir "lanlink_desktop.exe"
-    Copy-Item $desktopBuild $desktopPackage
-    Invoke-Checked $windeployqtPath @(
-        "--release",
-        "--no-translations",
-        "--dir", $packageDir,
-        $desktopPackage
-    )
-    Write-Host "Packaged lanlink_desktop.exe with Qt runtime dependencies."
+$desktopBuild = Join-Path $buildDir "$Configuration\lanlink_desktop.exe"
+if (-not (Test-Path -LiteralPath $desktopBuild)) {
+    throw "Pinned Qt6 build did not produce lanlink_desktop.exe: $desktopBuild"
 }
 
+$desktopPackage = Join-Path $packageDir "lanlink_desktop.exe"
+Copy-Item -LiteralPath $desktopBuild -Destination $desktopPackage
+Invoke-Checked $windeployqtPath @(
+    "--release",
+    "--no-translations",
+    "--dir", $packageDir,
+    $desktopPackage
+)
+Copy-OpenSslRuntime $installedTriplet $packageDir
+Write-Host "Packaged lanlink_desktop.exe and pinned OpenSSL runtime dependencies."
+
 Copy-Item (Join-Path $repoRoot "README.md") (Join-Path $packageDir "README.md")
+Copy-Item (Join-Path $repoRoot "third-party\README.md") (Join-Path $packageDir "THIRD_PARTY_NOTICES.md")
 
 foreach ($document in @("LICENSE", "LICENSE.md")) {
     $source = Join-Path $repoRoot $document
-    if (Test-Path $source) {
-        Copy-Item $source (Join-Path $packageDir $document)
+    if (Test-Path -LiteralPath $source) {
+        Copy-Item -LiteralPath $source -Destination (Join-Path $packageDir $document)
     }
 }
 
