@@ -219,12 +219,14 @@ TEST(MainWindowTest, UsesLanLinkIconForWindowAndTray) {
   EXPECT_FALSE(tray->icon().isNull());
 }
 
-TEST(MainWindowTest, UsesLanLinkMarkInTitleBar) {
+TEST(MainWindowTest, UsesWordmarkWithoutTitleBarIcon) {
   MainWindow window(nullptr, fake_backend_factory(), false);
 
-  auto* brand = window.findChild<QLabel*>(QStringLiteral("brandIcon"));
-  ASSERT_NE(brand, nullptr);
-  EXPECT_FALSE(brand->pixmap().isNull());
+  auto* titleIcon = window.findChild<QLabel*>(QStringLiteral("brandIcon"));
+  auto* wordmark = window.findChild<QLabel*>(QStringLiteral("appName"));
+  EXPECT_EQ(titleIcon, nullptr);
+  ASSERT_NE(wordmark, nullptr);
+  EXPECT_FALSE(wordmark->pixmap().isNull());
 }
 
 TEST(MainWindowTest, UsesPlatformTypographyHierarchy) {

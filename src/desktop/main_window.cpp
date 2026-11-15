@@ -265,13 +265,6 @@ void MainWindow::setupUi() {
   addWindowControl(QStringLiteral("×"), QStringLiteral("windowCloseButton"),
                    WindowControlRole::Close);
 #endif
-  auto* logo = new QLabel;
-  logo->setObjectName(QStringLiteral("brandIcon"));
-  logo->setFixedSize(32, 32);
-  logo->setAlignment(Qt::AlignCenter);
-  logo->setPixmap(QPixmap(QStringLiteral(":/icons/lanlink-icon.png"))
-                      .scaled(30, 30, Qt::KeepAspectRatio, Qt::SmoothTransformation));
-  titleLayout->addWidget(logo);
   auto* appName = new QLabel(QStringLiteral("LANLink"));
   appName->setObjectName(QStringLiteral("appName"));
   appName->setAccessibleName(QStringLiteral("LANLink"));
