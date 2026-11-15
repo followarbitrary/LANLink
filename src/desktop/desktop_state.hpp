@@ -12,6 +12,12 @@
 
 namespace lanlink::desktop {
 
+inline constexpr double kTopologyOriginX = 40.0;
+inline constexpr double kTopologyOriginY = 68.0;
+inline constexpr double kTopologyCardWidth = 280.0;
+inline constexpr double kTopologyCardHeight = 150.0;
+inline constexpr double kTopologyCardGap = 48.0;
+
 inline QString local_platform_name() {
 #if defined(__APPLE__)
   return QStringLiteral("macOS");
@@ -28,12 +34,28 @@ struct DeviceState {
   QString address;
   QColor accent;
   QPointF position;
-  QSizeF size{220.0, 120.0};
+  QSizeF size{kTopologyCardWidth, kTopologyCardHeight};
   bool local{false};
   bool online{false};
   std::uint64_t deviceId{};
   std::uint64_t displayId{};
 };
+
+inline QPointF default_new_device_position(const QVector<DeviceState>& devices) {
+  if (devices.isEmpty()) return QPointF(kTopologyOriginX, kTopologyOriginY);
+
+  int rightmostIndex = 0;
+  double rightmostEdge = devices.front().position.x() + devices.front().size.width();
+  for (int index = 1; index < devices.size(); ++index) {
+    const auto& device = devices[index];
+    const double edge = device.position.x() + device.size.width();
+    if (edge > rightmostEdge) {
+      rightmostEdge = edge;
+      rightmostIndex = index;
+    }
+  }
+  return QPointF(rightmostEdge + kTopologyCardGap, devices[rightmostIndex].position.y());
+}
 
 struct DesktopState {
   app::AppOptions options;
@@ -71,14 +93,18 @@ struct DesktopState {
     options.peer_display_id = 2;
     devices = {
         {QStringLiteral("本机"), local_platform_name(), QStringLiteral("未启动"),
-         QColor(QStringLiteral("#6ea8ff")), QPointF(40.0, 68.0), QSizeF(220.0, 120.0), true,
+         QColor(QStringLiteral("#6ea8ff")), QPointF(kTopologyOriginX, kTopologyOriginY),
+         QSizeF(kTopologyCardWidth, kTopologyCardHeight), true,
          false, options.device_id, options.display_id},
     };
   }
 
   void resetLayout() {
-    if (!devices.isEmpty()) devices[0].position = QPointF(40.0, 68.0);
-    if (devices.size() > 1) devices[1].position = QPointF(310.0, 68.0);
+    if (!devices.isEmpty()) devices[0].position = QPointF(kTopologyOriginX, kTopologyOriginY);
+    if (devices.size() > 1) {
+      devices[1].position = QPointF(kTopologyOriginX + kTopologyCardWidth + kTopologyCardGap,
+                                    kTopologyOriginY);
+    }
     canvasZoom = 1.0;
   }
 };

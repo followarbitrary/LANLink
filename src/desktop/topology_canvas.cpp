@@ -10,12 +10,13 @@
 namespace lanlink::desktop {
 namespace {
 const QColor kCanvas(QStringLiteral("#141e2a"));
-const QColor kCard(QStringLiteral("#202b39"));
-const QColor kCardSelected(QStringLiteral("#2b4159"));
-const QColor kBorder(QStringLiteral("#53647a"));
+const QColor kCard(QStringLiteral("#1b2d3d"));
+const QColor kCardSelected(QStringLiteral("#24445e"));
+const QColor kBorder(QStringLiteral("#42607a"));
 const QColor kText(QStringLiteral("#edf2f8"));
 const QColor kMuted(QStringLiteral("#90a3b9"));
-const QColor kLink(QStringLiteral("#83d3ae"));
+const QColor kLink(QStringLiteral("#52d1b0"));
+const QColor kOnline(QStringLiteral("#52e0a8"));
 }
 
 TopologyCanvas::TopologyCanvas(QWidget* parent) : QWidget(parent) {
@@ -32,15 +33,19 @@ void TopologyCanvas::setState(DesktopState* state) {
 
 void TopologyCanvas::setLayoutMode(bool horizontal) {
   horizontalLayout_ = horizontal;
-  setMinimumHeight(horizontalLayout_ ? 270 : 370);
+  setMinimumHeight(horizontalLayout_ ? 270 : 440);
   if (state_ != nullptr && state_->devices.size() >= 2) {
-    if (horizontalLayout_) {
-      state_->devices[0].position = QPointF(40.0, 68.0);
-      state_->devices[1].position = QPointF(310.0, 68.0);
-    } else {
-      state_->devices[0].position = QPointF(40.0, 68.0);
-      state_->devices[1].position = QPointF(310.0, 68.0);
-      state_->devices[1].position = QPointF(40.0, 210.0);
+    for (int index = 0; index < state_->devices.size(); ++index) {
+      const double offset = static_cast<double>(index);
+      state_->devices[index].position = horizontalLayout_
+                                            ? QPointF(kTopologyOriginX +
+                                                          offset * (kTopologyCardWidth +
+                                                                    kTopologyCardGap),
+                                                      kTopologyOriginY)
+                                            : QPointF(kTopologyOriginX,
+                                                      kTopologyOriginY +
+                                                          offset * (kTopologyCardHeight +
+                                                                    kTopologyCardGap));
     }
     emit layoutChanged();
   }
@@ -50,7 +55,20 @@ void TopologyCanvas::setLayoutMode(bool horizontal) {
 void TopologyCanvas::resetLayout() {
   if (state_ == nullptr) return;
   state_->resetLayout();
-  if (!horizontalLayout_ && state_->devices.size() >= 2) state_->devices[1].position = QPointF(40.0, 210.0);
+  if (state_->devices.size() >= 2) {
+    for (int index = 1; index < state_->devices.size(); ++index) {
+      const double offset = static_cast<double>(index);
+      state_->devices[index].position = horizontalLayout_
+                                            ? QPointF(kTopologyOriginX +
+                                                          offset * (kTopologyCardWidth +
+                                                                    kTopologyCardGap),
+                                                      kTopologyOriginY)
+                                            : QPointF(kTopologyOriginX,
+                                                      kTopologyOriginY +
+                                                          offset * (kTopologyCardHeight +
+                                                                    kTopologyCardGap));
+    }
+  }
   pan_ = QPointF(0.0, 0.0);
   emit layoutChanged();
   update();
@@ -122,7 +140,7 @@ void TopologyCanvas::paintEvent(QPaintEvent*) {
   painter.translate(16.0 + pan_.x(), 18.0 + pan_.y());
   painter.scale(zoom, zoom);
 
-  QPen linkPen(kLink, 4.0 / zoom, Qt::DashLine);
+  QPen linkPen(kLink, 2.2 / zoom, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
   painter.setPen(linkPen);
   for (int index = 0; index + 1 < state_->devices.size(); ++index) {
     const QRectF first = cardRect(index);
@@ -149,31 +167,60 @@ void TopologyCanvas::paintEvent(QPaintEvent*) {
   for (int index = 0; index < state_->devices.size(); ++index) {
     const auto& device = state_->devices[index];
     const QRectF bounds = cardRect(index);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(QColor(0, 0, 0, 42));
+    painter.drawRoundedRect(bounds.translated(0.0, 4.0), 17.0, 17.0);
+
     painter.setPen(QPen(index == selectedIndex_ ? QColor(QStringLiteral("#8fc3ff")) : kBorder,
-                        index == selectedIndex_ ? 2.5 / zoom : 1.8 / zoom));
+                        index == selectedIndex_ ? 2.2 / zoom : 1.4 / zoom));
     painter.setBrush(index == selectedIndex_ ? kCardSelected : kCard);
-    painter.drawRoundedRect(bounds, 14.0, 14.0);
+    painter.drawRoundedRect(bounds, 17.0, 17.0);
 
-    painter.setPen(QPen(device.accent, 1.8 / zoom));
-    painter.setBrush(QColor(device.accent.red(), device.accent.green(), device.accent.blue(), 48));
-    painter.drawRoundedRect(QRectF(bounds.left() + 20.0, bounds.top() + 20.0, 68.0, 48.0), 7.0, 7.0);
-    painter.drawLine(QPointF(bounds.left() + 45.0, bounds.top() + 69.0),
-                     QPointF(bounds.left() + 63.0, bounds.top() + 69.0));
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(device.accent);
+    painter.drawRoundedRect(QRectF(bounds.left() + 11.0, bounds.top() + 14.0, 5.0,
+                                   bounds.height() - 28.0), 2.5, 2.5);
 
+    const QRectF iconTile(bounds.left() + 28.0, bounds.top() + 28.0, 64.0, 64.0);
+    painter.setBrush(QColor(device.accent.red(), device.accent.green(), device.accent.blue(), 42));
+    painter.drawRoundedRect(iconTile, 14.0, 14.0);
+    painter.setPen(QPen(device.accent, 2.0 / zoom));
+    const QRectF monitor(iconTile.left() + 17.0, iconTile.top() + 16.0, 30.0, 21.0);
+    painter.drawRoundedRect(monitor, 4.0, 4.0);
+    painter.drawLine(QPointF(iconTile.center().x(), monitor.bottom() + 1.0),
+                     QPointF(iconTile.center().x(), iconTile.top() + 46.0));
+    painter.drawLine(QPointF(iconTile.center().x() - 9.0, iconTile.top() + 47.0),
+                     QPointF(iconTile.center().x() + 9.0, iconTile.top() + 47.0));
+
+    const double textLeft = bounds.left() + 112.0;
+    const double textWidth = std::max(0.0, bounds.right() - textLeft - 18.0);
     painter.setPen(kText);
     QFont titleFont = painter.font();
-    titleFont.setPointSizeF(15.0);
+    titleFont.setPointSizeF(16.0);
     titleFont.setWeight(QFont::DemiBold);
     painter.setFont(titleFont);
-    painter.drawText(QRectF(bounds.left(), bounds.top() + 70.0, bounds.width(), 24.0), Qt::AlignCenter,
-                     device.name);
+    const QString title = painter.fontMetrics().elidedText(device.name, Qt::ElideRight,
+                                                            static_cast<int>(textWidth));
+    painter.drawText(QRectF(textLeft, bounds.top() + 30.0, textWidth, 26.0),
+                     Qt::AlignLeft | Qt::AlignVCenter, title);
+
+    const bool online = device.online;
+    const QString status = device.local
+                               ? (online ? QStringLiteral("本机 · 在线")
+                                         : QStringLiteral("本机 · 未启动"))
+                               : (online ? QStringLiteral("已连接 · 在线")
+                                         : QStringLiteral("已断开"));
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(online ? kOnline : QColor(QStringLiteral("#71869b")));
+    painter.drawEllipse(QPointF(textLeft + 5.0, bounds.top() + 78.0), 4.5, 4.5);
+
     painter.setPen(kMuted);
     QFont stateFont = painter.font();
-    stateFont.setPointSizeF(11.0);
+    stateFont.setPointSizeF(11.5);
     stateFont.setWeight(QFont::Normal);
     painter.setFont(stateFont);
-    painter.drawText(QRectF(bounds.left(), bounds.top() + 94.0, bounds.width(), 20.0), Qt::AlignCenter,
-                     device.local ? QStringLiteral("本机 · 在线") : QStringLiteral("已连接 · 在线"));
+    painter.drawText(QRectF(textLeft + 18.0, bounds.top() + 66.0, textWidth - 18.0, 26.0),
+                     Qt::AlignLeft | Qt::AlignVCenter, status);
   }
 }
 

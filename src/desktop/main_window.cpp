@@ -568,8 +568,8 @@ void MainWindow::onPeerChanged(const QString& name, const QString& platform,
         platform,
         address,
         QColor(QStringLiteral("#4db69e")),
-        QPointF(310.0 + 270.0 * static_cast<double>(peerIndex - 1), 68.0),
-        QSizeF(220.0, 120.0),
+        default_new_device_position(state_.devices),
+        QSizeF(kTopologyCardWidth, kTopologyCardHeight),
         false,
         online,
         deviceId,
@@ -622,9 +622,11 @@ void MainWindow::onRemoteTopologyChanged(const discovery::TopologySnapshot& snap
     return;
   }
   const bool peer_on_right = peer_center_x > local_center_x;
-  state_.devices[0].position = QPointF(40.0, 68.0);
+  state_.devices[0].position = QPointF(kTopologyOriginX, kTopologyOriginY);
   state_.devices[1].position =
-      QPointF(peer_on_right ? 310.0 : -230.0, state_.devices[0].position.y());
+      QPointF(peer_on_right ? kTopologyOriginX + kTopologyCardWidth + kTopologyCardGap
+                            : kTopologyOriginX - kTopologyCardGap - kTopologyCardWidth,
+              state_.devices[0].position.y());
   state_.options.remote_side = peer_on_right ? app::RemoteSide::kRight : app::RemoteSide::kLeft;
   state_.options.remote_side_explicit = true;
   rebuildPages();

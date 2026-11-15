@@ -5,6 +5,7 @@
 #include "lanlink/platform/fake_input_backend.hpp"
 
 #include <QApplication>
+#include <QImage>
 #include <QAction>
 #include <QCheckBox>
 #include <QElapsedTimer>
@@ -45,6 +46,13 @@ testing::Environment* const qt_widgets_environment =
 using lanlink::desktop::MainWindow;
 using lanlink::desktop::RuntimeWorker;
 using lanlink::desktop::TopologyCanvas;
+using lanlink::desktop::DesktopState;
+using lanlink::desktop::DeviceState;
+using lanlink::desktop::kTopologyCardGap;
+using lanlink::desktop::kTopologyCardHeight;
+using lanlink::desktop::kTopologyCardWidth;
+using lanlink::desktop::kTopologyOriginX;
+using lanlink::desktop::kTopologyOriginY;
 
 RuntimeWorker::BackendFactory fake_backend_factory() {
   return [] {
@@ -193,6 +201,104 @@ TEST(MainWindowTest, AddsPeerOnlyAfterPeerSignal) {
   EXPECT_EQ(label_count(window, QStringLiteral("等待对端设备")), 0);
 }
 
+TEST(MainWindowTest, SingleNodeTopologyDoesNotRenderConnectionLine) {
+  DesktopState state;
+  TopologyCanvas canvas;
+  canvas.setState(&state);
+  canvas.resize(800, 300);
+
+  const QColor background(QStringLiteral("#141e2a"));
+  QImage image(canvas.size(), QImage::Format_ARGB32);
+  const auto has_link_pixels = [&]() {
+    for (int y = 152; y <= 158; ++y) {
+      for (int x = 326; x <= 366; ++x) {
+        const QColor pixel = image.pixelColor(x, y);
+        if (pixel != background && pixel.green() > background.green()) return true;
+      }
+    }
+    return false;
+  };
+  const auto render = [&]() {
+    image.fill(Qt::transparent);
+    canvas.render(&image);
+  };
+
+  render();
+  EXPECT_FALSE(has_link_pixels());
+
+  state.devices.append(DeviceState{
+      QStringLiteral("设备 2"),
+      QStringLiteral("macOS"),
+      QStringLiteral("192.168.1.2:41000"),
+      QColor(QStringLiteral("#4db69e")),
+      default_new_device_position(state.devices),
+      QSizeF(kTopologyCardWidth, kTopologyCardHeight),
+      false,
+      true,
+      2,
+      2,
+  });
+  render();
+  EXPECT_TRUE(has_link_pixels());
+
+  state.devices.removeLast();
+  render();
+  EXPECT_FALSE(has_link_pixels());
+}
+
+TEST(MainWindowTest, LShapeLayoutKeepsCardsSeparatedVertically) {
+  DesktopState state;
+  state.devices.append(DeviceState{
+      QStringLiteral("设备 2"),
+      QStringLiteral("macOS"),
+      QStringLiteral("192.168.1.2:41000"),
+      QColor(QStringLiteral("#4db69e")),
+      QPointF(0.0, 0.0),
+      QSizeF(kTopologyCardWidth, kTopologyCardHeight),
+      false,
+      true,
+      2,
+      2,
+  });
+  TopologyCanvas canvas;
+  canvas.setState(&state);
+  canvas.setLayoutMode(false);
+
+  ASSERT_EQ(state.devices.size(), 2);
+  EXPECT_EQ(state.devices[0].position, QPointF(kTopologyOriginX, kTopologyOriginY));
+  EXPECT_EQ(state.devices[1].position,
+            QPointF(kTopologyOriginX, kTopologyOriginY + kTopologyCardHeight + kTopologyCardGap));
+}
+
+TEST(MainWindowTest, LShapeLayoutStacksAllDevicesWithoutOverlap) {
+  DesktopState state;
+  for (int index = 0; index < 2; ++index) {
+    state.devices.append(DeviceState{
+        QStringLiteral("设备 %1").arg(index + 2),
+        QStringLiteral("macOS"),
+        QStringLiteral("192.168.1.%1:41000").arg(index + 2),
+        QColor(QStringLiteral("#4db69e")),
+        QPointF(0.0, 0.0),
+        QSizeF(kTopologyCardWidth, kTopologyCardHeight),
+        false,
+        true,
+        static_cast<std::uint64_t>(index + 2),
+        static_cast<std::uint64_t>(index + 2),
+    });
+  }
+  TopologyCanvas canvas;
+  canvas.setState(&state);
+  canvas.setLayoutMode(false);
+
+  ASSERT_EQ(state.devices.size(), 3);
+  for (int index = 0; index < state.devices.size(); ++index) {
+    EXPECT_EQ(state.devices[index].position,
+              QPointF(kTopologyOriginX,
+                      kTopologyOriginY +
+                          static_cast<double>(index) * (kTopologyCardHeight + kTopologyCardGap)));
+  }
+}
+
 TEST(MainWindowTest, TopologyLayoutDrivesPeerDirection) {
   MainWindow window(nullptr, fake_backend_factory(), false);
   ASSERT_TRUE(QMetaObject::invokeMethod(
@@ -220,7 +326,7 @@ TEST(MainWindowTest, TopologyLayoutDrivesPeerDirection) {
   ASSERT_NE(canvas, nullptr);
   ASSERT_GT(canvas->width(), 0);
 
-  const QPointF press(346.0, 106.0);
+  const QPointF press(404.0, 106.0);
   const QPointF move(36.0, 106.0);
   QMouseEvent pressEvent(QEvent::MouseButtonPress, press, press, press, Qt::LeftButton,
                          Qt::LeftButton, Qt::NoModifier);
