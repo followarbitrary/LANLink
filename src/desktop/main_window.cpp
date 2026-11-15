@@ -274,7 +274,16 @@ void MainWindow::setupUi() {
   titleLayout->addWidget(logo);
   auto* appName = new QLabel(QStringLiteral("LANLink"));
   appName->setObjectName(QStringLiteral("appName"));
+  appName->setAccessibleName(QStringLiteral("LANLink"));
+  appName->setAlignment(Qt::AlignCenter);
   appName->setStyleSheet(QStringLiteral("font-size: 25px; font-weight: 600;"));
+  const QPixmap wordmark(QStringLiteral(":/icons/lanlink-wordmark.png"));
+  if (!wordmark.isNull()) {
+    const auto scaledWordmark = wordmark.scaledToHeight(30, Qt::SmoothTransformation);
+    appName->setPixmap(scaledWordmark);
+    appName->setText(QString());
+    appName->setFixedSize(scaledWordmark.size());
+  }
   titleLayout->addWidget(appName);
   titleLayout->addStretch();
   auto* running = new QLabel(QStringLiteral("●  未运行"));

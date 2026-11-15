@@ -237,10 +237,11 @@ TEST(MainWindowTest, UsesPlatformTypographyHierarchy) {
   ASSERT_NE(heading, nullptr);
   ASSERT_NE(subtitle, nullptr);
 
-  EXPECT_EQ(brand->font().pixelSize(), 25);
+  EXPECT_FALSE(brand->pixmap().isNull());
+  EXPECT_TRUE(brand->text().isEmpty());
+  EXPECT_EQ(brand->accessibleName(), QStringLiteral("LANLink"));
   EXPECT_EQ(heading->font().pixelSize(), 30);
   EXPECT_EQ(subtitle->font().pixelSize(), 15);
-  EXPECT_EQ(brand->font().weight(), QFont::DemiBold);
   EXPECT_EQ(heading->font().weight(), QFont::DemiBold);
   EXPECT_EQ(QApplication::font().pixelSize(), 15);
   EXPECT_NE(QApplication::font().family(), QStringLiteral("Sans Serif"));
