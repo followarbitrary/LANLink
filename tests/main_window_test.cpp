@@ -167,6 +167,12 @@ TEST(MainWindowTest, WindowControlsFollowPlatformOrderingAndSizing) {
   ASSERT_NE(minimize, nullptr);
   ASSERT_NE(maximize, nullptr);
   ASSERT_NE(close, nullptr);
+  EXPECT_TRUE(minimize->property("windowControl").toBool());
+  EXPECT_TRUE(maximize->property("windowControl").toBool());
+  EXPECT_TRUE(close->property("windowControl").toBool());
+  EXPECT_EQ(minimize->accessibleName(), QStringLiteral("最小化窗口"));
+  EXPECT_EQ(maximize->accessibleName(), QStringLiteral("最大化窗口"));
+  EXPECT_EQ(close->accessibleName(), QStringLiteral("关闭窗口"));
 
 #if defined(Q_OS_MACOS)
   EXPECT_LT(close->geometry().left(), minimize->geometry().left());
@@ -174,6 +180,8 @@ TEST(MainWindowTest, WindowControlsFollowPlatformOrderingAndSizing) {
   EXPECT_EQ(close->text(), QStringLiteral("×"));
   EXPECT_EQ(minimize->text(), QStringLiteral("−"));
   EXPECT_EQ(maximize->text(), QStringLiteral("↗"));
+  EXPECT_NE(window.styleSheet().indexOf(QStringLiteral("color: transparent")), -1);
+  EXPECT_NE(window.styleSheet().indexOf(QStringLiteral("QPushButton[windowControl=\"true\"]:hover")), -1);
   EXPECT_EQ(close->width(), 16);
   EXPECT_EQ(minimize->height(), 16);
 #else

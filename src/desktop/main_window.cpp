@@ -47,16 +47,17 @@ const QString kWindowStyleBase = QStringLiteral(
 
 #if defined(Q_OS_MACOS)
 const QString kWindowControlStyle = QStringLiteral(
-    "QPushButton[windowControl=\"true\"] { border: 0; border-radius: 8px; padding: 0; font-size: 10px; font-weight: 700; }"
-    "QPushButton#windowCloseButton { color: #6e1611; background: #ff5f57; border: 1px solid #e34f49; }"
-    "QPushButton#windowMinimizeButton { color: #72550d; background: #ffbd2e; border: 1px solid #e0a522; }"
-    "QPushButton#windowMaximizeButton { color: #12612c; background: #28c840; border: 1px solid #20aa35; }"
-    "QPushButton#windowCloseButton:hover { background: #ff6b63; }"
-    "QPushButton#windowMinimizeButton:hover { background: #ffc94a; }"
-    "QPushButton#windowMaximizeButton:hover { background: #42d85a; }");
+    "QPushButton[windowControl=\"true\"] { color: transparent; border: 0; border-radius: 8px; padding: 0; font-size: 9px; font-weight: 700; }"
+    "QPushButton[windowControl=\"true\"]:hover { color: #18222e; }"
+    "QPushButton#windowCloseButton { background: #ff5f57; border: 1px solid #e34f49; }"
+    "QPushButton#windowMinimizeButton { background: #ffbd2e; border: 1px solid #e0a522; }"
+    "QPushButton#windowMaximizeButton { background: #28c840; border: 1px solid #20aa35; }"
+    "QPushButton#windowCloseButton:hover { color: #6e1611; background: #ff6b63; }"
+    "QPushButton#windowMinimizeButton:hover { color: #72550d; background: #ffc94a; }"
+    "QPushButton#windowMaximizeButton:hover { color: #12612c; background: #42d85a; }");
 #else
 const QString kWindowControlStyle = QStringLiteral(
-    "QPushButton[windowControl=\"true\"] { color: #8fa1b5; background: transparent; border: 0; border-radius: 8px; font-size: 18px; padding: 0; }"
+    "QPushButton[windowControl=\"true\"] { color: #a6b7ca; background: transparent; border: 0; border-radius: 8px; font-size: 16px; padding: 0; }"
     "QPushButton[windowControl=\"true\"]:hover { color: #f0f5fb; background: #263646; }"
     "QPushButton#windowCloseButton:hover { color: #ffffff; background: #b94d59; }");
 #endif
