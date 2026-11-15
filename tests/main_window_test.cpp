@@ -156,6 +156,38 @@ TEST(MainWindowTest, HidesQtConsoleSubtitleFromTitleBar) {
   EXPECT_FALSE(label_contains(window, QStringLiteral("Qt6 控制台")));
 }
 
+TEST(MainWindowTest, WindowControlsFollowPlatformOrderingAndSizing) {
+  MainWindow window(nullptr, fake_backend_factory(), false);
+  window.show();
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+
+  auto* minimize = window.findChild<QPushButton*>(QStringLiteral("windowMinimizeButton"));
+  auto* maximize = window.findChild<QPushButton*>(QStringLiteral("windowMaximizeButton"));
+  auto* close = window.findChild<QPushButton*>(QStringLiteral("windowCloseButton"));
+  ASSERT_NE(minimize, nullptr);
+  ASSERT_NE(maximize, nullptr);
+  ASSERT_NE(close, nullptr);
+
+#if defined(Q_OS_MACOS)
+  EXPECT_LT(close->geometry().left(), minimize->geometry().left());
+  EXPECT_LT(minimize->geometry().left(), maximize->geometry().left());
+  EXPECT_EQ(close->text(), QStringLiteral("×"));
+  EXPECT_EQ(minimize->text(), QStringLiteral("−"));
+  EXPECT_EQ(maximize->text(), QStringLiteral("↗"));
+  EXPECT_EQ(close->width(), 16);
+  EXPECT_EQ(minimize->height(), 16);
+#else
+  EXPECT_LT(minimize->geometry().left(), maximize->geometry().left());
+  EXPECT_LT(maximize->geometry().left(), close->geometry().left());
+  EXPECT_EQ(minimize->text(), QStringLiteral("—"));
+  EXPECT_EQ(maximize->text(), QStringLiteral("□"));
+  EXPECT_EQ(close->text(), QStringLiteral("×"));
+  EXPECT_EQ(close->width(), 34);
+  EXPECT_EQ(minimize->height(), 34);
+#endif
+  window.close();
+}
+
 TEST(MainWindowTest, UsesLanLinkIconForWindowAndTray) {
   MainWindow window(nullptr, fake_backend_factory(), false);
 

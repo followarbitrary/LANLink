@@ -21,7 +21,6 @@
 #include <QScreen>
 #include <QScrollArea>
 #include <QSignalBlocker>
-#include <QStyle>
 #include <QTimer>
 #include <QVBoxLayout>
 
@@ -32,7 +31,7 @@
 namespace lanlink::desktop {
 namespace {
 
-const QString kWindowStyle = QStringLiteral(
+const QString kWindowStyleBase = QStringLiteral(
     "QMainWindow { background: #1e2935; }"
     "QWidget#titleBar { background: #18222e; }"
     "QWidget#nav { background: #151d28; }"
@@ -41,13 +40,28 @@ const QString kWindowStyle = QStringLiteral(
     "QLabel#muted { color: #93a5ba; }"
     "QPushButton#navButton { color: #9caec2; background: transparent; border: 0; border-radius: 10px; text-align: left; padding: 12px 14px; font-size: 16px; }"
     "QPushButton#navButton:checked { color: #f0f5fb; background: #293f58; }"
-    "QPushButton#windowButton { color: #8fa1b5; background: transparent; border: 0; font-size: 18px; }"
-    "QPushButton#windowButton:hover { color: #f0f5fb; background: #263646; border-radius: 7px; }"
     "QStackedWidget#content { background: #1e2935; }"
     "QScrollArea#pageScroll { border: 0; background: #1e2935; }"
     "QScrollBar:vertical { background: #1e2935; width: 8px; }"
-    "QScrollBar::handle:vertical { background: #40556d; border-radius: 4px; }"
-);
+    "QScrollBar::handle:vertical { background: #40556d; border-radius: 4px; }");
+
+#if defined(Q_OS_MACOS)
+const QString kWindowControlStyle = QStringLiteral(
+    "QPushButton[windowControl=\"true\"] { border: 0; border-radius: 8px; padding: 0; font-size: 10px; font-weight: 700; }"
+    "QPushButton#windowCloseButton { color: #6e1611; background: #ff5f57; border: 1px solid #e34f49; }"
+    "QPushButton#windowMinimizeButton { color: #72550d; background: #ffbd2e; border: 1px solid #e0a522; }"
+    "QPushButton#windowMaximizeButton { color: #12612c; background: #28c840; border: 1px solid #20aa35; }"
+    "QPushButton#windowCloseButton:hover { background: #ff6b63; }"
+    "QPushButton#windowMinimizeButton:hover { background: #ffc94a; }"
+    "QPushButton#windowMaximizeButton:hover { background: #42d85a; }");
+#else
+const QString kWindowControlStyle = QStringLiteral(
+    "QPushButton[windowControl=\"true\"] { color: #8fa1b5; background: transparent; border: 0; border-radius: 8px; font-size: 18px; padding: 0; }"
+    "QPushButton[windowControl=\"true\"]:hover { color: #f0f5fb; background: #263646; }"
+    "QPushButton#windowCloseButton:hover { color: #ffffff; background: #b94d59; }");
+#endif
+
+const QString kWindowStyle = kWindowStyleBase + kWindowControlStyle;
 
 QPushButton* navButton(const QString& text, IconKind kind) {
   auto* button = new QPushButton(text);
@@ -147,8 +161,72 @@ void MainWindow::setupUi() {
   titleBar->setObjectName(QStringLiteral("titleBar"));
   titleBar->setFixedHeight(58);
   auto* titleLayout = new QHBoxLayout(titleBar);
+#if defined(Q_OS_MACOS)
+  titleLayout->setContentsMargins(14, 0, 14, 0);
+  titleLayout->setSpacing(8);
+#else
   titleLayout->setContentsMargins(22, 0, 14, 0);
   titleLayout->setSpacing(10);
+#endif
+
+  enum class WindowControlRole { Minimize, Maximize, Close };
+  auto* windowControls = new QWidget(titleBar);
+  windowControls->setObjectName(QStringLiteral("windowControls"));
+  auto* windowControlsLayout = new QHBoxLayout(windowControls);
+  windowControlsLayout->setContentsMargins(0, 0, 0, 0);
+#if defined(Q_OS_MACOS)
+  windowControlsLayout->setSpacing(8);
+#else
+  windowControlsLayout->setSpacing(2);
+#endif
+  const auto addWindowControl = [this, windowControlsLayout](const QString& text,
+                                                               const QString& objectName,
+                                                               WindowControlRole role) {
+    auto* button = new QPushButton(text);
+    button->setObjectName(objectName);
+    button->setProperty("windowControl", true);
+    if (role == WindowControlRole::Minimize) {
+      button->setAccessibleName(QStringLiteral("最小化窗口"));
+    } else if (role == WindowControlRole::Maximize) {
+      button->setAccessibleName(QStringLiteral("最大化窗口"));
+    } else {
+      button->setAccessibleName(QStringLiteral("关闭窗口"));
+    }
+#if defined(Q_OS_MACOS)
+    button->setFixedSize(16, 16);
+#else
+    button->setFixedSize(34, 34);
+#endif
+    setWindowButtonStyle(button);
+    windowControlsLayout->addWidget(button);
+    if (role == WindowControlRole::Minimize) {
+      connect(button, &QPushButton::clicked, this, &QWidget::showMinimized);
+    } else if (role == WindowControlRole::Maximize) {
+      connect(button, &QPushButton::clicked, this, [this]() {
+        isMaximized() ? showNormal() : showMaximized();
+      });
+    } else {
+      connect(button, &QPushButton::clicked, this, &QWidget::close);
+    }
+  };
+
+#if defined(Q_OS_MACOS)
+  addWindowControl(QStringLiteral("×"), QStringLiteral("windowCloseButton"),
+                   WindowControlRole::Close);
+  addWindowControl(QStringLiteral("−"), QStringLiteral("windowMinimizeButton"),
+                   WindowControlRole::Minimize);
+  addWindowControl(QStringLiteral("↗"), QStringLiteral("windowMaximizeButton"),
+                   WindowControlRole::Maximize);
+  titleLayout->addWidget(windowControls);
+  titleLayout->addSpacing(12);
+#else
+  addWindowControl(QStringLiteral("—"), QStringLiteral("windowMinimizeButton"),
+                   WindowControlRole::Minimize);
+  addWindowControl(QStringLiteral("□"), QStringLiteral("windowMaximizeButton"),
+                   WindowControlRole::Maximize);
+  addWindowControl(QStringLiteral("×"), QStringLiteral("windowCloseButton"),
+                   WindowControlRole::Close);
+#endif
   auto* logo = new QLabel;
   logo->setObjectName(QStringLiteral("brandIcon"));
   logo->setFixedSize(32, 32);
@@ -172,27 +250,10 @@ void MainWindow::setupUi() {
   controlLabel_ = new QLabel(QStringLiteral("当前控制：本机输入"));
   controlLabel_->setStyleSheet(QStringLiteral("color: #a6b7ca; font-size: 13px;"));
   titleLayout->addWidget(controlLabel_);
-  const QVector<QPair<QString, QStyle::StandardPixmap>> buttons = {
-      {QStringLiteral("—"), QStyle::SP_TitleBarMinButton},
-      {QStringLiteral("□"), QStyle::SP_TitleBarMaxButton},
-      {QStringLiteral("×"), QStyle::SP_TitleBarCloseButton},
-  };
-  for (const auto& [text, icon] : buttons) {
-    auto* button = new QPushButton(text);
-    button->setObjectName(QStringLiteral("windowButton"));
-    button->setFixedSize(34, 34);
-    setWindowButtonStyle(button);
-    titleLayout->addWidget(button);
-    if (icon == QStyle::SP_TitleBarMinButton) {
-      connect(button, &QPushButton::clicked, this, &QWidget::showMinimized);
-    } else if (icon == QStyle::SP_TitleBarMaxButton) {
-      connect(button, &QPushButton::clicked, this, [this]() {
-        isMaximized() ? showNormal() : showMaximized();
-      });
-    } else {
-      connect(button, &QPushButton::clicked, this, &QWidget::close);
-    }
-  }
+#if !defined(Q_OS_MACOS)
+  // Windows and Linux place minimize, maximize, close at the trailing edge.
+  titleLayout->addWidget(windowControls);
+#endif
   rootLayout->addWidget(titleBar);
 
   auto* body = new QWidget;
