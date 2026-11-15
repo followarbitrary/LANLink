@@ -267,8 +267,13 @@ int run_case(const std::string& executable, const std::string& arguments,
                             std::to_string(process_id()) + "_" +
                             std::to_string(unique_sequence) +
                             ".txt");
-  const std::string command = quote_shell(executable) + " " + arguments + " > " +
-                              quote_shell(output_path.string()) + " 2>&1";
+  std::string command = quote_shell(executable) + " " + arguments + " > " +
+                        quote_shell(output_path.string()) + " 2>&1";
+#if defined(_WIN32)
+  // `system` invokes cmd.exe /c. Wrapping the whole command keeps cmd.exe from
+  // treating the first space in a quoted executable path as the command end.
+  command = std::string{"\""} + command + "\"";
+#endif
   const int status = std::system(command.c_str());
 
   std::ifstream output_file(output_path);

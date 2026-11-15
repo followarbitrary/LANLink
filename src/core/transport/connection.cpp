@@ -60,6 +60,21 @@ bool set_tcp_no_delay(NativeSocket socket) {
 #endif
 }
 
+bool set_socket_buffers(NativeSocket socket) {
+#if defined(_WIN32)
+    // Clipboard packages may span several maximum-sized frames. Keep enough
+    // room for a complete package while the peer is between pump calls.
+    constexpr int kSocketBufferSize = static_cast<int>(protocol::kMaxClipboardPackageSize);
+    const char* value = reinterpret_cast<const char*>(&kSocketBufferSize);
+    const auto length = static_cast<int>(sizeof(kSocketBufferSize));
+    return setsockopt(socket, SOL_SOCKET, SO_SNDBUF, value, length) == 0 &&
+           setsockopt(socket, SOL_SOCKET, SO_RCVBUF, value, length) == 0;
+#else
+    (void)socket;
+    return true;
+#endif
+}
+
 bool interrupted() {
 #if defined(_WIN32)
     return WSAGetLastError() == WSAEINTR;
@@ -368,6 +383,7 @@ Result<Connection> Connection::connect(const Endpoint& endpoint, ConnectionOptio
                 close_socket(socket);
                 continue;
             }
+            (void)set_socket_buffers(socket);
             auto impl = std::make_unique<Impl>();
             impl->socket = socket;
             impl->options = options;
@@ -564,6 +580,7 @@ Result<Connection> Listener::accept(std::chrono::milliseconds timeout) {
         close_socket(socket);
         return Result<Connection>::failure("TCP_NODELAY setup failed");
     }
+    (void)set_socket_buffers(socket);
     auto connection = std::make_unique<Connection::Impl>();
     connection->socket = socket;
     connection->options = impl_->options;
