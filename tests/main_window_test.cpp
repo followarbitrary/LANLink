@@ -189,6 +189,11 @@ TEST(MainWindowTest, WindowControlsFollowPlatformOrderingAndSizing) {
   QApplication::sendEvent(close, &enter);
   QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
   EXPECT_GT(close->palette().color(QPalette::ButtonText).alpha(), 0);
+  QEvent leave(QEvent::Leave);
+  QApplication::sendEvent(close, &leave);
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+  EXPECT_EQ(close->property("windowControlHovered").toBool(), false);
+  EXPECT_EQ(close->palette().color(QPalette::ButtonText).alpha(), 0);
   EXPECT_EQ(close->width(), 16);
   EXPECT_EQ(minimize->height(), 16);
 #else
