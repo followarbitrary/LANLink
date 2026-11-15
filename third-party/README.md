@@ -31,4 +31,7 @@ The SDK binaries are intentionally not copied into this repository:
 The first Windows packaging run needs network access unless the vcpkg archive
 and package binary caches are already present. A checksum mismatch, failed
 bootstrap, or failed package install stops packaging; the script does not fall
-back to a machine-global Qt or OpenSSL installation.
+back to a machine-global Qt or OpenSSL installation. Git for Windows is also
+required during the first bootstrap so vcpkg can materialize its versioned
+port trees into the repository-local checkout; subsequent runs reuse that
+checkout without re-fetching the registry objects.

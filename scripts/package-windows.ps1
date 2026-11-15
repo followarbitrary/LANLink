@@ -45,6 +45,39 @@ function Read-VcpkgBootstrapConfig {
     return $config
 }
 
+function Ensure-VcpkgGitRepository {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SourceRoot,
+        [Parameter(Mandatory = $true)]
+        [string]$Commit
+    )
+
+    $gitCommand = Get-Command "git.exe" -ErrorAction SilentlyContinue
+    if ($null -eq $gitCommand) {
+        throw "Git for Windows is required to materialize the pinned vcpkg registry objects. Install Git and retry."
+    }
+
+    $git = $gitCommand.Source
+    $gitDir = Join-Path $SourceRoot ".git"
+    if (-not (Test-Path -LiteralPath $gitDir)) {
+        Invoke-Checked $git @("-C", $SourceRoot, "init")
+    }
+
+    $remoteUrl = (& $git -C $SourceRoot remote get-url origin 2>$null | Out-String).Trim()
+    if ([string]::IsNullOrWhiteSpace($remoteUrl)) {
+        Invoke-Checked $git @("-C", $SourceRoot, "remote", "add", "origin", "https://github.com/microsoft/vcpkg.git")
+    } elseif ($remoteUrl -ne "https://github.com/microsoft/vcpkg.git") {
+        Invoke-Checked $git @("-C", $SourceRoot, "remote", "set-url", "origin", "https://github.com/microsoft/vcpkg.git")
+    }
+
+    $head = (& $git -C $SourceRoot rev-parse HEAD 2>$null | Out-String).Trim()
+    if ($head -ne $Commit) {
+        Invoke-Checked $git @("-C", $SourceRoot, "fetch", "--depth", "1", "origin", $Commit)
+        Invoke-Checked $git @("-C", $SourceRoot, "reset", "--hard", $Commit)
+    }
+}
+
 function Ensure-Vcpkg {
     param(
         [Parameter(Mandatory = $true)]
@@ -86,7 +119,11 @@ function Ensure-Vcpkg {
         if (-not (Test-Path -LiteralPath $sourceRoot)) {
             throw "Pinned vcpkg archive did not extract to $sourceRoot"
         }
+    }
 
+    Ensure-VcpkgGitRepository $sourceRoot $BootstrapConfig.commit
+
+    if ($needsBootstrap) {
         Push-Location $sourceRoot
         try {
             Invoke-Checked $bootstrapScript @("-disableMetrics")

@@ -15,6 +15,7 @@ LANLink is a command-line node for sharing keyboard and mouse input between two 
 - Windows 10 or later.
 - CMake 3.23 or newer.
 - Visual Studio 2022 with the **Desktop development with C++** workload (the `debug-windows` preset uses the `Visual Studio 17 2022` generator).
+- Git for Windows, used by the pinned vcpkg registry to materialize versioned port trees.
 - Allow `lanlink_app` through Windows Defender Firewall when Windows prompts. Permit inbound TCP traffic on the LAN port used below (`41000`) on the Private network profile.
 
 ### Third-party dependencies
