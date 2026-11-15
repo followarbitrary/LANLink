@@ -153,10 +153,12 @@ QWidget* pageBase(const QString& title, const QString& subtitle, QWidget* parent
   layout->setSpacing(14);
 
   auto* heading = label(title);
-  heading->setStyleSheet(QStringLiteral("font-size: 30px; font-weight: 700;"));
+  heading->setObjectName(QStringLiteral("pageHeading"));
+  heading->setStyleSheet(QStringLiteral("font-size: 30px; font-weight: 600;"));
   layout->addWidget(heading);
   auto* sub = label(subtitle, QStringLiteral("muted"));
-  sub->setStyleSheet(QStringLiteral("font-size: 16px;"));
+  sub->setObjectName(QStringLiteral("pageSubtitle"));
+  sub->setStyleSheet(QStringLiteral("font-size: 15px;"));
   layout->addWidget(sub);
   return page;
 }

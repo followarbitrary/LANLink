@@ -12,6 +12,7 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QFileInfo>
+#include <QFont>
 #include <QHBoxLayout>
 #include <QLineEdit>
 #include <QMouseEvent>
@@ -64,6 +65,23 @@ const QString kWindowControlStyle = QStringLiteral(
 #endif
 
 const QString kWindowStyle = kWindowStyleBase + kWindowControlStyle;
+
+QFont platformUiFont() {
+  QFont font;
+#if defined(Q_OS_MACOS)
+  font.setFamilies({QStringLiteral("SF Pro Text"), QStringLiteral("PingFang SC"),
+                    QStringLiteral("Helvetica Neue")});
+#elif defined(Q_OS_WIN)
+  font.setFamilies({QStringLiteral("Segoe UI"), QStringLiteral("Microsoft YaHei")});
+#else
+  font.setFamilies({QStringLiteral("Noto Sans"), QStringLiteral("Noto Sans CJK SC"),
+                    QStringLiteral("DejaVu Sans")});
+#endif
+  font.setPixelSize(15);
+  font.setWeight(QFont::Normal);
+  font.setStyleStrategy(QFont::PreferAntialias);
+  return font;
+}
 
 QPushButton* navButton(const QString& text, IconKind kind) {
   auto* button = new QPushButton(text);
@@ -126,6 +144,7 @@ MainWindow::MainWindow(QWidget* parent, RuntimeWorker::BackendFactory backend_fa
     : QMainWindow(parent),
       backend_factory_(std::move(backend_factory)),
       clipboard_backend_factory_(std::move(clipboard_backend_factory)) {
+  QApplication::setFont(platformUiFont());
   setWindowTitle(QStringLiteral("LANLink"));
   setWindowIcon(QIcon(QStringLiteral(":/icons/lanlink-icon.png")));
   setWindowFlags(Qt::FramelessWindowHint | Qt::Window);
@@ -238,7 +257,8 @@ void MainWindow::setupUi() {
                       .scaled(30, 30, Qt::KeepAspectRatio, Qt::SmoothTransformation));
   titleLayout->addWidget(logo);
   auto* appName = new QLabel(QStringLiteral("LANLink"));
-  appName->setStyleSheet(QStringLiteral("font-size: 24px; font-weight: 600;"));
+  appName->setObjectName(QStringLiteral("appName"));
+  appName->setStyleSheet(QStringLiteral("font-size: 25px; font-weight: 600;"));
   titleLayout->addWidget(appName);
   titleLayout->addStretch();
   auto* running = new QLabel(QStringLiteral("●  未运行"));

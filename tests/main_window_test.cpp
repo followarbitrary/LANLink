@@ -227,6 +227,25 @@ TEST(MainWindowTest, UsesLanLinkMarkInTitleBar) {
   EXPECT_FALSE(brand->pixmap().isNull());
 }
 
+TEST(MainWindowTest, UsesPlatformTypographyHierarchy) {
+  MainWindow window(nullptr, fake_backend_factory(), false);
+
+  auto* brand = window.findChild<QLabel*>(QStringLiteral("appName"));
+  auto* heading = window.findChild<QLabel*>(QStringLiteral("pageHeading"));
+  auto* subtitle = window.findChild<QLabel*>(QStringLiteral("pageSubtitle"));
+  ASSERT_NE(brand, nullptr);
+  ASSERT_NE(heading, nullptr);
+  ASSERT_NE(subtitle, nullptr);
+
+  EXPECT_EQ(brand->font().pixelSize(), 25);
+  EXPECT_EQ(heading->font().pixelSize(), 30);
+  EXPECT_EQ(subtitle->font().pixelSize(), 15);
+  EXPECT_EQ(brand->font().weight(), QFont::DemiBold);
+  EXPECT_EQ(heading->font().weight(), QFont::DemiBold);
+  EXPECT_EQ(QApplication::font().pixelSize(), 15);
+  EXPECT_NE(QApplication::font().family(), QStringLiteral("Sans Serif"));
+}
+
 TEST(MainWindowTest, KeepsSettingsControlsCompactAndReadable) {
   MainWindow window(nullptr, fake_backend_factory(), false);
 
