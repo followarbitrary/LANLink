@@ -9,6 +9,7 @@
 #include <QAction>
 #include <QCheckBox>
 #include <QElapsedTimer>
+#include <QEnterEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMetaObject>
@@ -179,9 +180,15 @@ TEST(MainWindowTest, WindowControlsFollowPlatformOrderingAndSizing) {
   EXPECT_LT(minimize->geometry().left(), maximize->geometry().left());
   EXPECT_EQ(close->text(), QStringLiteral("×"));
   EXPECT_EQ(minimize->text(), QStringLiteral("−"));
-  EXPECT_EQ(maximize->text(), QStringLiteral("↗"));
+  EXPECT_EQ(maximize->text(), QStringLiteral("⤢"));
   EXPECT_NE(window.styleSheet().indexOf(QStringLiteral("color: transparent")), -1);
   EXPECT_NE(window.styleSheet().indexOf(QStringLiteral("QPushButton[windowControl=\"true\"]:hover")), -1);
+  EXPECT_EQ(close->palette().color(QPalette::ButtonText).alpha(), 0);
+  const auto center = close->rect().center();
+  QEnterEvent enter(center, center, close->mapToGlobal(center));
+  QApplication::sendEvent(close, &enter);
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+  EXPECT_GT(close->palette().color(QPalette::ButtonText).alpha(), 0);
   EXPECT_EQ(close->width(), 16);
   EXPECT_EQ(minimize->height(), 16);
 #else
@@ -192,6 +199,8 @@ TEST(MainWindowTest, WindowControlsFollowPlatformOrderingAndSizing) {
   EXPECT_EQ(close->text(), QStringLiteral("×"));
   EXPECT_EQ(close->width(), 34);
   EXPECT_EQ(minimize->height(), 34);
+  EXPECT_NE(window.styleSheet().indexOf(QStringLiteral("QPushButton#windowCloseButton:hover")), -1);
+  EXPECT_NE(window.styleSheet().indexOf(QStringLiteral("background: #b94d59")), -1);
 #endif
   window.close();
 }

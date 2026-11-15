@@ -21,6 +21,7 @@
 #include <QScreen>
 #include <QScrollArea>
 #include <QSignalBlocker>
+#include <QStyle>
 #include <QTimer>
 #include <QVBoxLayout>
 
@@ -48,7 +49,7 @@ const QString kWindowStyleBase = QStringLiteral(
 #if defined(Q_OS_MACOS)
 const QString kWindowControlStyle = QStringLiteral(
     "QPushButton[windowControl=\"true\"] { color: transparent; border: 0; border-radius: 8px; padding: 0; font-size: 9px; font-weight: 700; }"
-    "QPushButton[windowControl=\"true\"]:hover { color: #18222e; }"
+    "QPushButton[windowControl=\"true\"]:hover, QPushButton[windowControlHovered=\"true\"] { color: #18222e; }"
     "QPushButton#windowCloseButton { background: #ff5f57; border: 1px solid #e34f49; }"
     "QPushButton#windowMinimizeButton { background: #ffbd2e; border: 1px solid #e0a522; }"
     "QPushButton#windowMaximizeButton { background: #28c840; border: 1px solid #20aa35; }"
@@ -199,6 +200,7 @@ void MainWindow::setupUi() {
     button->setFixedSize(34, 34);
 #endif
     setWindowButtonStyle(button);
+    button->installEventFilter(this);
     windowControlsLayout->addWidget(button);
     if (role == WindowControlRole::Minimize) {
       connect(button, &QPushButton::clicked, this, &QWidget::showMinimized);
@@ -216,7 +218,7 @@ void MainWindow::setupUi() {
                    WindowControlRole::Close);
   addWindowControl(QStringLiteral("−"), QStringLiteral("windowMinimizeButton"),
                    WindowControlRole::Minimize);
-  addWindowControl(QStringLiteral("↗"), QStringLiteral("windowMaximizeButton"),
+  addWindowControl(QStringLiteral("⤢"), QStringLiteral("windowMaximizeButton"),
                    WindowControlRole::Maximize);
   titleLayout->addWidget(windowControls);
   titleLayout->addSpacing(12);
@@ -866,6 +868,20 @@ void MainWindow::captureSettingsFromUi() {
 }
 
 bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
+  if (watched->property("windowControl").toBool()) {
+    auto* control = qobject_cast<QWidget*>(watched);
+    if (control != nullptr && event->type() == QEvent::Enter) {
+      control->setProperty("windowControlHovered", true);
+      control->style()->unpolish(control);
+      control->style()->polish(control);
+      control->update();
+    } else if (control != nullptr && event->type() == QEvent::Leave) {
+      control->setProperty("windowControlHovered", false);
+      control->style()->unpolish(control);
+      control->style()->polish(control);
+      control->update();
+    }
+  }
   if (watched == titleBar_) {
     if (event->type() == QEvent::MouseButtonPress) {
       auto* mouseEvent = static_cast<QMouseEvent*>(event);
